@@ -1,0 +1,20 @@
+# 构建产物
+bin/
+obj/
+dist/
+
+# 自测渲出来的图，跑 --shot 就有
+shots/
+
+# 早先试 Electron 留下的，跟这个程序无关
+node_modules/
+package-lock.json
+
+# 本机工具配置
+.claude/
+.vs/
+*.user
+
+# 便携模式的配置与日志，别把本机设置传上去
+data/
+*.log
