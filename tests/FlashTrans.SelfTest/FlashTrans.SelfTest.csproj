@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- 自测宿主：在真实 WPF 环境里构造每个窗口，抓 XAML/资源引用这类只在运行期才炸的问题。 -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <!-- 跟主工程一致：OCR 探针要用 Windows.Media.Ocr 的投影 -->
+    <TargetFramework>net9.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>FlashTrans.SelfTest</AssemblyName>
+    <RootNamespace>FlashTrans.SelfTest</RootNamespace>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <EnableDefaultApplicationDefinition>false</EnableDefaultApplicationDefinition>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\FlashTrans\FlashTrans.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 让设置写到自己目录，不碰用户的 %AppData%\FlashTrans -->
+    <None Include="portable.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

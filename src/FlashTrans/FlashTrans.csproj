@@ -1,0 +1,63 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <!-- 10.0.19041 这个版本号是为了拿到 Windows.Media.Ocr 的投影（截图识别用）。
+         SupportedOSPlatformVersion 仍是 17763，实际能跑在更老的 Win10 上。 -->
+    <TargetFramework>net9.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>FlashTrans</AssemblyName>
+    <RootNamespace>FlashTrans</RootNamespace>
+    <Version>1.5.0</Version>
+    <Product>闪译 FlashTrans</Product>
+    <Company>FlashTrans</Company>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <DebugType>embedded</DebugType>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+
+    <!-- 启动速度相关 -->
+    <TieredPGO>true</TieredPGO>
+    <TieredCompilationQuickJitForLoops>true</TieredCompilationQuickJitForLoops>
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <AutoreleasePoolSupport>false</AutoreleasePoolSupport>
+    <EventSourceSupport>false</EventSourceSupport>
+    <MetadataUpdaterSupport>false</MetadataUpdaterSupport>
+    <UseSystemResourceKeys>false</UseSystemResourceKeys>
+    <InvariantGlobalization>false</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 自测要摸几个 internal（裁图、蒙层截图），不为了测试把它们变成 public。 -->
+    <InternalsVisibleTo Include="FlashTrans.SelfTest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 别给整个 Windows SDK 投影做 R2R 预编译。这个程序集 24MB，里面是整套
+         WinRT 投影，我们只用到 OCR 那几个类；R2R 会把它的原生代码也编进去，
+         单文件 exe 直接从 113MB 涨到 168MB。排掉后只剩 IL，用到的那几个类
+         JIT 一下就好，启动路径上根本不碰它（截图翻译是按热键才走的）。 -->
+    <PublishReadyToRunExclude Include="Microsoft.Windows.SDK.NET.dll" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 嵌一份进程序集，XAML 里写 pack URI 时从这儿取。单文件发布下这条路走得通。 -->
+    <Resource Include="Assets\app.ico" />
+
+    <!-- 托盘图标要从磁盘读 ico：LoadImage 读不了 exe 里的资源。
+         这里用 None 而不是 Content：Content 会额外生成
+         AssemblyAssociatedContentFileAttribute("assets/app.ico")，让 pack URI 优先
+         去解析「程序集旁边的内容文件」。单文件发布时程序集没有物理路径，
+         那条路会在 ContentFilePart.GetStreamCore 里 Path.Combine(null, ...) 抛
+         ArgumentNullException，把整个窗口的 XAML 加载带崩。
+         None 只管拷文件，不注册内容文件，pack URI 就老实回退到上面的 Resource。 -->
+    <None Include="Assets\app.ico" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
