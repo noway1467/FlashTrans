@@ -12,6 +12,8 @@ static class LongShotProbe
 {
     public static void RunAll(Action<string, Action> step)
     {
+        step("长截图：固定底栏不会被重复拼进长图", FixedBottomProbe);
+        step("长截图：普通底部留白不会被误裁", FixedBottomFalsePositiveProbe);
         step("长截图：能算出滚了多少像素", ShiftProbe);
         step("长截图：滚到底（画面没变）时算出 0", BottomProbe);
         step("长截图：画面整体换了内容时拒绝拼接", DivergeProbe);
@@ -189,5 +191,56 @@ static class LongShotProbe
         var got = LongShotService.FindShift(prev, next, bandTop: 80);
         if (got != 150)
             throw new InvalidOperationException($"滚了 150 行、初始窄带在 80 行时应算出 150，实际是 {got}");
+    }
+
+    static void FixedBottomProbe()
+    {
+        var page = Page(1200);
+        const int moved = 90;
+        const int fixedHeight = 12;
+        var prev = WithFixedBottom(Frame(page, 0), fixedHeight);
+        var next = WithFixedBottom(Frame(page, moved), fixedHeight);
+        var shift = LongShotService.FindShift(prev, next, LongShotService.PickBand(prev));
+        var fixedBottom = LongShotService.FindFixedBottom(prev, next, shift);
+        if (shift != moved || fixedBottom != fixedHeight)
+            throw new InvalidOperationException(
+                $"位移/固定底栏应为 {moved}/{fixedHeight}，实际 {shift}/{fixedBottom}");
+
+        var first = LongShotService.Crop(prev, 0, H - fixedBottom)!;
+        var fresh = LongShotService.Crop(next, H - fixedBottom - shift, shift)!;
+        var joined = LongShotService.Stack([first, fresh], W)!;
+        var want = H - fixedHeight + moved;
+        if (joined.Height != want)
+            throw new InvalidOperationException($"拼接高度应为 {want}，实际 {joined.Height}");
+        for (var i = 0; i < want * W * 4; i++)
+            if (joined.Pixels[i] != page.Pixels[i])
+                throw new InvalidOperationException($"第 {i / 4 / W} 行拼接不连续");
+    }
+
+    static CapturedImage WithFixedBottom(CapturedImage frame, int height)
+    {
+        var pixels = (byte[])frame.Pixels.Clone();
+        for (var y = frame.Height - height; y < frame.Height; y++)
+            for (var x = 0; x < frame.Width; x++)
+            {
+                var i = y * frame.Stride + x * 4;
+                pixels[i] = pixels[i + 1] = pixels[i + 2] = 0x20;
+                pixels[i + 3] = 0xFF;
+            }
+        return new CapturedImage(frame.Width, frame.Height, pixels);
+    }
+
+    static void FixedBottomFalsePositiveProbe()
+    {
+        var page = Page(1200);
+        var prev = Frame(page, 0);
+        var next = Frame(page, 90);
+        var pixels = (byte[])next.Pixels.Clone();
+        Array.Copy(prev.Pixels, (H - 1) * prev.Stride, pixels, (H - 1) * prev.Stride, prev.Stride);
+        next = new CapturedImage(W, H, pixels);
+
+        var fixedBottom = LongShotService.FindFixedBottom(prev, next, 90);
+        if (fixedBottom != 0)
+            throw new InvalidOperationException($"单行巧合被误裁成 {fixedBottom} 行固定底栏");
     }
 }

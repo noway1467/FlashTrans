@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -76,11 +76,17 @@ static class ShotProbe
              Path.Combine(outDir, "capture-toolbar-mosaic.png"), "Bg");
 
         // 六个标注工具各画一笔，看线条粗细、箭头大小、文字底板、马赛克格子
-        ShotAnnotations(outDir, "capture-annotations.png");
-        // 选中框：横跨深蓝块和浅色底，两种底色上都得看得见才算合格
+        ShotAnnotations(outDir, "capture-annotations.png");        // 选中框：横跨深蓝块和浅色底，两种底色上都得看得见才算合格
         ShotPicked(outDir, "capture-picked.png");
         // 改形状的圆点：箭头两头那两个，跟选区的方块把手能不能分开
         ShotHandles(outDir, "capture-handles.png");
+
+        // 两条浮条。它俩只能靠摆位置躲开选区，所以长什么样、多大一条很要紧——
+        // 太宽就更难在选区外面找到落脚的地方。
+        ShotHud(outDir, "hud-longshot.png",
+                r => new LongShotHud(r), h => ((LongShotHud)h).Report(1289, 2));
+        ShotHud(outDir, "hud-record.png",
+                r => new RecordHud(r, 30), h => ((RecordHud)h).Report(42, TimeSpan.FromSeconds(3.4)));
 
         ThemeService.ApplyTheme(s.Theme);
         ThemeService.ApplyAccent(s.AccentColor);
@@ -443,8 +449,60 @@ static class ShotProbe
                 yield return d;
     }
 
-    static void Poll(Func<bool> act)
+    /// <summary>
+    /// 浮条得真摆到屏幕上再 BitBlt 回来：它是半透明的层窗口，投影和圆角都落在
+    /// 窗口背后的东西上，RenderTargetBitmap 那条路看不见。底下垫一块白当参照。
+    /// </summary>
+    static void ShotHud(string dir, string file, Func<RECT, Window> make, Action<Window> report)
     {
+        var work = ScreenHelper.WorkAreaAt(ScreenHelper.CursorPos());
+        var back = new Window
+        {
+            WindowStyle = WindowStyle.None,
+            ResizeMode = ResizeMode.NoResize,
+            ShowInTaskbar = false,
+            ShowActivated = false,
+            Background = Brushes.White,
+            Left = work.Left + 60,
+            Top = work.Top + 60,
+            Width = 480,
+            Height = 140,
+        };
+        // 选区就给屏幕中间一小块，让浮条自己按规矩摆——摆完再挪到白底上来拍
+        var hud = make(new RECT { Left = 400, Top = 400, Right = 800, Bottom = 600 });
+        try
+        {
+            back.Show();
+            hud.Show();
+            report(hud);
+            hud.UpdateLayout();
+            hud.Left = back.Left + (back.Width - hud.ActualWidth) / 2;
+            hud.Top = back.Top + (back.Height - hud.ActualHeight) / 2;
+
+            Pump();
+            System.Threading.Thread.Sleep(250);
+            Pump();
+
+            var m = PresentationSource.FromVisual(hud)?.CompositionTarget?.TransformToDevice
+                    ?? throw new InvalidOperationException("取不到 DPI 变换");
+            var box = ScreenCapture.ToPixels(
+                new Rect(hud.Left - 16, hud.Top - 16, hud.ActualWidth + 32, hud.ActualHeight + 32),
+                m.M11, m.M22);
+            var img = ScreenCapture.Grab(box);
+            if (img is null) { Console.WriteLine($"  {file} 抓屏失败，跳过"); return; }
+
+            img.SavePng(Path.Combine(dir, file));
+            Console.WriteLine($"  {file}  {img.Width}x{img.Height}");
+        }
+        finally
+        {
+            hud.Close();
+            back.Close();
+            Pump();
+        }
+    }
+
+    static void Poll(Func<bool> act)    {
         var tries = 0;
         void Step()
         {

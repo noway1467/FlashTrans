@@ -10,11 +10,16 @@ namespace FlashTrans.Views;
 /// 长截图进行中的小浮条：说清楚正在滚、滚到多长了、按 Esc 能停。
 ///
 /// 摆在选区外面。摆在里面会被一起拍进长图里——那块区域此刻正在被反复抓帧。
+/// 别指望 WDA_EXCLUDEFROMCAPTURE 兜底，见 <see cref="Win32.WDA_EXCLUDEFROMCAPTURE"/>：
+/// 对本项目这种 BitBlt 抓屏，隐身的窗口在图里是一块纯黑，比拍到浮条还糟。
 /// </summary>
 public sealed class LongShotHud : Window
 {
     readonly TextBlock _size;
     readonly RECT _region;
+
+    /// <summary>躲不开选区。见 <see cref="Report"/>：这时候不能再改字。</summary>
+    bool _quiet;
 
     /// <summary>用户按过 Esc 或者点了「停」。服务那边每帧问一次。</summary>
     public bool Cancelled { get; private set; }
@@ -90,20 +95,28 @@ public sealed class LongShotHud : Window
             // NOACTIVATE：点它也不抢焦点。TOOLWINDOW：不进任务栏，也不被当成可截的窗口。
             Win32.SetWindowLong(hwnd, Win32.GWL_EXSTYLE,
                 ex | Win32.WS_EX_TOOLWINDOW | Win32.WS_EX_NOACTIVATE);
-            // 对截屏隐身。摆位置那套（Place）已经尽量躲开选区，但选区占满屏时
-            // 无处可躲，只有这个能保证浮条不出现在长图里。
-            ScreenHelper.ExcludeFromCapture(this);
         };
 
         Loaded += (_, _) => Place();
     }
 
+    /// <summary>
+    /// 报进度。浮条压在选区里的时候，这行字一个字都不能改——每帧变一次的数字会
+    /// 毁掉整张长图：页面明明已经滚到底、两帧本该一模一样，就因为这几个数字不同
+    /// 被判成「画面还在动」，于是拿重复的页脚去对齐，把同一屏底部反复接上十几遍。
+    /// 冻住的浮条就只是图里多了一块死东西，接得还是对的。
+    /// </summary>
     public void Report(int height, int frames)
-        => _size.Text = $"正在滚动截图…已接 {height} 像素（{frames} 屏）";
+    {
+        if (_quiet) return;
+        _size.Text = $"正在滚动截图…已接 {height} 像素（{frames} 屏）";
+        // 字变长了，位置得跟着重算，不然会从选区边上长回选区里
+        Place();
+    }
 
     /// <summary>
-    /// 摆在选区正下方居中；下面不够就摆上面；上下都挤不出地方（选区占满屏）
-    /// 就贴到工作区底部——那时候难免会被拍进去一点，但总比看不见进度好。
+    /// 摆在选区外面。选区把工作区占满时（照着最大化窗口选的网页，最常见的一种）
+    /// 就压到任务栏上去——那条缝是唯一躲得开的地方。
     /// </summary>
     void Place()
     {
@@ -114,12 +127,14 @@ public sealed class LongShotHud : Window
         // 选区是物理像素，Left/Top 是 DIP，得换一下
         var tl = ScreenHelper.ToDip(new POINT { X = _region.Left, Y = _region.Top }, this);
         var br = ScreenHelper.ToDip(new POINT { X = _region.Right, Y = _region.Bottom }, this);
-        var work = ScreenHelper.WorkAreaAt(new POINT { X = _region.Left, Y = _region.Bottom }, this);
+        var sel = new Rect(tl, br);
+        // 要整块屏幕而不是工作区，任务栏那条缝就是靠这个让出来的
+        var mon = ScreenHelper.MonitorAt(new POINT { X = _region.Left, Y = _region.Bottom }, this);
 
-        Left = Math.Clamp((tl.X + br.X) / 2 - w / 2, work.Left, Math.Max(work.Left, work.Right - w));
-        var top = br.Y + 8;
-        if (top + h > work.Bottom) top = tl.Y - h - 8;
-        if (top < work.Top) top = work.Bottom - h - 8;
-        Top = top;
+        (Left, Top) = ScreenHelper.PlaceOutside(sel, mon, w, h);
+
+        var box = new Rect(Left, Top, w, h);
+        var over = Rect.Intersect(box, sel);
+        _quiet = !over.IsEmpty && over.Width * over.Height > 0;
     }
 }
