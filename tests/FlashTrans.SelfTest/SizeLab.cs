@@ -1,0 +1,119 @@
+using System.IO;
+using FlashTrans.Core;
+using FlashTrans.Interop;
+using FlashTrans.Services;
+
+namespace FlashTrans.SelfTest;
+
+/// <summary>
+/// 量三种格式的体积。README 上那张对照表就是这儿出的数，改了编码参数可以重跑一遍。
+///
+/// `--sizelab` 录真实屏幕，顺带按几个绝对码率各编一遍 MP4——这是用来确认
+/// 「码率这个旋钮到底有没有接上」的：接上了体积该跟着变，四个一样大就是没接上
+/// （`MediaEncodingProfile.CreateMp4(quality)` 那套预设就会把设进去的码率吃掉）。
+/// `--motion` 造两种极端内容，因为「哪种格式最小」完全看画面动不动。
+/// </summary>
+static class SizeLab
+{
+    /// <summary>
+    /// 造两种极端内容各编一遍：几乎不动的画面，和大面积在动的画面。
+    /// 「哪种格式最小」得看内容——静态画面里 WebP 帧间几乎没差别，压得极小；
+    /// 动起来之后逐帧压缩的格式就按帧数线性涨，H.264 的帧间预测才开始占便宜。
+    /// </summary>
+    public static void Motion()
+    {
+        foreach (var (name, moving) in ((string, bool)[])[("几乎不动", false), ("大面积在动", true)])
+        {
+            var dir = Path.Combine(Path.GetTempPath(), "FlashTrans.motion." + Guid.NewGuid().ToString("N")[..8]);
+            Directory.CreateDirectory(dir);
+            var paths = new List<string>();
+            const int w = 640, h = 480, n = 60;
+            var rnd = new Random(1234);
+
+            // 底噪：不可压的花屏，模拟真实屏幕上的文字边缘
+            var base_ = new byte[w * 4 * h];
+            rnd.NextBytes(base_);
+            for (var p = 3; p < base_.Length; p += 4) base_[p] = 0xFF;
+
+            for (var i = 0; i < n; i++)
+            {
+                var buf = (byte[])base_.Clone();
+                // 动的那块：moving 时扫过整幅，否则只挪一个小角
+                var band = moving ? h : 24;
+                var y0 = moving ? 0 : i % 8;
+                for (var y = y0; y < Math.Min(h, y0 + band); y++)
+                {
+                    var shift = (i * 7) % 256;
+                    for (var x = 0; x < w; x++)
+                    {
+                        var o = (y * w + x) * 4;
+                        buf[o] = (byte)((x + shift) & 0xFF);
+                        buf[o + 1] = (byte)((y + shift) & 0xFF);
+                        buf[o + 2] = (byte)((x + y + shift) & 0xFF);
+                    }
+                }
+                var f = Path.Combine(dir, $"m{i:D5}.png");
+                new CapturedImage(w, h, buf).SavePng(f);
+                paths.Add(f);
+            }
+
+            Console.WriteLine($"=== 造帧 {name}：{n} 帧 {w}×{h} 10 fps ===");
+            try
+            {
+                foreach (var fmt in (RecordFormat[])[RecordFormat.Gif, RecordFormat.Webp, RecordFormat.Mp4])
+                {
+                    var r = Task.Run(() => AnimEncoder.SaveAsync(
+                        paths, Path.Combine(dir, "m_" + fmt), 10, fmt)).GetAwaiter().GetResult();
+                    Console.WriteLine($"  {fmt,-5} {r.Bytes / 1024.0,8:0} KB"
+                                      + (r.FellBack ? $"  （退档：{r.FellBackWhy}）" : ""));
+                }
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        }
+    }
+
+    public static void Run()
+    {
+        foreach (var seconds in (int[])[2, 8])
+        {
+            var s = ScreenCapture.VirtualScreen();
+            var region = new RECT
+            {
+                Left = s.Left + 8, Top = s.Top + 8,
+                Right = Math.Min(s.Right, s.Left + 8 + 640),
+                Bottom = Math.Min(s.Bottom, s.Top + 8 + 480),
+            };
+
+            Console.WriteLine($"=== 录 {seconds} 秒 10 fps 640×480 ===");
+            var rec = Task.Run(() => RecordService.RunAsync(region, 10, seconds))
+                          .GetAwaiter().GetResult();
+            try
+            {
+                var fps = Math.Max(1, (int)Math.Round(rec.EffectiveFps));
+                Console.WriteLine($"帧数 {rec.Paths.Count}，实测 {rec.EffectiveFps:0.#} fps");
+
+                foreach (var fmt in (RecordFormat[])[RecordFormat.Gif, RecordFormat.Webp])
+                {
+                    var r = Task.Run(() => AnimEncoder.SaveAsync(
+                        rec.Paths, Path.Combine(rec.Dir, "lab_" + fmt), fps, fmt))
+                        .GetAwaiter().GetResult();
+                    Console.WriteLine($"  {fmt,-5} {r.Bytes / 1024.0,8:0} KB");
+                }
+
+                // 直接给绝对码率，绕过 BitsPerPixel 的下限夹取——先确认这个旋钮
+                // 到底有没有接上。接上了体积该跟着变，没接上就是四个一样大。
+                foreach (var kbps in (uint[])[200, 600, 1500, 4000])
+                {
+                    Mp4Encoder.ForceBitrate = kbps * 1000;
+                    var r = Task.Run(() => AnimEncoder.SaveAsync(
+                        rec.Paths, Path.Combine(rec.Dir, $"lab_mp4_{kbps}"), fps, RecordFormat.Mp4))
+                        .GetAwaiter().GetResult();
+                    Console.WriteLine($"  MP4 {kbps,5} kbps {r.Bytes / 1024.0,8:0} KB"
+                                      + $"  实际 {r.Bytes * 8.0 / Math.Max(1, seconds) / 1000:0} kbps");
+                }
+                Mp4Encoder.ForceBitrate = null;
+            }
+            finally { rec.Cleanup(); }
+        }
+    }
+}
