@@ -8,6 +8,22 @@ public static class ScreenHelper
 {
     public static POINT CursorPos() => Win32.GetCursorPos(out var p) ? p : default;
 
+    /// <summary>
+    /// 让这个窗口对截屏隐身：屏幕上照常看得见，但 BitBlt 拍不到它。
+    /// 长截图和录制的浮条用——浮条得显示进度，又不能被拍进成品里。
+    /// 返回是不是真的设上了；Win10 2004 以前设不上，那时候只能靠把浮条摆在选区外。
+    /// </summary>
+    public static bool ExcludeFromCapture(Window w)
+    {
+        try
+        {
+            var hwnd = new System.Windows.Interop.WindowInteropHelper(w).Handle;
+            return hwnd != IntPtr.Zero
+                && Win32.SetWindowDisplayAffinity(hwnd, Win32.WDA_EXCLUDEFROMCAPTURE);
+        }
+        catch { return false; }
+    }
+
     /// <summary>光标所在显示器的工作区（已换算成 WPF 单位）。</summary>
     public static Rect WorkAreaAt(POINT screenPt, Window? scaleRef = null)
     {

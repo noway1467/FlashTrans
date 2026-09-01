@@ -124,6 +124,17 @@ public static class Win32
     public const int WS_EX_NOACTIVATE = 0x08000000;
     public const int WS_EX_TRANSPARENT = 0x00000020;
 
+    /// <summary>正常参与截屏。</summary>
+    public const uint WDA_NONE = 0x00000000;
+    /// <summary>
+    /// 这个窗口对截屏完全隐身：BitBlt、PrintWindow、录屏都拍不到它，
+    /// 但屏幕上照常看得见。Win10 2004（build 19041）起有，正好是本项目的最低版本。
+    ///
+    /// 长截图和录制的浮条就靠它：浮条必须显示在屏幕上给用户看进度，
+    /// 又绝对不能被拍进图里——选区占满屏时浮条无处可躲，只能让它隐身。
+    /// </summary>
+    public const uint WDA_EXCLUDEFROMCAPTURE = 0x00000011;
+
     /// <summary>
     /// 窗口是不是被 DWM 藏了。Win10 起有一堆常驻的隐身窗口（应用商店应用的宿主、
     /// 别的虚拟桌面上的窗口），IsWindowVisible 都说可见，只有这个属性能认出来。
@@ -148,6 +159,9 @@ public static class Win32
     [DllImport("user32.dll", SetLastError = true)]
     public static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+    /// <summary>见 WDA_EXCLUDEFROMCAPTURE。老系统上返回 false，忽略即可。</summary>
+    [DllImport("user32.dll")]
+    public static extern bool SetWindowDisplayAffinity(IntPtr hWnd, uint affinity);
     [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr hWnd, uint flags);
     /// <summary>GetAncestor：要这个窗口所属的顶层窗口。</summary>
     public const uint GA_ROOT = 2;

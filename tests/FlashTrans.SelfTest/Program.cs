@@ -44,6 +44,7 @@ static class Program
         if (args.Contains("--timing")) TimingProbe.Run();
         if (args.Contains("--sizelab")) SizeLab.Run();
         if (args.Contains("--motion")) SizeLab.Motion();
+        if (args.Contains("--mp4lab")) SizeLab.Mp4Lab();
         if (args.Contains("--shot")) ShotProbe.Run("shots", host);
 
         Console.WriteLine(_fail == 0 ? "\n全部通过" : $"\n失败 {_fail} 项");

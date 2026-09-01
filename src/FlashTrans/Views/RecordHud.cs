@@ -180,6 +180,10 @@ public sealed class RecordHud : Window
             }
 
             System.Windows.Interop.HwndSource.FromHwnd(hwnd)?.AddHook(WndProc);
+
+            // 对截屏隐身：浮条要显示录制进度，但绝不能被录进片子里。
+            // 选区占满屏时 Place 挪不开，只有这个能兜住。
+            ScreenHelper.ExcludeFromCapture(this);
         };
 
         Closed += (_, _) =>

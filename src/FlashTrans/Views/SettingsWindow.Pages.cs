@@ -100,9 +100,7 @@ public sealed partial class SettingsWindow
         var press = string.IsNullOrWhiteSpace(hk) ? "在托盘右键菜单里选「截图」" : $"按 {hk}";
 
         Section(page, "截图",
-            Hint($"{press} 后框选一块区域，选区下面会出来工具条：矩形、圆、箭头、画笔、马赛克、"
-                 + "文字，还有复制、保存、识别文字、识别并翻译、长截图、录制动图。"),
-            Hint("长截图会自动向下滚动并拼接；页面滚不动时仍会保留已经截到的内容，按 Esc 可以随时停下。"),
+            Hint($"{press} 框选区域，工具条在选区下面。"),
             Field("按回车时", Combo(new (string, CaptureAction)[]
             {
                 ("复制到剪贴板", CaptureAction.Copy),
@@ -117,12 +115,8 @@ public sealed partial class SettingsWindow
             LeftRow(SmallButton("试一下", () => _ = TryCaptureAsync())));
 
         Section(page, "录制动图",
-            Hint("框选之后点工具条上的「录制」，那块区域开始录，`Esc` 或者点浮条停下。"
-                 + "录的是实时画面，不是刚才那张定格图——画的标注不会进动图。"
-                 + "存进上面那个保存目录。"),
-            Hint($"录的时候按 `{RecordHud.PauseHotkey}`（或者点浮条上的「暂停」）暂停，"
-                 + "再按一次接着录。暂停掉的那段不进文件，也不算进下面那个时长上限，"
-                 + "所以回放是连着的，不会中间卡住一段。"),
+            Hint($"录的是实时画面，标注不会进去。`Esc` 停下，`{RecordHud.PauseHotkey}` 暂停，"
+                 + "暂停掉的那段不进文件。"),
             Field("格式", Combo(new (string, RecordFormat)[]
             {
                 ("WebP（推荐，一般最小）", RecordFormat.Webp),
@@ -130,24 +124,19 @@ public sealed partial class SettingsWindow
                 ("MP4（视频，能拖进度条）", RecordFormat.Mp4),
             }, S.RecordFormat, v => S.RecordFormat = v, width: 260),
                 FormatNote()),
+            Field("保存到", RecordDirRow(), "留空跟截图放一起"),
             Field("帧率", SliderRow(S.RecordFps,
                     RecordService.MinFps, RecordService.MaxFps, 1,
                     v => S.RecordFps = (int)Math.Round(v), v => $"{v:F0} fps"),
-                "调太高界面自己会卡，反而录不满这个帧率；体积基本按帧数线性涨"),
+                "调太高界面会卡，反而录不满"),
             Field("最长", SliderRow(S.RecordMaxSeconds,
                     RecordService.MinSeconds, RecordService.MaxSeconds, 1,
                     v => S.RecordMaxSeconds = (int)Math.Round(v), v => $"{v:F0} 秒"),
-                "到点自己停，给「按了开始就走开」兜底"));
+                "到点自己停"));
 
         Section(page, "画笔",
-            Hint("这儿设的是每次截图的起始值。真正画的时候在工具条上随时能改："
-                 + "选了工具，工具条第二行就是它的参数——粗细、字号、马赛克格子，"
-                 + "有预设也能一格一格加减，`Ctrl+滚轮` 也是调这个。"
-                 + "改完会套到刚画完的那一笔上，所以画完再换也行，不用撤销重画。"),
-            Hint("画的时候按住 `Shift`：矩形和马赛克出正方形、圆出正圆、箭头吸到 15° 的整数倍，"
-                 + "画笔变成拉直线（工具条上没有单独的直线工具，画下划线就用它）。"
-                 + "画完退出工具，点中哪一笔它身上就出来几个圆点，拖着能改形状——"
-                 + "方框大了一点不用删掉重画。"),
+            Hint("这是起始值，画的时候工具条上随时能改（`Ctrl+滚轮`）。"
+                 + "按住 `Shift` 出正方形 / 正圆 / 直线。"),
             Field("画笔粗细", SliderRow(S.CapturePenWidth,
                     CaptureLimits.MinPenWidth, CaptureLimits.MaxPenWidth, 1,
                     v => S.CapturePenWidth = v, v => $"{v:F0} px"),
@@ -158,22 +147,17 @@ public sealed partial class SettingsWindow
                 "格子越大遮得越死"));
 
         Section(page, "文字标注",
-            Hint("字号跟画笔粗细是分开的两个值——细箭头配一行大字是常事，"
-                 + "绑在一起的话想要大字就得先把线也调粗。工具条上 `Ctrl+B` 加粗、"
-                 + "`Ctrl+I` 斜体，正在打字时也管用。"),
+            Hint("打字时 `Ctrl+B` 加粗、`Ctrl+I` 斜体。"),
             Field("字号", SliderRow(S.CaptureFontSize,
                     CaptureLimits.MinFontSize, CaptureLimits.MaxFontSize, 1,
                     v => S.CaptureFontSize = v, v => $"{v:F0} px"),
                 "字带描边，什么底色都看得清"),
-            Check("默认加粗", S.CaptureFontBold, on => S.CaptureFontBold = on,
-                "花底色上加粗比不加粗好认不少"),
+            Check("默认加粗", S.CaptureFontBold, on => S.CaptureFontBold = on),
             Check("默认斜体", S.CaptureFontItalic, on => S.CaptureFontItalic = on));
 
         Section(page, "截图工具的键",
-            Hint("这些是框选期间才管用的键，不是全局热键，所以可以不带 Ctrl / Alt。"
-                 + "点输入框后直接按；Backspace 清掉表示这个功能只能点工具条。"
-                 + "Esc（退出）、回车（确认）、空格（选中鼠标下的窗口）是固定的，不能改。"
-                 + "重做除了下面配的键，`Ctrl+Shift+Z` 也一直管用。"),
+            Hint("只在框选期间管用，可以不带 Ctrl / Alt。点输入框后直接按，"
+                 + "Backspace 清掉。Esc、回车、空格固定。"),
             CaptureKeyField("矩形", S.CkRect, v => S.CkRect = v),
             CaptureKeyField("圆", S.CkEllipse, v => S.CkEllipse = v),
             CaptureKeyField("箭头", S.CkArrow, v => S.CkArrow = v),
@@ -208,48 +192,56 @@ public sealed partial class SettingsWindow
 
         return
         [
-            Hint("点「识别文字」之后会弹一个框，认出来的字摆在里面，可以改完再复制或翻译。"),
+            Hint("认出来的字会弹个框，改完再复制或翻译。"),
             Field("识别语言", Combo(langs, S.OcrLang, v => S.OcrLang = v, width: 230),
-                "截图里是什么语言就选什么，选错会多认错字"),
-            Check("「识别并翻译」时把原文也复制到剪贴板", S.OcrCopyText, on => S.OcrCopyText = on,
-                "图片和文字一起进剪贴板，粘到哪儿由对方挑"),
+                "选错会多认错字"),
+            Check("「识别并翻译」时把原文也复制到剪贴板", S.OcrCopyText, on => S.OcrCopyText = on),
         ];
     }
 
     /// <summary>
-    /// 格式那一栏底下的说明。WebP 要靠外部的 img2webp.exe，MP4 要靠系统的 H.264
-    /// 编码器；MP4 失败时不再静默改存另一种格式。
+    /// 格式那一栏底下的说明。只在这台机器缺东西时才出现一行——
+    /// 三种格式各自什么特点，下拉框的选项里已经写了，不用再重复一遍。
     /// </summary>
-    static string FormatNote()
+    static string? FormatNote()
     {
-        var notes = new List<string>
-        {
-            "WebP 一般体积较小，MP4 可以拖进度条，GIF 兼容性最好但体积较大；"
-            + "选择 MP4 时只生成 MP4，编码失败会提示，不会留下空文件或偷偷改成 WebP",
-        };
+        var notes = new List<string>();
         if (!AnimEncoder.WebpAvailable)
-            notes.Add($"没找到 {AnimEncoder.Img2WebpRelative}，选 WebP 会存成 GIF——"
-                      + "这个文件本该随包发布，缺了就是被漏拷了，整个文件夹一起拷就好");
+            notes.Add($"没找到 {AnimEncoder.Img2WebpRelative}，选 WebP 会存成 GIF");
         if (!Mp4Encoder.Available)
-            notes.Add("这台机器上没找到系统的 H.264 编码器（精简版系统会这样），MP4 当前不可用");
-        return string.Join("。", notes);
+            notes.Add("这台机器没有系统 H.264 编码器，MP4 用不了");
+        return notes.Count == 0 ? null : string.Join("。", notes);
     }
 
-    /// <summary>
-    /// 保存目录：输入框加两个按钮。
-    /// 用 Grid 而不是 Row：输入框给固定宽度的话，卡片一窄按钮就被挤出去看不见了。
-    /// </summary>
+    /// <summary>截图保存目录。</summary>
     UIElement SaveDirRow()
+        => DirRow(S.CaptureSaveDir, v => S.CaptureSaveDir = v,
+                  "截图保存到哪个文件夹", AppHost.CaptureDir);
+
+    /// <summary>
+    /// 录制保存目录。留空跟截图走同一个目录——大多数人不需要分开，
+    /// 但录屏文件比截图大得多，想单独扔到别的盘上是常事。
+    /// </summary>
+    UIElement RecordDirRow()
+        => DirRow(S.RecordSaveDir, v => S.RecordSaveDir = v,
+                  "录制保存到哪个文件夹", AppHost.RecordDir);
+
+    /// <summary>
+    /// 目录选择行：输入框加两个按钮。
+    /// 用 Grid 而不是 Row：输入框给固定宽度的话，卡片一窄按钮就被挤出去看不见了。
+    /// resolve 给的是「留空时实际存到哪」，提示和「打开」都用它。
+    /// </summary>
+    UIElement DirRow(string value, Action<string> onChange, string title, Func<string> resolve)
     {
-        var box = Input(S.CaptureSaveDir, v => S.CaptureSaveDir = v.Trim());
-        box.ToolTip = "留空 = " + AppHost.CaptureDir();
+        var box = Input(value, v => onChange(v.Trim()));
+        box.ToolTip = "留空 = " + resolve();
 
         var pick = SmallButton("选目录", () =>
             {
                 var dlg = new Microsoft.Win32.OpenFolderDialog
                 {
-                    Title = "截图保存到哪个文件夹",
-                    InitialDirectory = AppHost.CaptureDir(),
+                    Title = title,
+                    InitialDirectory = resolve(),
                 };
                 if (dlg.ShowDialog(this) != true) return;
                 // 写 Text 会走 TextChanged，设置值那步 Input 已经代劳；
@@ -260,7 +252,7 @@ public sealed partial class SettingsWindow
 
         var open = SmallButton("打开", () =>
             {
-                var dir = AppHost.CaptureDir();
+                var dir = resolve();
                 try
                 {
                     System.IO.Directory.CreateDirectory(dir);

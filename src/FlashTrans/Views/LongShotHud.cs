@@ -90,6 +90,9 @@ public sealed class LongShotHud : Window
             // NOACTIVATE：点它也不抢焦点。TOOLWINDOW：不进任务栏，也不被当成可截的窗口。
             Win32.SetWindowLong(hwnd, Win32.GWL_EXSTYLE,
                 ex | Win32.WS_EX_TOOLWINDOW | Win32.WS_EX_NOACTIVATE);
+            // 对截屏隐身。摆位置那套（Place）已经尽量躲开选区，但选区占满屏时
+            // 无处可躲，只有这个能保证浮条不出现在长图里。
+            ScreenHelper.ExcludeFromCapture(this);
         };
 
         Loaded += (_, _) => Place();
