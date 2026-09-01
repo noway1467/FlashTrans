@@ -28,6 +28,9 @@ static class RecordProbe
         step("录制：每帧都带延时，且等于设定帧率", GifDelayProbe);
         step("录制：不是 GIF 的字节不会被当成帧解析", GifJunkProbe);
         step("录制：真抓一段屏幕，帧数和实测帧率合理", RealRecordProbe);
+        step("录制：真编动图 WebP，容器里 VP8X/ANIM/ANMF 都对", WebpRealProbe);
+        step("录制：没有 img2webp 时老实退回 GIF", WebpFallbackProbe);
+        step("录制：同样内容 WebP 比 GIF 小", SizeCompareProbe);
         step("录制：帧率和时长的夹取范围", ClampProbe);
         step("录制：浮条能构造，进度和编码提示都会更新", HudProbe);
         step("录制：工具条多了「录制」还塞得进常见屏宽", ToolbarWidthProbe);
@@ -453,5 +456,167 @@ static class RecordProbe
             rec.Cleanup();
         }
         Need(!Directory.Exists(rec.Dir), "临时目录没被清掉");
+    }
+
+    // ------------------------------------------------------------- WebP
+
+    /// <summary>
+    /// 真编一张动图 WebP，然后按 RIFF 容器结构验它是不是「动」的。
+    ///
+    /// 只验「文件生成了、能打开」不够——一张静态 WebP 也能过那种断言。
+    /// 动图 WebP 的标志是 VP8X 里的 animation 位、一个 ANIM 块（带循环次数）
+    /// 和每帧一个 ANMF 块（带这一帧的毫秒延时），逐个查出来才算数。
+    ///
+    /// img2webp.exe 不在时跳过：它不是编译产物，机器上可能压根没放。
+    /// </summary>
+    static void WebpRealProbe()
+    {
+        if (!AnimEncoder.WebpAvailable) return;
+
+        var (dir, paths) = WriteFrames(4);
+        try
+        {
+            var res = Task.Run(() => AnimEncoder.SaveAsync(
+                    paths, Path.Combine(dir, "out"), fps: 10, RecordFormat.Webp))
+                .GetAwaiter().GetResult();
+
+            Need(!res.FellBackToGif, "有 img2webp 却退回了 GIF");
+            Need(res.Format == RecordFormat.Webp, $"格式不是 WebP：{res.Format}");
+            Need(res.Path.EndsWith(".webp", StringComparison.OrdinalIgnoreCase),
+                $"后缀不对：{res.Path}");
+            Need(res.Bytes > 0 && res.Bytes == new FileInfo(res.Path).Length,
+                "报告的大小跟文件实际大小不一致");
+
+            var (animBit, loop, durations) = WalkWebp(File.ReadAllBytes(res.Path));
+            Need(animBit, "VP8X 里没置 animation 位，这是张静态 WebP");
+            Need(loop == 0, $"循环次数该是 0（无限），得到 {loop}");
+            Need(durations.Count == 4, $"该有 4 个 ANMF 帧，得到 {durations.Count}");
+            foreach (var d in durations)
+                Need(d == 100, $"10 fps 该是 100 毫秒一帧，得到 {d}");
+        }
+        finally { Wipe(dir); }
+    }
+
+    /// <summary>
+    /// 走一遍 WebP 的 RIFF 容器，挑出动图相关的那三样：
+    /// VP8X 的 animation 位、ANIM 的循环次数、每个 ANMF 的帧延时。
+    /// </summary>
+    static (bool AnimBit, int Loop, List<int> Durations) WalkWebp(byte[] d)
+    {
+        Need(d.Length > 12, "WebP 文件太短");
+        Need(d[0] == 'R' && d[1] == 'I' && d[2] == 'F' && d[3] == 'F', "不是 RIFF");
+        Need(d[8] == 'W' && d[9] == 'E' && d[10] == 'B' && d[11] == 'P', "不是 WEBP");
+
+        var animBit = false;
+        var loop = -1;
+        var durations = new List<int>();
+
+        var p = 12;
+        while (p + 8 <= d.Length)
+        {
+            var cc = System.Text.Encoding.ASCII.GetString(d, p, 4);
+            var size = BitConverter.ToInt32(d, p + 4);
+            if (size < 0 || p + 8 + size > d.Length) break;
+            var body = p + 8;
+
+            switch (cc)
+            {
+                // VP8X 的第一个字节是标志位，bit1 = animation
+                case "VP8X" when size >= 1:
+                    animBit = (d[body] & 0x02) != 0;
+                    break;
+                // ANIM：4 字节背景色 + 2 字节循环次数
+                case "ANIM" when size >= 6:
+                    loop = d[body + 4] | (d[body + 5] << 8);
+                    break;
+                // ANMF：帧头 16 字节，第 12..14 是 24 位小端的毫秒延时
+                case "ANMF" when size >= 16:
+                    durations.Add(d[body + 12] | (d[body + 13] << 8) | (d[body + 14] << 16));
+                    break;
+            }
+            p = body + size + (size & 1);   // 块要按偶数字节对齐
+        }
+        return (animBit, loop, durations);
+    }
+
+    /// <summary>
+    /// 把 img2webp 挪走，确认这时候选 WebP 会老实退回 GIF 而不是报错。
+    /// 用户拿绿色版只拷了个 exe 走就是这个情况，不该让人白录一遍。
+    /// 挪走的文件在 finally 里放回去。
+    /// </summary>
+    static void WebpFallbackProbe()
+    {
+        var tool = AnimEncoder.FindImg2Webp();
+        if (tool is null) return;                 // 本来就没有，这项没意义
+        var aside = tool + ".probe-aside";
+
+        var (dir, paths) = WriteFrames(2);
+        try
+        {
+            File.Move(tool, aside);
+            Need(!AnimEncoder.WebpAvailable, "挪走之后还认为 WebP 可用");
+
+            var res = Task.Run(() => AnimEncoder.SaveAsync(
+                    paths, Path.Combine(dir, "fb"), fps: 10, RecordFormat.Webp))
+                .GetAwaiter().GetResult();
+
+            Need(res.FellBackToGif, "没有 img2webp 时该标记「退回了 GIF」");
+            Need(res.Format == RecordFormat.Gif, $"该退回 GIF，得到 {res.Format}");
+            Need(res.Path.EndsWith(".gif", StringComparison.OrdinalIgnoreCase),
+                $"后缀该是 .gif：{res.Path}");
+            Need(DecodeGif(res.Path).Length == 2, "退回的 GIF 帧数不对");
+        }
+        finally
+        {
+            if (File.Exists(aside)) File.Move(aside, tool, overwrite: true);
+            Wipe(dir);
+        }
+        Need(AnimEncoder.WebpAvailable, "探针没把 img2webp 放回去");
+    }
+
+    /// <summary>
+    /// 拿真实屏幕内容两种格式各编一遍比大小。
+    ///
+    /// 这一项不光是断言，也是把数字打出来看——「WebP 比 GIF 小」这话得有个量级。
+    /// 用真实屏幕而不是造的纯色帧：纯色帧 LZW 能压到几百字节，两边都小得没意义，
+    /// 比出来的比例跟实际录屏差得远。
+    /// </summary>
+    static void SizeCompareProbe()
+    {
+        if (!AnimEncoder.WebpAvailable) return;
+
+        var screen = ScreenCapture.VirtualScreen();
+        var region = new RECT
+        {
+            Left = screen.Left + 8,
+            Top = screen.Top + 8,
+            Right = Math.Min(screen.Right, screen.Left + 8 + 640),
+            Bottom = Math.Min(screen.Bottom, screen.Top + 8 + 480),
+        };
+
+        var rec = Task.Run(() => RecordService.RunAsync(region, fps: 5, maxSeconds: 2))
+                      .GetAwaiter().GetResult();
+        try
+        {
+            Need(rec.Paths.Count >= 3, $"抓到的帧太少：{rec.Paths.Count}");
+            var fps = Math.Max(1, (int)Math.Round(rec.EffectiveFps));
+
+            var webp = Task.Run(() => AnimEncoder.SaveAsync(
+                    rec.Paths, Path.Combine(rec.Dir, "cmp"), fps, RecordFormat.Webp))
+                .GetAwaiter().GetResult();
+            var gif = Task.Run(() => AnimEncoder.SaveAsync(
+                    rec.Paths, Path.Combine(rec.Dir, "cmp"), fps, RecordFormat.Gif))
+                .GetAwaiter().GetResult();
+
+            var pct = 100.0 * webp.Bytes / gif.Bytes;
+            Console.WriteLine(
+                $"       {rec.Paths.Count} 帧 {region.Right - region.Left}×{region.Bottom - region.Top}："
+                + $"GIF {gif.Bytes / 1024.0:0} KB → WebP {webp.Bytes / 1024.0:0} KB"
+                + $"（{pct:0}%，小 {gif.Bytes / (double)webp.Bytes:0.#} 倍）");
+
+            Need(webp.Bytes < gif.Bytes,
+                $"WebP 反而更大：{webp.Bytes} vs GIF {gif.Bytes}");
+        }
+        finally { rec.Cleanup(); }
     }
 }
