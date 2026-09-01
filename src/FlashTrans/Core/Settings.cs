@@ -91,8 +91,11 @@ public sealed class AppSettings
     public int MaxSelectionChars { get; set; } = 5000;
     public PopupPlace PopupPlace { get; set; } = PopupPlace.NearMouse;
     public double PopupWidth { get; set; } = 420;
-    public double PopupMaxHeight { get; set; } = 420;
-    public bool PopupCloseOnBlur { get; set; } = true;
+    /// <summary>
+    /// 弹窗最高多少。源多的时候聚合标签要摆十几段译文，卡得太矮就只能一直滚，
+    /// 所以给得比较宽松；真正的天花板是当前屏幕的工作区，由 PopupWindow 现算。
+    /// </summary>
+    public double PopupMaxHeight { get; set; } = 720;
     /// <summary>「记住上次位置」用；手动调整过大小后也会记下来。</summary>
     public double PopupLeft { get; set; } = double.NaN;
     public double PopupTop { get; set; } = double.NaN;
@@ -108,6 +111,8 @@ public sealed class AppSettings
     public string HkToggleSelection { get; set; } = "Ctrl+Alt+S";
     public string HkNextProvider { get; set; } = "";
     public string HkCaptureOcr { get; set; } = "Ctrl+Alt+A";
+    /// <summary>把翻译弹窗临时收起 / 再叫回来（内容留着，不重译）。</summary>
+    public string HkTogglePopup { get; set; } = "Ctrl+Alt+H";
 
     // ------- 截图 -------
     /// <summary>选好区域按回车（或双击选区）做什么。工具条上每个动作另有自己的快捷键。</summary>

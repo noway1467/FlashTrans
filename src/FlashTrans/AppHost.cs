@@ -94,6 +94,9 @@ public sealed partial class AppHost : IDisposable
             case HotkeyAction.CaptureOcr:
                 _ = CaptureAsync();
                 break;
+            case HotkeyAction.TogglePopup:
+                TogglePopupWindow();
+                break;
         }
     }
 
@@ -302,6 +305,7 @@ public sealed partial class AppHost : IDisposable
     public void Dispose()
     {
         SettingsService.Instance.Changed -= OnSettingsChanged;
+        CloseTrayMenu();
         _selectionCts?.Cancel();
         _mouseHook.Dispose();
         _ctrlHook.Dispose();

@@ -109,6 +109,7 @@ public static class Win32
 
     public const int VK_CONTROL = 0x11, VK_MENU = 0x12, VK_SHIFT = 0x10, VK_LWIN = 0x5B,
                      VK_C = 0x43, VK_ESCAPE = 0x1B;
+    public const int VK_LBUTTON = 0x01, VK_RBUTTON = 0x02, VK_MBUTTON = 0x04;
 
     public const uint INPUT_KEYBOARD = 1;
     public const uint KEYEVENTF_KEYUP = 0x0002;
@@ -121,6 +122,7 @@ public static class Win32
     public const int GWL_EXSTYLE = -20;
     public const int WS_EX_TOOLWINDOW = 0x00000080;
     public const int WS_EX_NOACTIVATE = 0x08000000;
+    public const int WS_EX_TRANSPARENT = 0x00000020;
 
     /// <summary>
     /// 窗口是不是被 DWM 藏了。Win10 起有一堆常驻的隐身窗口（应用商店应用的宿主、

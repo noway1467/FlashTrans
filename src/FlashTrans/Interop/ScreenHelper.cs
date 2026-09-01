@@ -21,6 +21,31 @@ public static class ScreenHelper
         return new Rect(r.Left / sx, r.Top / sy, (r.Right - r.Left) / sx, (r.Bottom - r.Top) / sy);
     }
 
+    /// <summary>
+    /// 窗口所在显示器的工作区。窗口还没有 HWND（没 Show 过）就退回光标那块屏，
+    /// 这跟弹窗第一次定位时的取法一致。
+    /// </summary>
+    public static Rect WorkAreaOf(Window w)
+    {
+        try
+        {
+            var hwnd = new System.Windows.Interop.WindowInteropHelper(w).Handle;
+            if (hwnd != IntPtr.Zero)
+            {
+                var mon = Win32.MonitorFromWindow(hwnd, Win32.MONITOR_DEFAULTTONEAREST);
+                var mi = new MONITORINFO { cbSize = System.Runtime.InteropServices.Marshal.SizeOf<MONITORINFO>() };
+                if (mon != IntPtr.Zero && Win32.GetMonitorInfo(mon, ref mi))
+                {
+                    var (sx, sy) = Scale(w);
+                    var r = mi.rcWork;
+                    return new Rect(r.Left / sx, r.Top / sy, (r.Right - r.Left) / sx, (r.Bottom - r.Top) / sy);
+                }
+            }
+        }
+        catch { /* 取不到就退回光标那块屏 */ }
+        return WorkAreaAt(CursorPos(), w);
+    }
+
     public static Point ToDip(POINT screenPt, Window? scaleRef = null)
     {
         var (sx, sy) = Scale(scaleRef);

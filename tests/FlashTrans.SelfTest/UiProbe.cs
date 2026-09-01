@@ -19,6 +19,10 @@ static class UiProbe
         step("托盘图标：句柄非空", TrayIconProbe);
         step("剪贴板：原生读写往返", ClipboardProbe);
         step("弹窗：只拖宽度也能记住", () => PopupWidthProbe(host));
+        step("弹窗：焦点被抢走也不关闭", () => PopupBlurProbe(host));
+        step("弹窗：收起能原样叫回，关掉的叫不回", () => PopupStashProbe(host));
+        step("弹窗：最大高度按屏幕工作区收口", () => PopupMaxHeightProbe(host));
+        step("托盘菜单：弹出建锚点、收干净、重复收不炸", () => TrayMenuProbe(host));
 
         step("主窗口：构造 + 布局", () => Probe(new MainWindow(host)));
 
@@ -183,18 +187,180 @@ static class UiProbe
     }
 
     /// <summary>
+    /// 托盘菜单以前挂在那个不可见的 0×0 消息窗口上，点外面关不掉——SetForegroundWindow
+    /// 对不可见窗口无效，WPF 的鼠标捕获就收不到别处的点击。现在弹之前先放一个 1×1 的
+    /// 锚点窗口把线程顶到前台。
+    ///
+    /// 这里验得到的是：弹得出来、锚点只建一个、收的时候两个一起收干净、重复收不炸
+    /// （收的过程里菜单自己的 Closed 还会再回调一次 CloseTrayMenu，就是这条路）。
+    /// 真正「点外面自动关」要人动鼠标，断言测不到。
+    /// </summary>
+    static void TrayMenuProbe(AppHost host)
+    {
+        try
+        {
+            host.ShowTrayMenu();
+            Pump();
+            if (AnchorCount() != 1)
+                throw new InvalidOperationException($"锚点窗口应有 1 个，实际 {AnchorCount()} 个");
+
+            // 连着右键两次别叠出第二个锚点
+            host.ShowTrayMenu();
+            Pump();
+            if (AnchorCount() != 1)
+                throw new InvalidOperationException($"右键两次叠出了 {AnchorCount()} 个锚点");
+
+            host.CloseTrayMenu();
+            Pump();
+            if (AnchorCount() != 0)
+                throw new InvalidOperationException($"收完还剩 {AnchorCount()} 个锚点窗口");
+
+            // 重复收：CloseTrayMenu 里那道只收一次的闸
+            host.CloseTrayMenu();
+            host.CloseTrayMenu();
+            Pump();
+            Console.WriteLine("       弹出→锚点 1 个→重复右键不叠→收干净→重复收不炸");
+        }
+        finally
+        {
+            host.CloseTrayMenu();
+            Pump();
+        }
+    }
+
+    static int AnchorCount() => Application.Current.Windows.OfType<Window>()
+        .Count(w => w.Title == AppHost.TrayAnchorTitle);
+
+    /// <summary>
+    /// 以前弹窗挂着 Deactivated → HidePopup：切一下别的软件窗口，正在看的译文就没了。
+    /// 离屏窗口本来就拿不到焦点，pump 几轮就会走一遍 Deactivated，正好拿来验。
+    /// </summary>
+    static void PopupBlurProbe(AppHost host)
+    {
+        var s = SettingsService.Instance.Current;
+        var (l0, t0) = (s.PopupLeft, s.PopupTop);
+        var w = new PopupWindow(host);
+        try
+        {
+            w.Left = -4000; w.Top = -4000;
+            w.ShowFor("blur probe", new Point(-4000, -4000));
+            Pump();
+            if (!w.IsVisible) throw new InvalidOperationException("刚弹出来就不见了");
+
+            w.Activate();
+            Pump();
+            Pump();
+            Pump();
+            if (!w.IsVisible) throw new InvalidOperationException("失去焦点后自己关了");
+        }
+        finally
+        {
+            Close(w);
+            s.PopupLeft = l0; s.PopupTop = t0;
+        }
+    }
+
+    /// <summary>收起要留住内容能原样叫回；关掉的要作废；新翻译要把收起的顶掉。</summary>
+    static void PopupStashProbe(AppHost host)
+    {
+        var s = SettingsService.Instance.Current;
+        var (l0, t0) = (s.PopupLeft, s.PopupTop);
+        var w = new PopupWindow(host);
+        try
+        {
+            w.Left = -4000; w.Top = -4000;
+            w.ShowFor("stash probe", new Point(-4000, -4000));
+            Pump();
+
+            w.StashPopup();
+            Pump();
+            if (w.IsVisible) throw new InvalidOperationException("收起了还看得见");
+            if (!w.CanRestore) throw new InvalidOperationException("收起后却说没东西可叫回");
+
+            if (!w.RestorePopup()) throw new InvalidOperationException("叫不回来");
+            Pump();
+            if (!w.IsVisible) throw new InvalidOperationException("叫回来了却没显示");
+            if (w.CanRestore) throw new InvalidOperationException("已经回来了还说能叫回");
+
+            // 关闭是「不要了」，快捷键不该再把它捞回来
+            w.ClosePopup();
+            Pump();
+            if (w.CanRestore) throw new InvalidOperationException("关掉的还说能叫回");
+            if (w.RestorePopup()) throw new InvalidOperationException("关掉的居然叫回来了");
+            if (w.IsVisible) throw new InvalidOperationException("关掉的又显示出来了");
+
+            // 收起期间来了新翻译：直接摆出新结果，不留着旧的等人叫
+            w.ShowFor("stash probe 2", new Point(-4000, -4000));
+            Pump();
+            w.StashPopup();
+            Pump();
+            if (!w.CanRestore) throw new InvalidOperationException("收起后该能叫回");
+            w.ShowFor("stash probe 3", new Point(-4000, -4000));
+            Pump();
+            if (!w.IsVisible) throw new InvalidOperationException("新翻译没把弹窗摆出来");
+            if (w.CanRestore) throw new InvalidOperationException("新翻译来了还留着收起的那个");
+            w.ClosePopup();
+            Pump();
+        }
+        finally
+        {
+            Close(w);
+            s.PopupLeft = l0; s.PopupTop = t0;
+        }
+    }
+
+    /// <summary>
+    /// 源多的时候要的是更高的弹窗，所以上限放宽到能超过屏幕；
+    /// 但真显示时必须按当前屏幕的工作区收口，否则窗口伸到任务栏底下去。
+    /// </summary>
+    static void PopupMaxHeightProbe(AppHost host)
+    {
+        var s = SettingsService.Instance.Current;
+        var (mh0, l0, t0) = (s.PopupMaxHeight, s.PopupLeft, s.PopupTop);
+        var w = new PopupWindow(host);
+        try
+        {
+            s.PopupMaxHeight = 2400;   // 比任何一块屏都高
+            w.Left = -4000; w.Top = -4000;
+            w.ShowFor("max height probe", new Point(-4000, -4000));
+            Pump();
+
+            // 离屏窗口和光标可能落在不同显示器上，取两者里高的那块，免得多屏下误报
+            var tallest = Math.Max(ScreenHelper.WorkAreaOf(w).Height,
+                                   ScreenHelper.WorkAreaAt(ScreenHelper.CursorPos(), w).Height);
+            Console.WriteLine($"       上限设 2400，工作区高 {tallest:F0}，实际收到 {w.MaxHeight:F0}");
+            if (w.MaxHeight >= 2400) throw new InvalidOperationException("上限完全没收口");
+            if (w.MaxHeight > tallest)
+                throw new InvalidOperationException($"上限超出工作区：{w.MaxHeight:F0} > {tallest:F0}");
+
+            // 反过来，设置里给的比屏幕小就该照用户的来
+            s.PopupMaxHeight = 300;
+            w.OnSettingsChanged();
+            Pump();
+            if (Math.Abs(w.MaxHeight - 300) > 1)
+                throw new InvalidOperationException($"没照设置的上限来：期望 300，实际 {w.MaxHeight:F0}");
+            w.ClosePopup();
+            Pump();
+        }
+        finally
+        {
+            s.PopupMaxHeight = mh0; s.PopupLeft = l0; s.PopupTop = t0;
+            Close(w);
+        }
+    }
+
+    /// <summary>
     /// 两个坑叠在一起：_userResized 只认高度变化，拖宽存不下来；
     /// 而高度自适应时 WPF 每轮布局又拿 Width 反压窗口，把拖出来的宽度弹回旧值。
     /// </summary>
     static void PopupWidthProbe(AppHost host)
     {
         var s = SettingsService.Instance.Current;
-        var (w0, l0, t0, blur0) = (s.PopupWidth, s.PopupLeft, s.PopupTop, s.PopupCloseOnBlur);
+        var (w0, l0, t0) = (s.PopupWidth, s.PopupLeft, s.PopupTop);
         try
         {
-            // 离屏窗口拿不到焦点，一 pump 就 Deactivated 自己关了，
-            // 那时 _widthPinned 还是 false，后面的宽度也就落在隐藏窗口上白设一场。
-            s.PopupCloseOnBlur = false;
+            // 弹窗不再有「失去焦点自动关闭」，离屏窗口 pump 一下也还在，
+            // 这个探针才量得到宽度。以前要先把 PopupCloseOnBlur 关掉。
             var w = new PopupWindow(host);
             w.Left = -4000; w.Top = -4000;
             w.ShowFor("width probe", new Point(-4000, -4000));
@@ -213,7 +379,7 @@ static class UiProbe
             Drag(w, hwnd, dpi, target);
             Pump();
 
-            w.HidePopup();
+            w.ClosePopup();
             Pump();
             if (Math.Abs(s.PopupWidth - target) > 1.5)
                 throw new InvalidOperationException($"宽度没存下：期望 {target}，实际 {s.PopupWidth}");
@@ -226,13 +392,13 @@ static class UiProbe
             Console.WriteLine($"       拖到 {target}，存下 {s.PopupWidth}，重开量到 {Math.Round(reopened)}");
             if (Math.Abs(reopened - target) > 2)
                 throw new InvalidOperationException($"重开又变回去了：期望 {target}，实际 {Math.Round(reopened)}");
-            w.HidePopup();
+            w.ClosePopup();
             Pump();
             Close(w);
         }
         finally
         {
-            s.PopupWidth = w0; s.PopupLeft = l0; s.PopupTop = t0; s.PopupCloseOnBlur = blur0;
+            s.PopupWidth = w0; s.PopupLeft = l0; s.PopupTop = t0;
         }
     }
 

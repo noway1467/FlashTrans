@@ -62,9 +62,8 @@ public sealed partial class SettingsWindow
                  ("上次的位置", PopupPlace.RememberLast)],
                 S.PopupPlace, v => S.PopupPlace = v)),
             Field("宽度", SliderRow(S.PopupWidth, 280, 720, 10, v => S.PopupWidth = v, v => $"{v:F0} px")),
-            Field("最大高度", SliderRow(S.PopupMaxHeight, 200, 900, 20, v => S.PopupMaxHeight = v,
-                v => $"{v:F0} px")),
-            Check("失去焦点时自动关闭", S.PopupCloseOnBlur, on => S.PopupCloseOnBlur = on),
+            Field("最大高度", SliderRow(S.PopupMaxHeight, 200, 1600, 20, v => S.PopupMaxHeight = v,
+                v => $"{v:F0} px"), "调再高也不会超出屏幕工作区"),
             Check("弹窗内显示源标签", S.PopupShowTabs, on => S.PopupShowTabs = on));
 
         Section(page, "缓存与网络",
@@ -408,7 +407,9 @@ public sealed partial class SettingsWindow
             HotkeyField("翻译剪贴板内容", S.HkTranslateClipboard, v => S.HkTranslateClipboard = v),
             HotkeyField("开关划词翻译", S.HkToggleSelection, v => S.HkToggleSelection = v),
             HotkeyField("切换到下一个源", S.HkNextProvider, v => S.HkNextProvider = v),
-            HotkeyField("截图", S.HkCaptureOcr, v => S.HkCaptureOcr = v));
+            HotkeyField("截图", S.HkCaptureOcr, v => S.HkCaptureOcr = v),
+            HotkeyField("收起 / 叫回翻译弹窗", S.HkTogglePopup, v => S.HkTogglePopup = v),
+            Hint("弹窗收起后内容还留着，再按一次原样回来；期间来了新翻译，收起的那个就作废了。"));
 
         Section(page, "框选时的键",
             Hint("矩形、画笔、马赛克那些键在「截图」一栏里配，它们只在框选期间管用。"),

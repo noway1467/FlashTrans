@@ -44,6 +44,7 @@ static class ShotProbe
 
             ShotToast(outDir, $"toast-{tag}.png");
             ShotOcrResult(outDir, $"ocr-result-{tag}.png");
+            ShotPopup(outDir, $"popup-{tag}.png", host);
             ShotSettings(outDir, $"settings-general-{tag}.png", host, "general");
             ShotSettings(outDir, $"settings-hotkeys-{tag}.png", host, "hotkeys");
             ShotSettings(outDir, $"settings-about-{tag}.png", host, "about");
@@ -120,6 +121,30 @@ static class ShotProbe
         w.UpdateLayout();
         Pump();
         Save(w, Path.Combine(dir, file));
+        w.Hide();
+        w.Close();
+    }
+
+    /// <summary>
+    /// 翻译弹窗。顶栏那排图标按钮（复制、重译、展开、收起、关闭）挤在一起，
+    /// 大小和间距只能看图；「钉住」那颗药丸按钮撤掉之后这一排的观感也得核一眼。
+    /// 参数照真实调用走 ShowFor，不然截出来不是用户看到的那个。
+    /// </summary>
+    static void ShotPopup(string dir, string file, AppHost host)
+    {
+        var w = new PopupWindow(host)
+        {
+            ShowInTaskbar = false,
+            ShowActivated = false,
+            WindowStartupLocation = WindowStartupLocation.Manual,
+            Left = -4000,
+            Top = -4000,
+        };
+        w.ShowFor("The quick brown fox jumps over the lazy dog", new Point(-4000, -4000));
+        w.UpdateLayout();
+        Pump();
+        Save(w, Path.Combine(dir, file));
+        w.ClosePopup();
         w.Hide();
         w.Close();
     }
