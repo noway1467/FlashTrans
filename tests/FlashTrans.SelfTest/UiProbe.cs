@@ -1,4 +1,4 @@
-using System.Windows;
+﻿using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -98,6 +98,9 @@ static class UiProbe
         step("对话框：单按钮提示（无父窗口）", DialogNoOwnerProbe);
         step("对话框：蒙层跟着父窗口盖并在关闭后收走", ScrimProbe);
         step("轻提示：弹出 + 复用 + 位置在工作区内", ToastProbe);
+        step("浮条：躲开选区，占满工作区时压到任务栏上", HudPlacementProbe);
+        step("对截屏隐身：真摆一块纯色再抓回来验", CaptureHidingProbe);
+        step("长截图浮条：躲不开选区时进度文字就不再变", LongShotHudProbe);
         step("识别结果：改完再复制，拿到的是改后的字", () => OcrResultProbe(copy: true));
         step("识别结果：翻译按钮走的也是框里的字", () => OcrResultProbe(copy: false));
         step("识别结果：清空后按复制不关窗", OcrResultEmptyProbe);
@@ -914,6 +917,226 @@ static class UiProbe
         if (Application.Current.Windows.OfType<ToastWindow>().Any())
             throw new InvalidOperationException("Shutdown 之后轻提示没有关掉");
     }
+
+    /// <summary>
+    /// 长截图和录制的浮条必须摆在选区外面。摆进去的代价不只是难看：长图那边，
+    /// 每帧变一次的进度文字会让「已经滚到底」判不出来——两帧本该一模一样，就因为
+    /// 那几个数字不同被当成画面还在动，于是拿重复的页脚去对齐，同一屏底部反复接十几遍。
+    ///
+    /// 最要命的一种是照着最大化窗口选：选区正好占满工作区，上下左右都没缝，
+    /// 只有任务栏那条能站人。以前按工作区摆，这种情况必然摆进选区里。
+    /// </summary>
+    static void HudPlacementProbe()
+    {
+        var mon = new Rect(0, 0, 1920, 1080);
+        var work = new Rect(0, 0, 1920, 1040);          // 底下 40 是横着的任务栏
+        const double w = 240, h = 36;
+
+        void Check(string what, Rect sel, bool mustAvoid = true)
+        {
+            var (left, top) = ScreenHelper.PlaceOutside(sel, mon, w, h);
+            var box = new Rect(left, top, w, h);
+            if (!mon.Contains(box))
+                throw new InvalidOperationException($"{what}：浮条 {box} 跑出屏幕了，看不见");
+
+            var over = Rect.Intersect(box, sel);
+            var area = over.IsEmpty ? 0 : over.Width * over.Height;
+            if (mustAvoid && area > 0)
+                throw new InvalidOperationException(
+                    $"{what}：浮条 ({left:0},{top:0}) 压在选区 {sel} 上 {area:0} 平方点");
+            Console.WriteLine($"       {what} → ({left:0},{top:0}){(area > 0 ? " 躲不开" : "")}");
+        }
+
+        Check("选区在屏幕中间", new Rect(300, 200, 800, 400));
+        Check("选区贴着屏幕顶", new Rect(300, 0, 800, 900));
+        Check("选区贴着工作区底", new Rect(300, 200, 800, 840));
+        Check("最大化窗口：占满整个工作区", work);
+        // 连任务栏都盖住了，那就是躲不开——只要求别摆到屏幕外面去
+        Check("选区占满整块屏", mon, mustAvoid: false);
+    }
+
+    /// <summary>
+    /// 拿真显示器的尺寸建一个长截图浮条，验两件事：照着最大化窗口选（选区正好占满
+    /// 工作区）时它得挪到任务栏上去；实在躲不开、系统又不支持对截屏隐身时，
+    /// 那行进度文字必须冻住——它每帧一变，长图那边就判不出「已经滚到底」了。
+    /// </summary>
+    static void LongShotHudProbe()
+    {
+        var handle = Win32.MonitorFromPoint(ScreenHelper.CursorPos(), Win32.MONITOR_DEFAULTTONEAREST);
+        var mi = new MONITORINFO
+        {
+            cbSize = System.Runtime.InteropServices.Marshal.SizeOf<MONITORINFO>(),
+        };
+        if (handle == IntPtr.Zero || !Win32.GetMonitorInfo(handle, ref mi))
+            throw new InvalidOperationException("取不到显示器信息，没法造出真实尺寸的选区");
+
+        Check("照着最大化窗口选", mi.rcWork);
+        Check("选区占满整块屏", mi.rcMonitor);
+
+        void Check(string what, RECT region)
+        {
+            var hud = new LongShotHud(region);
+            try
+            {
+                hud.Show();
+                hud.UpdateLayout();
+                Pump();
+
+                var before = AllText(hud);
+                hud.Report(1289, 2);
+                hud.UpdateLayout();
+                Pump();
+                var after = AllText(hud);
+
+                var tl = ScreenHelper.ToDip(new POINT { X = region.Left, Y = region.Top }, hud);
+                var br = ScreenHelper.ToDip(new POINT { X = region.Right, Y = region.Bottom }, hud);
+                var over = Rect.Intersect(new Rect(tl, br),
+                                          new Rect(hud.Left, hud.Top, hud.ActualWidth, hud.ActualHeight));
+                var inside = !over.IsEmpty && over.Width * over.Height > 0;
+
+                if (inside)
+                {
+                    if (after != before)
+                        throw new InvalidOperationException(
+                            $"{what}：浮条压在选区里，进度文字却还在变（{after}）");
+                }
+                else if (after == before)
+                {
+                    throw new InvalidOperationException($"{what}：浮条在选区外，却没报进度（{after}）");
+                }
+
+                Console.WriteLine($"       {what} → ({hud.Left:0},{hud.Top:0})"
+                                  + (inside ? " 压在选区里" : " 在选区外"));
+            }
+            finally { hud.Close(); }   // 顺带把轮询 Esc 的定时器停掉
+        }
+    }
+
+    /// <summary>丢在屏幕外的一小块纯色窗口，用来试各种窗口属性。</summary>
+    static Window NewChip(Brush fill, bool transparent) => new()
+    {
+        Width = 200,
+        Height = 80,
+        Left = -30000,
+        Top = -30000,
+        WindowStyle = WindowStyle.None,
+        ResizeMode = ResizeMode.NoResize,
+        ShowInTaskbar = false,
+        ShowActivated = false,
+        Topmost = true,
+        AllowsTransparency = transparent,
+        Background = fill,
+    };
+
+    /// <summary>
+    /// 钉住「WDA_EXCLUDEFROMCAPTURE 这条路走不通」这个结论，免得下次又有人去试。
+    /// 真在屏幕上摆一块纯色，设上隐身，再 BitBlt 回来数颜色，量到两件事：
+    ///
+    /// 一、对带 WS_EX_LAYERED 的窗口这个调用直接返回 false，而 WPF 只要
+    /// AllowsTransparency=true 就是层窗口——两条浮条正是那么建的，从来没设上过。
+    /// 二、就算设上了（普通窗口），底下垫的绿色一点都透不出来，那块是<b>纯黑</b>。
+    /// 长截图里就成了一条黑杠，比拍到浮条还难看。所以浮条只能靠摆位置躲开选区。
+    /// </summary>
+    static void CaptureHidingProbe()
+    {
+        var work = ScreenHelper.WorkAreaAt(ScreenHelper.CursorPos());
+        var magenta = Color.FromRgb(0xFF, 0x00, 0xFF);
+        var green = Color.FromRgb(0x00, 0xC0, 0x40);
+
+        var back = NewChip(new SolidColorBrush(green), transparent: false);
+        back.Width = 320;
+        back.Height = 160;
+        back.Topmost = false;
+        back.Left = work.Left + 40;
+        back.Top = work.Top + 40;
+        back.Show();
+        try
+        {
+            foreach (var transparent in new[] { false, true })
+            {
+                var w = NewChip(new SolidColorBrush(magenta), transparent);
+                w.Left = back.Left + 60;
+                w.Top = back.Top + 40;
+                try
+                {
+                    w.Show();
+                    Settle();
+
+                    var m = PresentationSource.FromVisual(w)?.CompositionTarget?.TransformToDevice
+                            ?? throw new InvalidOperationException("取不到 DPI 变换");
+                    var box = ScreenCapture.ToPixels(new Rect(w.Left, w.Top, w.ActualWidth, w.ActualHeight),
+                                                     m.M11, m.M22);
+
+                    var shown = Ratio(ScreenCapture.Grab(box), magenta);
+                    if (shown < 0.9)
+                        throw new InvalidOperationException(
+                            $"AllowsTransparency={transparent}：窗口摆上去却只拍到 {shown:P0} 的纯色，这条探测本身不成立");
+
+                    var hwnd = new System.Windows.Interop.WindowInteropHelper(w).Handle;
+                    var set = Win32.SetWindowDisplayAffinity(hwnd, Win32.WDA_EXCLUDEFROMCAPTURE);
+                    Settle();
+                    var after = ScreenCapture.Grab(box);
+                    var left = Ratio(after, magenta);
+                    var behind = Ratio(after, green);
+
+                    Console.WriteLine($"       AllowsTransparency={transparent}：设上={set} "
+                                      + $"隐身后还剩 {left:P0}，透出后面的绿 {behind:P0}，中心色={Center(after)}");
+
+                    // 层窗口：压根设不上
+                    if (transparent)
+                    {
+                        if (set) throw new InvalidOperationException("层窗口居然设上了，结论要重写");
+                        if (left < 0.9) throw new InvalidOperationException("没设上却拍不到了，说明返回值不能信");
+                        continue;
+                    }
+                    // 普通窗口：设得上，但抓回来是个黑洞，不是后面的绿
+                    if (!set) throw new InvalidOperationException("普通窗口都设不上，系统比预期还老");
+                    if (left > 0.02) throw new InvalidOperationException($"说是设上了，却还是拍到 {left:P0}");
+                    if (behind > 0.1)
+                        throw new InvalidOperationException(
+                            $"居然透出了 {behind:P0} 的后景——那这条路能走，浮条的躲法可以重新考虑");
+                }
+                finally { w.Close(); }
+            }
+        }
+        finally { back.Close(); }
+    }
+
+    static string Center(CapturedImage? img)
+    {
+        if (img is null) return "无";
+        var i = (img.Height / 2) * img.Stride + (img.Width / 2) * 4;
+        return $"#{img.Pixels[i + 2]:X2}{img.Pixels[i + 1]:X2}{img.Pixels[i]:X2}";
+    }
+
+    /// <summary>抓到的图里这个颜色占了多少（容一点色差，DWM 合成会差几个数）。</summary>
+    static double Ratio(CapturedImage? img, Color c)
+    {
+        if (img is null) throw new InvalidOperationException("抓屏返回 null");
+        var hit = 0;
+        var total = 0;
+        for (var y = 0; y < img.Height; y += 3)
+            for (var x = 0; x < img.Width; x += 3)
+            {
+                var i = y * img.Stride + x * 4;
+                total++;
+                if (Math.Abs(img.Pixels[i] - c.B) <= 8
+                    && Math.Abs(img.Pixels[i + 1] - c.G) <= 8
+                    && Math.Abs(img.Pixels[i + 2] - c.R) <= 8) hit++;
+            }
+        return total == 0 ? 0 : (double)hit / total;
+    }
+
+    /// <summary>等 WPF 画完、再等 DWM 合成上屏，然后才谈得上抓屏。</summary>
+    static void Settle()
+    {
+        Pump();
+        System.Threading.Thread.Sleep(220);
+        Pump();
+    }
+
+    static string AllText(DependencyObject root)
+        => string.Join(" ", Descendants<TextBlock>(root).Select(t => t.Text));
 
     // ------------------------------------------------------------- 工具
 

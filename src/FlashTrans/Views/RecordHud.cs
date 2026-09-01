@@ -1,4 +1,4 @@
-using System.Windows;
+﻿using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -13,6 +13,8 @@ namespace FlashTrans.Views;
 ///
 /// 跟 LongShotHud 一样摆在选区外面——摆里面会被录进去，
 /// 而且这条东西上的秒数每帧都在变，录出来满屏都是它在跳。
+/// 别指望 WDA_EXCLUDEFROMCAPTURE 兜底，见 <see cref="Win32.WDA_EXCLUDEFROMCAPTURE"/>：
+/// 对本项目这种 BitBlt 抓屏，隐身的窗口在片子里是一块纯黑，比录到浮条还糟。
 /// </summary>
 public sealed class RecordHud : Window
 {
@@ -180,10 +182,6 @@ public sealed class RecordHud : Window
             }
 
             System.Windows.Interop.HwndSource.FromHwnd(hwnd)?.AddHook(WndProc);
-
-            // 对截屏隐身：浮条要显示录制进度，但绝不能被录进片子里。
-            // 选区占满屏时 Place 挪不开，只有这个能兜住。
-            ScreenHelper.ExcludeFromCapture(this);
         };
 
         Closed += (_, _) =>
@@ -278,8 +276,8 @@ public sealed class RecordHud : Window
     }
 
     /// <summary>
-    /// 摆在选区正下方居中；下面不够就摆上面；上下都挤不出地方（选区占满屏）
-    /// 就贴到工作区底部——那时候难免会被录进去一点，但总比看不见进度好。
+    /// 摆在选区外面。选区把工作区占满时（照着最大化窗口选的，最常见的一种）
+    /// 就压到任务栏上去——那条缝是唯一躲得开的地方。
     /// </summary>
     void Place()
     {
@@ -290,12 +288,10 @@ public sealed class RecordHud : Window
         // 选区是物理像素，Left/Top 是 DIP，得换一下
         var tl = ScreenHelper.ToDip(new POINT { X = _region.Left, Y = _region.Top }, this);
         var br = ScreenHelper.ToDip(new POINT { X = _region.Right, Y = _region.Bottom }, this);
-        var work = ScreenHelper.WorkAreaAt(new POINT { X = _region.Left, Y = _region.Bottom }, this);
+        var sel = new Rect(tl, br);
+        // 要整块屏幕而不是工作区，任务栏那条缝就是靠这个让出来的
+        var mon = ScreenHelper.MonitorAt(new POINT { X = _region.Left, Y = _region.Bottom }, this);
 
-        Left = Math.Clamp((tl.X + br.X) / 2 - w / 2, work.Left, Math.Max(work.Left, work.Right - w));
-        var top = br.Y + 8;
-        if (top + h > work.Bottom) top = tl.Y - h - 8;
-        if (top < work.Top) top = work.Bottom - h - 8;
-        Top = top;
+        (Left, Top) = ScreenHelper.PlaceOutside(sel, mon, w, h);
     }
 }

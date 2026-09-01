@@ -68,6 +68,7 @@ public static class LongShotService
         var total = h;
         var prev = first;
         var band = PickBand(first);
+        var fixedBottom = -1;
         var frames = 1;
         // 先小步试。一格滚多远各家程序不一样，测出来之后下面会自己调。
         var notches = band > 150 ? 2 : 1;
@@ -115,9 +116,26 @@ public static class LongShotService
             retries = 0;
             if (shift == 0) break;                      // 滚不动了，到底
 
+            // 横向滚动条、状态栏这类固定底栏不会跟正文一起滚。若仍从 next 最底下
+            // 截 shift 行，它会在每个分片末尾重复一次，同时漏掉同等高度的正文。
+            if (fixedBottom < 0)
+            {
+                fixedBottom = FindFixedBottom(prev, next, shift);
+                if (fixedBottom > 0)
+                {
+                    var cleanFirst = Crop(first, 0, first.Height - fixedBottom);
+                    if (cleanFirst is not null)
+                    {
+                        parts[0] = cleanFirst;
+                        total -= fixedBottom;
+                    }
+                    else fixedBottom = 0;
+                }
+            }
+
             // 只留新露出来的那部分。裁到剩余额度以内，别冲过高度上限。
             var take = Math.Min(shift, MaxHeight - total);
-            var slice = Crop(next, next.Height - take, take);
+            var slice = Crop(next, next.Height - Math.Max(0, fixedBottom) - take, take);
             if (slice is null) break;
 
             parts.Add(slice);
@@ -275,6 +293,27 @@ public static class LongShotService
             if (++bad > budget) return false;
         }
         return true;
+    }
+
+    /// <summary>识别视口底部不随正文滚动的连续固定栏。</summary>
+    internal static int FindFixedBottom(CapturedImage prev, CapturedImage next, int shift)
+    {
+        if (shift <= 0 || prev.Width != next.Width || prev.Height != next.Height) return 0;
+
+        var height = prev.Height;
+        var top = Math.Max(shift, height - Math.Min(height / 3, 160));
+        var fixedRows = 0;
+        var hasMotionEvidence = false;
+
+        for (var y = height - 1; y >= top; y--)
+        {
+            if (!RowMatches(prev, y, next, y, prev.Width, RowTolerance)) break;
+            fixedRows++;
+            if (!RowMatches(prev, y, next, y - shift, prev.Width, RowTolerance))
+                hasMotionEvidence = true;
+        }
+
+        return fixedRows >= 2 && hasMotionEvidence ? fixedRows : 0;
     }
 
     // ------------------------------------------------------------- 拼接

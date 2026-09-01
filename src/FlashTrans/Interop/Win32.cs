@@ -1,4 +1,4 @@
-using System.Runtime.InteropServices;
+﻿using System.Runtime.InteropServices;
 
 namespace FlashTrans.Interop;
 
@@ -127,11 +127,14 @@ public static class Win32
     /// <summary>正常参与截屏。</summary>
     public const uint WDA_NONE = 0x00000000;
     /// <summary>
-    /// 这个窗口对截屏完全隐身：BitBlt、PrintWindow、录屏都拍不到它，
-    /// 但屏幕上照常看得见。Win10 2004（build 19041）起有，正好是本项目的最低版本。
+    /// 号称能让窗口对截屏隐身。<b>本项目不用它</b>，理由记在这儿免得又有人去试：
     ///
-    /// 长截图和录制的浮条就靠它：浮条必须显示在屏幕上给用户看进度，
-    /// 又绝对不能被拍进图里——选区占满屏时浮条无处可躲，只能让它隐身。
+    /// 设上之后 BitBlt 抓这块屏，拿回来的是一块<b>纯黑</b>，不是窗口后面的东西
+    /// （UiProbe 的「对截屏隐身」那条实测过）。长截图里就是一条黑杠，
+    /// 比拍到浮条本身还难看。浮条只能靠摆到选区外面躲开。
+    ///
+    /// 另外还有个坑：对带 WS_EX_LAYERED 的窗口直接返回 false，
+    /// 而 WPF 只要 AllowsTransparency=true 就是层窗口——两条浮条正是那么建的。
     /// </summary>
     public const uint WDA_EXCLUDEFROMCAPTURE = 0x00000011;
 
