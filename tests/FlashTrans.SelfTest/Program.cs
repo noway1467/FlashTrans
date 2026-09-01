@@ -42,6 +42,8 @@ static class Program
 
         if (args.Contains("--net")) NetProbe.Run(Step);
         if (args.Contains("--timing")) TimingProbe.Run();
+        if (args.Contains("--sizelab")) SizeLab.Run();
+        if (args.Contains("--motion")) SizeLab.Motion();
         if (args.Contains("--shot")) ShotProbe.Run("shots", host);
 
         Console.WriteLine(_fail == 0 ? "\n全部通过" : $"\n失败 {_fail} 项");

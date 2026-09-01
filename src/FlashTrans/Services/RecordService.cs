@@ -12,6 +12,8 @@ public enum RecordStop
     Limit,
     /// <summary>一帧都没抓到。</summary>
     Failed,
+    /// <summary>暂停着太久没动静，自己收了。</summary>
+    PausedTooLong,
 }
 
 /// <summary>
@@ -24,6 +26,10 @@ public enum RecordStop
 public sealed record RecordFrames(
     string Dir, List<string> Paths, TimeSpan Elapsed, double EffectiveFps, RecordStop Stopped)
 {
+    /// <summary>暂停了几次、一共暂停了多久。只用来在提示里说一声。</summary>
+    public int Pauses { get; init; }
+    public TimeSpan PausedFor { get; init; }
+
     public void Cleanup()
     {
         try { if (Directory.Exists(Dir)) Directory.Delete(Dir, recursive: true); }
@@ -51,16 +57,55 @@ public static class RecordService
     public static int ClampSeconds(int v) => Math.Clamp(v, MinSeconds, MaxSeconds);
 
     /// <summary>
+    /// 暂停着最多挂多久（分钟）。暂停不吃时长预算，所以没有这道闸的话，
+    /// 按了暂停就走开等于把临时帧和这个循环无限期留在那儿。
+    /// </summary>
+    public const int MaxPausedMinutes = 10;
+
+    /// <summary>
+    /// 等一小段。上限压在 200ms 是为了暂停/停止能跟手：
+    /// 低帧率下一帧的间隔可能是 500ms，睡整段的话按了暂停要等半秒才有反应。
+    /// </summary>
+    static Task NapAsync(double ms) => Task.Delay((int)Math.Clamp(ms, 1, 200));
+
+    /// <summary>
+    /// 把选区的宽高吸到偶数（各最多少一个像素）。
+    ///
+    /// H.264 是 4:2:0 色度采样，一个色度样本盖 2×2 个亮度像素，宽或高是奇数
+    /// 编码器直接拒。在这儿统一吸掉，而不是留给 MP4 那条路自己切：
+    /// 三种格式录到的画面得是同一块区域，不然同一次录制换个格式尺寸就变了。
+    /// 少一个像素肉眼看不出来，而且拖框本来就不是像素级精确的。
+    /// </summary>
+    internal static RECT SnapEven(RECT r)
+    {
+        var w = Math.Max(0, r.Right - r.Left);
+        var h = Math.Max(0, r.Bottom - r.Top);
+        return new RECT
+        {
+            Left = r.Left,
+            Top = r.Top,
+            Right = r.Left + w - (w & 1),
+            Bottom = r.Top + h - (h & 1),
+        };
+    }
+
+    /// <summary>
     /// 在 region（屏幕物理像素）上录。
-    /// onProgress 每抓一帧调一次，参数是帧数和已经录了多久。
-    /// cancelled 返回 true 就停。
+    /// onProgress 每抓一帧调一次，参数是帧数和已经录了多久（不含暂停掉的时间）。
+    /// cancelled 返回 true 就停；paused 返回 true 就挂着不抓帧。
     /// </summary>
     public static async Task<RecordFrames> RunAsync(
         RECT region, int fps, int maxSeconds,
-        Action<int, TimeSpan>? onProgress = null, Func<bool>? cancelled = null)
+        Action<int, TimeSpan>? onProgress = null,
+        Func<bool>? cancelled = null,
+        Func<bool>? paused = null,
+        int? maxPausedMs = null)
     {
+        // 默认那道闸是 10 分钟，自测等不了；留个口子让它传小值进来。
+        var pauseLimit = maxPausedMs ?? MaxPausedMinutes * 60_000;
         fps = ClampFps(fps);
         maxSeconds = ClampSeconds(maxSeconds);
+        region = SnapEven(region);
 
         var dir = Path.Combine(Path.GetTempPath(), "FlashTrans.rec." + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);
@@ -70,18 +115,59 @@ public static class RecordService
         var maxFrames = Math.Max(1, fps * maxSeconds);
         var stop = RecordStop.Limit;
         double firstAt = 0, lastAt = 0;
-        var sw = Stopwatch.StartNew();
 
-        for (var i = 0; i < maxFrames; i++)
+        // 所有调度都走「活动时钟」= 墙上时钟 - 暂停掉的时间。这样两件事同时成立：
+        // 回放是连续的（暂停期间不抓帧，动图里不会多出一段静止画面），
+        // 暂停也不吃时长预算（挂着 5 分钟回来，那 30 秒还剩多少就是多少）。
+        var sw = Stopwatch.StartNew();
+        double pausedMs = 0;
+        double pauseAt = -1;   // >= 0 表示正暂停着，值是按下暂停那一刻的墙上时刻
+        var pauses = 0;
+
+        while (paths.Count < maxFrames)
         {
             if (cancelled?.Invoke() == true) { stop = RecordStop.Stopped; break; }
 
+            // 时长也要看，不能只数帧。跟不上目标帧率时（区域大、机器忙）帧数攒得慢，
+            // 光等 maxFrames 的话「最长 30 秒」会变成录满 300 帧、实际过了 75 秒。
+            // 用活动时钟，所以暂停掉的时间照样不算。
+            if (sw.Elapsed.TotalMilliseconds - pausedMs >= maxSeconds * 1000.0) break;
+
+            var wantPause = paused?.Invoke() == true;
+            if (wantPause)
+            {
+                // 刚按下：记下时刻，从这里开始的墙上时间都要从活动时钟里刨掉。
+                if (pauseAt < 0) { pauseAt = sw.Elapsed.TotalMilliseconds; pauses++; }
+                else if (sw.Elapsed.TotalMilliseconds - pauseAt > pauseLimit)
+                {
+                    // 按了暂停就走开了。收摊，已经录到的帧照样交出去。
+                    pausedMs += sw.Elapsed.TotalMilliseconds - pauseAt;
+                    pauseAt = -1;
+                    stop = RecordStop.PausedTooLong;
+                    break;
+                }
+                // 暂停时用固定的短间隔轮询，跟帧率无关——2 fps 下也要一按就恢复。
+                await Task.Delay(50);
+                continue;
+            }
+            if (pauseAt >= 0)
+            {
+                // 刚恢复：把这一段计进暂停总时长。
+                pausedMs += sw.Elapsed.TotalMilliseconds - pauseAt;
+                pauseAt = -1;
+            }
+
             // 按绝对时刻等，不是「每次睡 interval」——后者会把每帧的处理时间
             // 累加进去，录 30 秒实际只录到 20 秒的内容。
-            var wait = i * interval - sw.Elapsed.TotalMilliseconds;
-            if (wait > 1) await Task.Delay((int)wait);
+            var wait = paths.Count * interval - (sw.Elapsed.TotalMilliseconds - pausedMs);
+            if (wait > 1)
+            {
+                // 分段睡，中间回来看一眼暂停/停止有没有按。
+                await NapAsync(wait);
+                continue;
+            }
 
-            var at = sw.Elapsed.TotalMilliseconds;
+            var at = sw.Elapsed.TotalMilliseconds - pausedMs;
             CapturedImage? img;
             try
             {
@@ -94,7 +180,7 @@ public static class RecordService
             }
             if (img is null) break;
 
-            var path = Path.Combine(dir, $"f{i:D5}.png");
+            var path = Path.Combine(dir, $"f{paths.Count:D5}.png");
             try
             {
                 await Task.Run(() => img.SavePng(path));
@@ -109,15 +195,23 @@ public static class RecordService
             if (paths.Count == 0) firstAt = at;
             lastAt = at;
             paths.Add(path);
-            onProgress?.Invoke(paths.Count, sw.Elapsed);
+            onProgress?.Invoke(paths.Count, TimeSpan.FromMilliseconds(at));
         }
 
+        // 循环可能是在暂停中途跳出来的（用户暂停着直接按 Esc），那一段也得算上。
+        if (pauseAt >= 0) pausedMs += sw.Elapsed.TotalMilliseconds - pauseAt;
         sw.Stop();
-        if (paths.Count == 0)
-            return new RecordFrames(dir, paths, TimeSpan.Zero, fps, RecordStop.Failed);
 
-        return new RecordFrames(dir, paths, sw.Elapsed,
-            Effective(paths.Count, firstAt, lastAt, fps), stop);
+        var active = TimeSpan.FromMilliseconds(Math.Max(0, sw.Elapsed.TotalMilliseconds - pausedMs));
+        var pausedFor = TimeSpan.FromMilliseconds(pausedMs);
+
+        if (paths.Count == 0)
+            return new RecordFrames(dir, paths, TimeSpan.Zero, fps, RecordStop.Failed)
+            { Pauses = pauses, PausedFor = pausedFor };
+
+        return new RecordFrames(dir, paths, active,
+            Effective(paths.Count, firstAt, lastAt, fps), stop)
+        { Pauses = pauses, PausedFor = pausedFor };
     }
 
     /// <summary>

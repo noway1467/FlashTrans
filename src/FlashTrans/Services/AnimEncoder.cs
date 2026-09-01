@@ -9,8 +9,13 @@ namespace FlashTrans.Services;
 /// <summary>编出来的动图：存到哪儿、什么格式、多大。</summary>
 public sealed record AnimResult(string Path, RecordFormat Format, long Bytes)
 {
-    /// <summary>本来要编 WebP，但没找到 img2webp，退回 GIF 了。得在提示里说一声。</summary>
-    public bool FellBackToGif { get; init; }
+    /// <summary>用户本来想要的格式。跟 Format 不一样就是退过档了。</summary>
+    public RecordFormat Wanted { get; init; }
+
+    /// <summary>退档的原因，直接拿去给用户看。没退档就是空的。</summary>
+    public string? FellBackWhy { get; init; }
+
+    public bool FellBack => Wanted != Format;
 }
 
 /// <summary>
@@ -59,19 +64,41 @@ public static class AnimEncoder
         var dir = Path.GetDirectoryName(outNoExt);
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
 
-        if (want == RecordFormat.Webp)
+        // MP4 走系统自带的 H.264 编码器。它可能不在（N 版、精简版），
+        // 那就退到 WebP 这条；WebP 那条自己还会再退到 GIF。
+        if (want == RecordFormat.Mp4)
         {
-            var tool = FindImg2Webp();
-            if (tool is null)
+            try
             {
-                // 不是错误：绿色版被人只拷了个 exe 走也会走到这儿。
-                Log.Warn($"没找到 {Img2WebpRelative}，这次录制改存 GIF。");
-                var g = await SaveGifAsync(frames, outNoExt + ".gif", fps);
-                return g with { FellBackToGif = true };
+                var m = await Mp4Encoder.SaveAsync(frames, outNoExt + ".mp4", fps);
+                return m with { Wanted = want };
             }
-            return await SaveWebpAsync(tool, frames, outNoExt + ".webp", fps);
+            catch (Exception ex)
+            {
+                Log.Warn("编 MP4 失败，改存 WebP：" + ex.Message);
+                var f = await SaveWebpOrGifAsync(frames, outNoExt, fps);
+                return f with { Wanted = want, FellBackWhy = "系统没有 H.264 编码器" };
+            }
         }
-        return await SaveGifAsync(frames, outNoExt + ".gif", fps);
+
+        if (want == RecordFormat.Webp) return await SaveWebpOrGifAsync(frames, outNoExt, fps);
+        return (await SaveGifAsync(frames, outNoExt + ".gif", fps)) with { Wanted = want };
+    }
+
+    /// <summary>WebP，没有 img2webp 就 GIF。</summary>
+    static async Task<AnimResult> SaveWebpOrGifAsync(
+        IReadOnlyList<string> frames, string outNoExt, int fps)
+    {
+        var tool = FindImg2Webp();
+        if (tool is null)
+        {
+            // 不是错误：绿色版被人只拷了个 exe 走也会走到这儿。
+            Log.Warn($"没找到 {Img2WebpRelative}，这次录制改存 GIF。");
+            var g = await SaveGifAsync(frames, outNoExt + ".gif", fps);
+            return g with { Wanted = RecordFormat.Webp, FellBackWhy = "没找到 img2webp" };
+        }
+        var w = await SaveWebpAsync(tool, frames, outNoExt + ".webp", fps);
+        return w with { Wanted = RecordFormat.Webp };
     }
 
     /// <summary>
@@ -195,7 +222,7 @@ public static class AnimEncoder
     /// 读一帧。OnLoad 是必须的：默认的延迟加载会把流一直握着，
     /// 我们这儿读完就要删临时文件。
     /// </summary>
-    static BitmapSource LoadFrame(string path)
+    internal static BitmapSource LoadFrame(string path)
     {
         using var fs = File.OpenRead(path);
         var f = BitmapDecoder.Create(fs, BitmapCreateOptions.None, BitmapCacheOption.OnLoad).Frames[0];

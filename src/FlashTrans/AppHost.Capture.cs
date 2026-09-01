@@ -260,7 +260,8 @@ public sealed partial class AppHost
         {
             frames = await RecordService.RunAsync(region, fps, maxSec,
                 onProgress: hud.Report,
-                cancelled: () => hud.Stopped);
+                cancelled: () => hud.Stopped,
+                paused: () => hud.Paused);
 
             if (frames.Stopped == RecordStop.Failed || frames.Paths.Count == 0)
             {
@@ -274,7 +275,14 @@ public sealed partial class AppHost
                     ? (int)Math.Round(frames.EffectiveFps) : fps,
                 S.RecordFormat);
 
-            var note = result.FellBackToGif ? "（没找到 img2webp，存成了 GIF）" : "";
+            var note = result.FellBack
+                ? $"（{result.FellBackWhy}，存成了 {result.Format.ToString().ToUpperInvariant()}）"
+                : "";
+            // 暂停过就说一声：文件里那 12 秒是刨掉暂停之后的，不说的话用户会觉得少了。
+            if (frames.Pauses > 0)
+                note += $"（暂停 {frames.Pauses} 次，共 {frames.PausedFor.TotalSeconds:0} 秒，没录进去）";
+            if (frames.Stopped == RecordStop.PausedTooLong)
+                note += $"（暂停超过 {RecordService.MaxPausedMinutes} 分钟，自己收了）";
             Toast($"已保存：{Path.GetFileName(result.Path)}"
                   + $"（{Mb(result.Bytes)} · {frames.Paths.Count} 帧 · "
                   + $"{frames.EffectiveFps:0.#} fps）{note}",
@@ -306,9 +314,12 @@ public sealed partial class AppHost
         Directory.CreateDirectory(dir);
         var stem = $"闪译录制 {DateTime.Now:yyyy-MM-dd HHmmss}";
         var path = Path.Combine(dir, stem);
-        for (var i = 2; File.Exists(path + ".webp") || File.Exists(path + ".gif"); i++)
-            path = Path.Combine(dir, $"{stem}({i})");
+        // 三个后缀都要查：可能编 MP4 失败退回了 WebP，跟上一次的重名。
+        for (var i = 2; Taken(path); i++) path = Path.Combine(dir, $"{stem}({i})");
         return path;
+
+        static bool Taken(string p)
+            => File.Exists(p + ".webp") || File.Exists(p + ".gif") || File.Exists(p + ".mp4");
     }
 
     /// <summary>弹长图预览。用户在这儿挑存哪儿、要不要识别。</summary>

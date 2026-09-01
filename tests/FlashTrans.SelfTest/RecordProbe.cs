@@ -35,6 +35,14 @@ static class RecordProbe
         step("录制：浮条能构造，进度和编码提示都会更新", HudProbe);
         step("录制：工具条多了「录制」还塞得进常见屏宽", ToolbarWidthProbe);
         step("录制：Esc 要松开过一次才算停，不会开录就被判停", EscArmProbe);
+        step("录制：暂停期间不抓帧，恢复后接着录", PauseProbe);
+        step("录制：暂停掉的时间不算进时长，回放是连着的", PauseClockProbe);
+        step("录制：暂停挂太久自己收摊", PauseTooLongProbe);
+        step("录制：跟不上帧率也按秒数收，不会超时长", TimeCapProbe);
+        step("录制：选区宽高吸到偶数（H.264 要求）", SnapEvenProbe);
+        step("录制：暂停键要「刚按下」才翻转，按住不会来回切", PauseChordProbe);
+        step("录制：真编 MP4，容器和时长都对", Mp4RealProbe);
+        step("录制：MP4 码率和偶数化的算法", Mp4MathProbe);
     }
 
     static void Need(bool ok, string what)
@@ -480,7 +488,7 @@ static class RecordProbe
                     paths, Path.Combine(dir, "out"), fps: 10, RecordFormat.Webp))
                 .GetAwaiter().GetResult();
 
-            Need(!res.FellBackToGif, "有 img2webp 却退回了 GIF");
+            Need(!res.FellBack, "有 img2webp 却退回了 GIF");
             Need(res.Format == RecordFormat.Webp, $"格式不是 WebP：{res.Format}");
             Need(res.Path.EndsWith(".webp", StringComparison.OrdinalIgnoreCase),
                 $"后缀不对：{res.Path}");
@@ -560,7 +568,7 @@ static class RecordProbe
                     paths, Path.Combine(dir, "fb"), fps: 10, RecordFormat.Webp))
                 .GetAwaiter().GetResult();
 
-            Need(res.FellBackToGif, "没有 img2webp 时该标记「退回了 GIF」");
+            Need(res.FellBack, "没有 img2webp 时该标记「退回了 GIF」");
             Need(res.Format == RecordFormat.Gif, $"该退回 GIF，得到 {res.Format}");
             Need(res.Path.EndsWith(".gif", StringComparison.OrdinalIgnoreCase),
                 $"后缀该是 .gif：{res.Path}");
@@ -608,15 +616,366 @@ static class RecordProbe
                     rec.Paths, Path.Combine(rec.Dir, "cmp"), fps, RecordFormat.Gif))
                 .GetAwaiter().GetResult();
 
-            var pct = 100.0 * webp.Bytes / gif.Bytes;
-            Console.WriteLine(
-                $"       {rec.Paths.Count} 帧 {region.Right - region.Left}×{region.Bottom - region.Top}："
+            var line = $"       {rec.Paths.Count} 帧 "
+                + $"{region.Right - region.Left}×{region.Bottom - region.Top}："
                 + $"GIF {gif.Bytes / 1024.0:0} KB → WebP {webp.Bytes / 1024.0:0} KB"
-                + $"（{pct:0}%，小 {gif.Bytes / (double)webp.Bytes:0.#} 倍）");
+                + $"（小 {gif.Bytes / (double)webp.Bytes:0.#} 倍）";
+
+            if (Mp4Encoder.Available)
+            {
+                var mp4 = Task.Run(() => AnimEncoder.SaveAsync(
+                        rec.Paths, Path.Combine(rec.Dir, "cmp"), fps, RecordFormat.Mp4))
+                    .GetAwaiter().GetResult();
+                if (mp4.Format == RecordFormat.Mp4)
+                {
+                    line += $" → MP4 {mp4.Bytes / 1024.0:0} KB"
+                        + $"（小 {gif.Bytes / (double)mp4.Bytes:0.#} 倍）";
+                    Need(mp4.Bytes < gif.Bytes,
+                        $"MP4 反而比 GIF 大：{mp4.Bytes} vs {gif.Bytes}");
+                }
+            }
+            Console.WriteLine(line);
 
             Need(webp.Bytes < gif.Bytes,
                 $"WebP 反而更大：{webp.Bytes} vs GIF {gif.Bytes}");
         }
         finally { rec.Cleanup(); }
+    }
+
+    // ------------------------------------------------------------- 暂停
+
+    /// <summary>屏幕左上角一小块，够快就行。</summary>
+    static RECT SmallRegion(int w = 64, int h = 48)
+    {
+        var s = ScreenCapture.VirtualScreen();
+        return new RECT
+        {
+            Left = s.Left + 8, Top = s.Top + 8,
+            Right = s.Left + 8 + w, Bottom = s.Top + 8 + h,
+        };
+    }
+
+    /// <summary>
+    /// 暂停期间一帧都不该抓，恢复之后还能接着抓。
+    ///
+    /// 直接数帧：先让它录一会儿，按下暂停，记住那一刻的帧数，等半秒再看还是不是
+    /// 这个数——涨了就说明暂停没拦住抓帧，出来的动图里会多一段静止画面。
+    /// </summary>
+    static void PauseProbe()
+    {
+        var paused = false;
+        var frames = 0;
+        var rec = Task.Run(async () =>
+        {
+            var run = RecordService.RunAsync(SmallRegion(), fps: 10, maxSeconds: 10,
+                onProgress: (n, _) => frames = n,
+                paused: () => Volatile.Read(ref paused));
+
+            // 录够几帧再按暂停
+            while (Volatile.Read(ref frames) < 3) await Task.Delay(20);
+
+            Volatile.Write(ref paused, true);
+            await Task.Delay(150);                       // 让它把手上那一帧走完
+            var atPause = Volatile.Read(ref frames);
+            await Task.Delay(500);                       // 暂停期间：这半秒不该有新帧
+            var afterHold = Volatile.Read(ref frames);
+
+            Volatile.Write(ref paused, false);
+            await Task.Delay(400);                       // 恢复之后该继续涨
+            var afterResume = Volatile.Read(ref frames);
+
+            return (await run, atPause, afterHold, afterResume);
+        }).GetAwaiter().GetResult();
+
+        var (r, atPause, afterHold, afterResume) = rec;
+        try
+        {
+            Need(afterHold == atPause,
+                $"暂停期间还在抓帧：{atPause} → {afterHold}");
+            Need(afterResume > afterHold,
+                $"恢复之后没接着录：{afterHold} → {afterResume}");
+            Need(r.Pauses == 1, $"该记录 1 次暂停，得到 {r.Pauses}");
+            Need(r.PausedFor.TotalMilliseconds >= 400,
+                $"暂停时长记少了：{r.PausedFor.TotalMilliseconds:0} 毫秒");
+            Need(r.Paths.Count == r.Paths.Distinct().Count(), "帧文件名有重复");
+            Need(r.Paths.All(File.Exists), "有帧文件不在");
+        }
+        finally { r.Cleanup(); }
+    }
+
+    /// <summary>
+    /// 暂停掉的时间不进 Elapsed，也不吃时长预算。
+    ///
+    /// 这是「回放连续」的根据：Elapsed 是拿来算实测帧率、再换成每帧延时的。
+    /// 要是把暂停的 5 秒算进去，帧率会被算低好几倍，出来的动图慢得像卡住。
+    /// </summary>
+    static void PauseClockProbe()
+    {
+        var paused = false;
+        var r = Task.Run(async () =>
+        {
+            var run = RecordService.RunAsync(SmallRegion(), fps: 10, maxSeconds: 3,
+                paused: () => Volatile.Read(ref paused));
+            await Task.Delay(300);
+            Volatile.Write(ref paused, true);
+            await Task.Delay(700);
+            Volatile.Write(ref paused, false);
+            return await run;
+        }).GetAwaiter().GetResult();
+
+        try
+        {
+            // 墙上时间至少是 3 秒预算 + 0.7 秒暂停；Elapsed 该只有预算那部分。
+            Need(r.Elapsed.TotalSeconds <= 3.5,
+                $"暂停的时间被算进 Elapsed 了：{r.Elapsed.TotalSeconds:0.0}s（预算 3s）");
+            Need(r.PausedFor.TotalMilliseconds >= 600,
+                $"暂停时长记少了：{r.PausedFor.TotalMilliseconds:0} 毫秒");
+            // 预算没被暂停吃掉：3 秒 10 fps，就算慢也该比「只录了 0.3 秒」多得多
+            Need(r.Paths.Count >= 8,
+                $"暂停吃掉了时长预算，只录到 {r.Paths.Count} 帧（3 秒 10 fps）");
+            Need(r.EffectiveFps >= 4,
+                $"实测帧率被暂停拖低了：{r.EffectiveFps:0.#}");
+        }
+        finally { r.Cleanup(); }
+    }
+
+    /// <summary>
+    /// 按了暂停就走开：到闸就自己收，已经录到的帧照样交出来。
+    /// 用 maxPausedMs 把 10 分钟那道闸调到 300 毫秒，不然这一项得跑十分钟。
+    /// </summary>
+    static void PauseTooLongProbe()
+    {
+        var frames = 0;
+        var r = Task.Run(async () =>
+        {
+            var run = RecordService.RunAsync(SmallRegion(), fps: 10, maxSeconds: 60,
+                onProgress: (n, _) => frames = n,
+                paused: () => Volatile.Read(ref frames) >= 2,   // 录到 2 帧就一直暂停着
+                maxPausedMs: 300);
+            return await run;
+        }).GetAwaiter().GetResult();
+
+        try
+        {
+            Need(r.Stopped == RecordStop.PausedTooLong,
+                $"该因为暂停太久收摊，得到 {r.Stopped}");
+            Need(r.Paths.Count >= 2, $"已经录到的帧该交出来，得到 {r.Paths.Count}");
+            Need(r.Paths.All(File.Exists), "有帧文件不在");
+            Need(r.PausedFor.TotalMilliseconds >= 250,
+                $"暂停时长没记上：{r.PausedFor.TotalMilliseconds:0} 毫秒");
+        }
+        finally { r.Cleanup(); }
+    }
+
+    /// <summary>
+    /// 时长上限是按秒算的，不是「录满 fps × 秒数 帧就收」。
+    ///
+    /// 要 30 fps 而机器只跟得上十几帧的时候，光数帧的话「最长 2 秒」会变成
+    /// 录满 60 帧、实际过了四五秒。这里要一块大区域 + 高帧率去逼出「跟不上」，
+    /// 然后验墙上时间没超出上限太多。
+    /// </summary>
+    static void TimeCapProbe()
+    {
+        // 要真的跟不上才测得到这条：拿整个虚拟屏 + 30 fps。一帧全屏 BitBlt 加 PNG
+        // 编码远不止 33 毫秒，帧数一定凑不满 fps × 秒数，这时候只能靠时间收。
+        var s = ScreenCapture.VirtualScreen();
+        var r = Task.Run(() => RecordService.RunAsync(s, fps: 30, maxSeconds: 2))
+                    .GetAwaiter().GetResult();
+        try
+        {
+            Need(r.Stopped != RecordStop.Failed, "一帧都没抓到");
+            var full = 30 * 2;
+            Need(r.Paths.Count < full,
+                $"全屏 30 fps 居然录满了 {full} 帧，这一项没测到时长那条规则"
+                + "（换更大的区域或更高的帧率）");
+            Need(r.Elapsed.TotalSeconds <= 2.8,
+                $"超了时长上限：{r.Elapsed.TotalSeconds:0.00}s（上限 2s，"
+                + $"抓到 {r.Paths.Count} 帧 / 上限 {full} 帧）");
+            Console.WriteLine($"       全屏 {s.Right - s.Left}×{s.Bottom - s.Top} 要 {full} 帧，"
+                              + $"实际 {r.Paths.Count} 帧 {r.Elapsed.TotalSeconds:0.00}s，"
+                              + $"实测 {r.EffectiveFps:0.#} fps");
+        }
+        finally { r.Cleanup(); }
+    }
+
+    /// <summary>宽高吸到偶数，左上角不动。奇数尺寸 H.264 编码器直接拒。</summary>
+    static void SnapEvenProbe()
+    {
+        var odd = new RECT { Left = 11, Top = 7, Right = 11 + 101, Bottom = 7 + 55 };
+        var s = RecordService.SnapEven(odd);
+        Need(s.Left == 11 && s.Top == 7, $"左上角动了：{s.Left},{s.Top}");
+        Need(s.Right - s.Left == 100, $"宽该吸到 100，得到 {s.Right - s.Left}");
+        Need(s.Bottom - s.Top == 54, $"高该吸到 54，得到 {s.Bottom - s.Top}");
+
+        var even = new RECT { Left = 0, Top = 0, Right = 64, Bottom = 48 };
+        var t = RecordService.SnapEven(even);
+        Need(t.Right - t.Left == 64 && t.Bottom - t.Top == 48, "本来是偶数的被改了");
+
+        // 空选区不该变成负数
+        var empty = new RECT { Left = 5, Top = 5, Right = 5, Bottom = 5 };
+        var e = RecordService.SnapEven(empty);
+        Need(e.Right - e.Left == 0 && e.Bottom - e.Top == 0, "空选区被算出了负宽高");
+    }
+
+    /// <summary>
+    /// 暂停键的边沿判定：按住不放只翻一次。
+    /// 轮询是 60 毫秒一拍，按住 200 毫秒就是三四拍，
+    /// 判定写成「按着就翻」的话一次按键会来回切好几次，看起来就是「暂停键失灵」。
+    /// </summary>
+    static void PauseChordProbe()
+    {
+        var hud = new RecordHud(SmallRegion(), 30);
+        try
+        {
+            hud.Show();
+            Pump();
+            Need(!hud.Paused, "刚开始就是暂停状态");
+
+            hud.WatchPauseChord(true);     // 按下
+            Need(hud.Paused, "按下没进暂停");
+            hud.WatchPauseChord(true);     // 按住
+            hud.WatchPauseChord(true);
+            Need(hud.Paused, "按住把暂停又翻回去了");
+
+            hud.WatchPauseChord(false);    // 松开：不该有动作
+            Need(hud.Paused, "松开就取消暂停了");
+
+            hud.WatchPauseChord(true);     // 再按一次：恢复
+            Need(!hud.Paused, "再按一次没恢复");
+
+            // 编码阶段按了不算——那时候已经没帧可录
+            hud.ReportEncoding(5);
+            hud.WatchPauseChord(false);
+            hud.WatchPauseChord(true);
+            Need(!hud.Paused, "编码阶段还能被按成暂停");
+        }
+        finally { hud.Close(); Pump(); }
+    }
+
+    // ------------------------------------------------------------- MP4
+
+    /// <summary>
+    /// 真编一个 MP4，然后按 ISO BMFF 的盒子结构验。
+    ///
+    /// 跟 WebP 那项一个思路：只验「文件存在、不是 0 字节」太松——转码半路失败也可能
+    /// 留下个有 ftyp 没 mdat 的残文件，播起来就是 0 秒。所以这里查四件事：
+    /// ftyp 在最前、moov 和 mdat 都在、时长跟帧数对得上。
+    ///
+    /// 系统没有 H.264 编码器时跳过（精简版系统会这样）。
+    /// </summary>
+    static void Mp4RealProbe()
+    {
+        if (!Mp4Encoder.Available) return;
+
+        var (dir, paths) = WriteFrames(10);
+        try
+        {
+            var res = Task.Run(() => AnimEncoder.SaveAsync(
+                    paths, Path.Combine(dir, "out"), fps: 10, RecordFormat.Mp4))
+                .GetAwaiter().GetResult();
+
+            Need(res.Format == RecordFormat.Mp4,
+                $"格式不是 MP4：{res.Format}（{res.FellBackWhy}）");
+            Need(!res.FellBack, $"退档了：{res.FellBackWhy}");
+            Need(res.Path.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase),
+                $"后缀不对：{res.Path}");
+            Need(res.Bytes > 0 && res.Bytes == new FileInfo(res.Path).Length,
+                "报告的大小跟文件实际大小不一致");
+
+            var (boxes, seconds) = WalkMp4(File.ReadAllBytes(res.Path));
+            Need(boxes.Count > 0 && boxes[0] == "ftyp",
+                $"第一个盒子该是 ftyp，得到 {(boxes.Count > 0 ? boxes[0] : "空")}");
+            Need(boxes.Contains("moov"), "没有 moov 盒子，播放器读不出这是什么");
+            Need(boxes.Contains("mdat"), "没有 mdat 盒子，里面一帧画面都没有");
+            // 10 帧 10 fps = 1 秒。转码器对首尾帧的处理有出入，给宽一点。
+            Need(seconds is >= 0.5 and <= 2.0,
+                $"时长不对：{seconds:0.00} 秒（10 帧 10 fps 该是 1 秒左右）");
+            Console.WriteLine($"       MP4 {res.Bytes / 1024.0:0} KB，时长 {seconds:0.00}s，"
+                              + $"盒子：{string.Join(" ", boxes.Take(6))}");
+        }
+        finally { Wipe(dir); }
+    }
+
+    /// <summary>
+    /// 走一遍 MP4 顶层盒子，并从 moov/mvhd 里读时长。
+    ///
+    /// mvhd 的布局：版本(1) 标志(3) 创建(4) 修改(4) 时间刻度(4) 时长(4)，
+    /// 版本 1 的话创建/修改/时长都是 8 字节。盒子长度和字段都是大端。
+    /// </summary>
+    static (List<string> Boxes, double Seconds) WalkMp4(byte[] b)
+    {
+        var boxes = new List<string>();
+        double seconds = 0;
+        var p = 0;
+        while (p + 8 <= b.Length)
+        {
+            var size = (long)Be32(b, p);
+            var type = System.Text.Encoding.ASCII.GetString(b, p + 4, 4);
+            var head = 8;
+            if (size == 1)
+            {
+                // 64 位长度，紧跟在类型后面
+                if (p + 16 > b.Length) break;
+                size = (long)Be32(b, p + 8) << 32 | Be32(b, p + 12);
+                head = 16;
+            }
+            else if (size == 0) size = b.Length - p;   // 到文件尾
+            if (size < head || p + size > b.Length) break;
+
+            boxes.Add(type);
+            if (type == "moov") seconds = MvhdSeconds(b, p + head, p + (int)size);
+            p += (int)size;
+        }
+        return (boxes, seconds);
+    }
+
+    /// <summary>在 moov 的子盒子里找 mvhd，把时长算成秒。</summary>
+    static double MvhdSeconds(byte[] b, int from, int to)
+    {
+        var p = from;
+        while (p + 8 <= to)
+        {
+            var size = (int)Be32(b, p);
+            var type = System.Text.Encoding.ASCII.GetString(b, p + 4, 4);
+            if (size < 8 || p + size > to) break;
+            if (type == "mvhd")
+            {
+                var v = b[p + 8];
+                var q = p + 12;                       // 跳过版本和标志
+                q += v == 1 ? 16 : 8;                 // 创建 + 修改
+                var scale = Be32(b, q);
+                var dur = v == 1 ? (double)((long)Be32(b, q + 4) << 32 | Be32(b, q + 8))
+                                 : Be32(b, q + 4);
+                return scale == 0 ? 0 : dur / scale;
+            }
+            p += size;
+        }
+        return 0;
+    }
+
+    static uint Be32(byte[] b, int i)
+        => (uint)((b[i] << 24) | (b[i + 1] << 16) | (b[i + 2] << 8) | b[i + 3]);
+
+    /// <summary>码率和偶数化这两个纯算法。</summary>
+    static void Mp4MathProbe()
+    {
+        Need(Mp4Encoder.Even(101) == 100, "奇数没吸下去");
+        Need(Mp4Encoder.Even(100) == 100, "偶数被改了");
+        Need(Mp4Encoder.Even(1) == 0, "1 该吸成 0");
+        Need(Mp4Encoder.Even(0) == 0, "0 被改了");
+
+        // 大区域高帧率也不该超上限，小区域也不该低到糊成一片
+        var big = Mp4Encoder.Bitrate(3840, 2160, 30);
+        var small = Mp4Encoder.Bitrate(64, 48, 2);
+        Need(big <= 40_000_000, $"码率超了上限：{big}");
+        Need(small >= 800_000, $"码率低于下限：{small}");
+        Need(Mp4Encoder.Bitrate(1920, 1080, 10) > Mp4Encoder.Bitrate(640, 480, 10),
+            "大区域的码率该比小区域高");
+        // 比帧率要挑个大到不会撞下限的尺寸：640×480 无论几帧都低于 800 kbps，
+        // 两边都被夹到下限，比出来一样大——那是下限在起作用，不是算法错了。
+        Need(Mp4Encoder.Bitrate(1920, 1080, 10) > Mp4Encoder.Bitrate(1920, 1080, 5),
+            "帧率高的码率该更高");
+        Need(Mp4Encoder.Bitrate(640, 480, 20) == Mp4Encoder.Bitrate(640, 480, 5),
+            "小尺寸该都撞在下限上");
     }
 }

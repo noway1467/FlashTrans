@@ -119,12 +119,16 @@ public sealed partial class SettingsWindow
             Hint("框选之后点工具条上的「录制」，那块区域开始录，`Esc` 或者点浮条停下。"
                  + "录的是实时画面，不是刚才那张定格图——画的标注不会进动图。"
                  + "存进上面那个保存目录。"),
+            Hint($"录的时候按 `{RecordHud.PauseHotkey}`（或者点浮条上的「暂停」）暂停，"
+                 + "再按一次接着录。暂停掉的那段不进文件，也不算进下面那个时长上限，"
+                 + "所以回放是连着的，不会中间卡住一段。"),
             Field("格式", Combo(new (string, RecordFormat)[]
             {
-                ("WebP（推荐，体积小得多）", RecordFormat.Webp),
-                ("GIF（谁都打得开）", RecordFormat.Gif),
-            }, S.RecordFormat, v => S.RecordFormat = v, width: 230),
-                Img2WebpNote()),
+                ("WebP（推荐，一般最小）", RecordFormat.Webp),
+                ("GIF（谁都打得开，但大一个数量级）", RecordFormat.Gif),
+                ("MP4（视频，能拖进度条）", RecordFormat.Mp4),
+            }, S.RecordFormat, v => S.RecordFormat = v, width: 260),
+                FormatNote()),
             Field("帧率", SliderRow(S.RecordFps,
                     RecordService.MinFps, RecordService.MaxFps, 1,
                     v => S.RecordFps = (int)Math.Round(v), v => $"{v:F0} fps"),
@@ -212,14 +216,23 @@ public sealed partial class SettingsWindow
     }
 
     /// <summary>
-    /// 格式那一栏底下的说明。WebP 要靠外部的 img2webp.exe，
-    /// 装没装直接影响会存成什么，所以这里如实说现在是哪种情况。
+    /// 格式那一栏底下的说明。WebP 要靠外部的 img2webp.exe、MP4 要靠系统的 H.264
+    /// 编码器，缺哪个都会改存成别的，所以这里如实说这台机器现在是哪种情况。
     /// </summary>
-    static string Img2WebpNote()
-        => AnimEncoder.WebpAvailable
-            ? "WebP 比 GIF 小得多（实测同样内容小 20 倍以上），也不会被砍成 256 色"
-            : $"没找到 {AnimEncoder.Img2WebpRelative}，选 WebP 会存成 GIF。"
-              + "这个文件本该随包发布，缺了就是被漏拷了——整个文件夹一起拷就好";
+    static string FormatNote()
+    {
+        var notes = new List<string>
+        {
+            "实测同样内容 WebP 一般最小，MP4 跟它同一量级、还能拖进度条，GIF 比这两个大一个数量级；"
+            + "动图（WebP/GIF）的好处是在聊天窗口和网页里自动循环播",
+        };
+        if (!AnimEncoder.WebpAvailable)
+            notes.Add($"没找到 {AnimEncoder.Img2WebpRelative}，选 WebP 会存成 GIF——"
+                      + "这个文件本该随包发布，缺了就是被漏拷了，整个文件夹一起拷就好");
+        if (!Mp4Encoder.Available)
+            notes.Add("这台机器上没找到系统的 H.264 编码器（精简版系统会这样），选 MP4 会存成 WebP");
+        return string.Join("。", notes);
+    }
 
     /// <summary>
     /// 保存目录：输入框加两个按钮。

@@ -36,6 +36,14 @@ public enum RecordFormat
     Webp,
     /// <summary>动图 GIF。谁都打得开，而且自己就能编，不依赖外部程序。</summary>
     Gif,
+    /// <summary>
+    /// MP4（H.264）。真正的视频：能拖进度条，微信、飞书、剪辑软件都吃这个格式。
+    /// 体积跟 WebP 同一量级（实测 640×480 那档略大一点），比 GIF 小一个数量级。
+    /// 代价是不能像动图那样在聊天窗口和网页里自动循环播。
+    /// 编码器用系统自带的那个（Media Foundation），一个字节都不用随包带。
+    /// 精简版系统上可能没有，那时候自动退回 WebP。
+    /// </summary>
+    Mp4,
 }
 
 public sealed class AppSettings
