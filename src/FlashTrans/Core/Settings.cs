@@ -177,6 +177,11 @@ public sealed class AppSettings
     /// </summary>
     public int RecordMaxSeconds { get; set; } = 30;
     public RecordFormat RecordFormat { get; set; } = RecordFormat.Webp;
+    /// <summary>
+    /// 录制的文件存哪儿。空 = 跟截图放一起（CaptureSaveDir）。
+    /// 单独一个设置是因为录屏文件比截图大得多，常有人想把它扔到别的盘。
+    /// </summary>
+    public string RecordSaveDir { get; set; } = "";
 
     // ------- 截图工具条上的键 -------
     // 这些是蒙层里的键，不是全局热键，所以允许不带修饰键（蒙层期间没别人抢键盘）。

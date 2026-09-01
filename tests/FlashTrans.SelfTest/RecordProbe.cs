@@ -39,12 +39,14 @@ static class RecordProbe
         step("录制：暂停掉的时间不算进时长，回放是连着的", PauseClockProbe);
         step("录制：暂停挂太久自己收摊", PauseTooLongProbe);
         step("录制：跟不上帧率也按秒数收，不会超时长", TimeCapProbe);
-        step("录制：选区宽高吸到偶数（H.264 要求）", SnapEvenProbe);
+        step("录制：选区宽高吸到 4 的倍数（H.264 要求）", Snap4Probe);
         step("录制：暂停键要「刚按下」才翻转，按住不会来回切", PauseChordProbe);
         step("录制：真编 MP4，容器和时长都对", Mp4RealProbe);
         step("录制：MP4 从 WPF 界面线程也能编", Mp4UiProbe);
         step("录制：MP4 失败不留下空文件或额外 WebP", Mp4FailureCleanupProbe);
-        step("录制：MP4 码率和偶数化的算法", Mp4MathProbe);
+        step("录制：MP4 码率和边长对齐的算法", Mp4MathProbe);
+        step("录制：1366×766 这种非 4 倍数尺寸也能编 MP4", Mp4OddSizeProbe);
+        step("录制：MP4 旁路文件的后缀还是 .mp4", Mp4SidecarProbe);
     }
 
     static void Need(bool ok, string what)
@@ -818,22 +820,33 @@ static class RecordProbe
         finally { r.Cleanup(); }
     }
 
-    /// <summary>宽高吸到偶数，左上角不动。奇数尺寸 H.264 编码器直接拒。</summary>
-    static void SnapEvenProbe()
+    /// <summary>
+    /// 宽高吸到 4 的倍数，左上角不动。
+    /// 系统 H.264 编码器差 2 就抛 0x80004005，不是只要偶数就行。
+    /// </summary>
+    static void Snap4Probe()
     {
         var odd = new RECT { Left = 11, Top = 7, Right = 11 + 101, Bottom = 7 + 55 };
-        var s = RecordService.SnapEven(odd);
+        var s = RecordService.Snap4(odd);
         Need(s.Left == 11 && s.Top == 7, $"左上角动了：{s.Left},{s.Top}");
         Need(s.Right - s.Left == 100, $"宽该吸到 100，得到 {s.Right - s.Left}");
-        Need(s.Bottom - s.Top == 54, $"高该吸到 54，得到 {s.Bottom - s.Top}");
+        Need(s.Bottom - s.Top == 52, $"高该吸到 52，得到 {s.Bottom - s.Top}");
 
         var even = new RECT { Left = 0, Top = 0, Right = 64, Bottom = 48 };
-        var t = RecordService.SnapEven(even);
-        Need(t.Right - t.Left == 64 && t.Bottom - t.Top == 48, "本来是偶数的被改了");
+        var t = RecordService.Snap4(even);
+        Need(t.Right - t.Left == 64 && t.Bottom - t.Top == 48, "本来是 4 的倍数的被改了");
+
+        // 1366×768 是用户那台的屏幕宽度：偶数，但不是 4 的倍数。
+        // 这一格就是「选了 MP4 直接报错」的原样，别再放它过去。
+        var screen = new RECT { Left = 0, Top = 0, Right = 1366, Bottom = 768 };
+        var f = RecordService.Snap4(screen);
+        Need(f.Right - f.Left == 1364, $"1366 该吸到 1364，得到 {f.Right - f.Left}");
+        Need(f.Bottom - f.Top == 768, $"768 本来就对，被改成了 {f.Bottom - f.Top}");
+        Need((f.Right - f.Left) % 4 == 0 && (f.Bottom - f.Top) % 4 == 0, "吸完还不是 4 的倍数");
 
         // 空选区不该变成负数
         var empty = new RECT { Left = 5, Top = 5, Right = 5, Bottom = 5 };
-        var e = RecordService.SnapEven(empty);
+        var e = RecordService.Snap4(empty);
         Need(e.Right - e.Left == 0 && e.Bottom - e.Top == 0, "空选区被算出了负宽高");
     }
 
@@ -949,6 +962,71 @@ static class RecordProbe
         finally { Wipe(dir); }
     }
 
+    /// <summary>
+    /// 边长是「偶数但不是 4 的倍数」时也得能编出来。
+    ///
+    /// 这是 1.7.0「录制视频直接错误」的真凶。上面那两个 MP4 探针用的是 48×32，
+    /// 正好都是 4 的倍数，所以一路绿灯，而用户 1366 宽的屏幕一录就抛
+    /// COMException 0x80004005：CanTranscode 那步还是 true，报错要等到真开始转码。
+    /// `--mp4lab` 按边长扫出来的：636 成 638 败 640 成 642 败，宽高两边一样。
+    ///
+    /// 所以这里故意造 1366×766 这种尺寸，逼着 SaveAsync 自己把边长吸下去。
+    /// 帧给得少一点：这个尺寸一帧就是 4MB，编太多这项会拖慢整个自测。
+    /// </summary>
+    static void Mp4OddSizeProbe()
+    {
+        if (!Mp4Encoder.Available) return;
+
+        // 宽高都是偶数、都不是 4 的倍数；1366 就是用户那台的屏幕宽度
+        var dir = Path.Combine(Path.GetTempPath(), "FlashTrans.mp4odd." + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        try
+        {
+            const int w = 1366, h = 766;
+            var paths = new List<string>();
+            for (var i = 0; i < 4; i++)
+            {
+                var (b, g, r) = Colors[i % Colors.Length];
+                var buf = new byte[w * 4 * h];
+                for (var p = 0; p < buf.Length; p += 4)
+                {
+                    buf[p] = b; buf[p + 1] = g; buf[p + 2] = r; buf[p + 3] = 0xFF;
+                }
+                var f = Path.Combine(dir, $"o{i:D5}.png");
+                new CapturedImage(w, h, buf).SavePng(f);
+                paths.Add(f);
+            }
+
+            var res = Task.Run(() => Mp4Encoder.SaveAsync(paths, Path.Combine(dir, "odd.mp4"), 10))
+                          .GetAwaiter().GetResult();
+            Need(res.Bytes > 0, "1366×766 编出来是 0 字节");
+            var (boxes, _) = WalkMp4(File.ReadAllBytes(res.Path));
+            Need(boxes.Contains("moov") && boxes.Contains("mdat"),
+                "1366×766 编出来缺 MP4 数据盒子");
+        }
+        finally { Wipe(dir); }
+    }
+
+    /// <summary>
+    /// 旁路文件跟最终文件不同名，后缀还是 .mp4。
+    ///
+    /// 后缀这条是防御性的：Media Foundation 挑写出器时参考扩展名。
+    /// （1.7.0 那版「MP4 一选就报错」的真因不在这儿，是边长不是 4 的倍数，
+    /// 见 Mp4MathProbe 和 Mp4OddSizeProbe。）
+    /// </summary>
+    static void Mp4SidecarProbe()
+    {
+        var side = Mp4Encoder.SidecarPath(@"C:\x\闪译录制 2026-09-01 190529.mp4");
+        Need(side.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase),
+            $"旁路文件后缀不是 .mp4，转码会抛 0x80004005：{side}");
+        Need(!side.EndsWith(".mp4.part", StringComparison.OrdinalIgnoreCase),
+            $"旁路文件又变回 .mp4.part 了：{side}");
+        Need(side != @"C:\x\闪译录制 2026-09-01 190529.mp4",
+            "旁路文件跟最终文件同名，转码会直接写进用户看到的那个文件");
+        Need(Path.GetFileName(side).Contains(".part", StringComparison.Ordinal),
+            $"旁路文件名里看不出是临时文件：{side}");
+    }
+
     static void Mp4FailureCleanupProbe()
     {
         if (!Mp4Encoder.Available) return;
@@ -968,7 +1046,8 @@ static class RecordProbe
             catch (InvalidOperationException) { }
 
             Need(!File.Exists(outNoExt + ".mp4"), "MP4 失败后留下了最终文件");
-            Need(!File.Exists(outNoExt + ".mp4.part"), "MP4 失败后留下了临时文件");
+            Need(!File.Exists(Mp4Encoder.SidecarPath(outNoExt + ".mp4")),
+                "MP4 失败后留下了临时文件");
             Need(!File.Exists(outNoExt + ".webp"), "MP4 失败后偷偷生成了 WebP");
         }
         finally { Wipe(dir); }
@@ -1034,13 +1113,20 @@ static class RecordProbe
     static uint Be32(byte[] b, int i)
         => (uint)((b[i] << 24) | (b[i + 1] << 16) | (b[i + 2] << 8) | b[i + 3]);
 
-    /// <summary>码率和偶数化这两个纯算法。</summary>
+    /// <summary>码率和边长对齐这两个纯算法。</summary>
     static void Mp4MathProbe()
     {
-        Need(Mp4Encoder.Even(101) == 100, "奇数没吸下去");
-        Need(Mp4Encoder.Even(100) == 100, "偶数被改了");
-        Need(Mp4Encoder.Even(1) == 0, "1 该吸成 0");
-        Need(Mp4Encoder.Even(0) == 0, "0 被改了");
+        // 吸到 4 的倍数，不是只到偶数：638、1366 这种差 2 的会让编码器抛 0x80004005
+        Need(Mp4Encoder.Align4(101) == 100, "101 该吸到 100");
+        Need(Mp4Encoder.Align4(100) == 100, "100 本来就对，被改了");
+        Need(Mp4Encoder.Align4(102) == 100, "102 该吸到 100");
+        Need(Mp4Encoder.Align4(103) == 100, "103 该吸到 100");
+        Need(Mp4Encoder.Align4(638) == 636, "638 该吸到 636");
+        Need(Mp4Encoder.Align4(1366) == 1364, "1366 该吸到 1364");
+        Need(Mp4Encoder.Align4(3) == 0, "3 该吸成 0");
+        Need(Mp4Encoder.Align4(0) == 0, "0 被改了");
+        foreach (var v in (int[])[2, 66, 478, 1078, 1918, 2559])
+            Need(Mp4Encoder.Align4(v) % 4 == 0, $"{v} 吸完不是 4 的倍数");
 
         // 大区域高帧率也不该超上限，小区域也不该低到糊成一片
         var big = Mp4Encoder.Bitrate(3840, 2160, 30);

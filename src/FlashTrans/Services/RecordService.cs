@@ -69,14 +69,16 @@ public static class RecordService
     static Task NapAsync(double ms) => Task.Delay((int)Math.Clamp(ms, 1, 200));
 
     /// <summary>
-    /// 把选区的宽高吸到偶数（各最多少一个像素）。
+    /// 把选区的宽高吸到 4 的倍数（各最多少 3 个像素）。
     ///
-    /// H.264 是 4:2:0 色度采样，一个色度样本盖 2×2 个亮度像素，宽或高是奇数
-    /// 编码器直接拒。在这儿统一吸掉，而不是留给 MP4 那条路自己切：
-    /// 三种格式录到的画面得是同一块区域，不然同一次录制换个格式尺寸就变了。
-    /// 少一个像素肉眼看不出来，而且拖框本来就不是像素级精确的。
+    /// 4:2:0 色度采样本身只要偶数，但系统那个 H.264 编码器实际要 4 的倍数，
+    /// 差 2 就抛 0x80004005，见 <see cref="Mp4Encoder.Align4"/> 上的实测数据。
+    /// 在这儿统一吸掉，而不是留给 MP4 那条路自己切：三种格式录到的画面得是
+    /// 同一块区域，不然同一次录制换个格式尺寸就变了；而且提前吸掉的话
+    /// 抓到的帧本身就是对的尺寸，MP4 那边不用再逐帧裁一刀。
+    /// 少几个像素肉眼看不出来，拖框本来也不是像素级精确的。
     /// </summary>
-    internal static RECT SnapEven(RECT r)
+    internal static RECT Snap4(RECT r)
     {
         var w = Math.Max(0, r.Right - r.Left);
         var h = Math.Max(0, r.Bottom - r.Top);
@@ -84,8 +86,8 @@ public static class RecordService
         {
             Left = r.Left,
             Top = r.Top,
-            Right = r.Left + w - (w & 1),
-            Bottom = r.Top + h - (h & 1),
+            Right = r.Left + Mp4Encoder.Align4(w),
+            Bottom = r.Top + Mp4Encoder.Align4(h),
         };
     }
 
@@ -106,7 +108,7 @@ public static class RecordService
         var pauseLimit = maxPausedMs ?? MaxPausedMinutes * 60_000;
         fps = ClampFps(fps);
         maxSeconds = ClampSeconds(maxSeconds);
-        region = SnapEven(region);
+        region = Snap4(region);
 
         var dir = Path.Combine(Path.GetTempPath(), "FlashTrans.rec." + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);

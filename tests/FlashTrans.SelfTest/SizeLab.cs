@@ -72,6 +72,65 @@ static class SizeLab
         }
     }
 
+    /// <summary>
+    /// 找「MP4 一选就报错」的边界。自测里 48×32 和 640×480 都能编过，
+    /// 用户真录一段却抛 COMException 0x80004005，说明是某个维度超了，
+    /// 而不是「这台机器没有编码器」。这里按尺寸和帧率各扫一遍，看哪一格开始塌。
+    /// </summary>
+    public static void Mp4Lab()
+    {
+        Console.WriteLine($"编码器 DLL 在不在：{Mp4Encoder.Available}");
+
+        (int W, int H)[] sizes =
+        [
+            (48, 32), (320, 240), (640, 480), (800, 600), (1024, 768),
+            (1280, 720), (1366, 768), (1600, 900), (1920, 1080), (2560, 1440),
+            (200, 1000), (1000, 200), (66, 66), (1918, 1078),
+        ];
+
+        foreach (var (w, h) in sizes) Try($"{w}×{h}", w, h, 10, 6);
+        // 上面挂掉的三个（1366、66、1918）宽度都是「能被 2 整除但不能被 4 整除」。
+        // 宽和高各扫一遍偶数，确认到底是哪一边有 4 的要求。
+        foreach (var w in (int[])[636, 638, 640, 642, 644]) Try($"宽 {w}×480", w, 480, 10, 4);
+        foreach (var h in (int[])[476, 478, 480, 482, 484]) Try($"高 640×{h}", 640, h, 10, 4);
+        // 用户那台是 12 fps / 最长 121 秒，帧率单独再扫一遍
+        foreach (var fps in (int[])[2, 12, 24, 30]) Try($"640×480 @{fps}fps", 640, 480, fps, 6);
+        // 帧多会不会崩：121 秒 × 12 fps 是一千多帧
+        foreach (var n in (int[])[1, 2, 300]) Try($"640×480 {n} 帧", 640, 480, 12, n);
+    }
+
+    /// <summary>造 n 帧 w×h 的噪声帧编一次 MP4，只报成没成。</summary>
+    static void Try(string label, int w, int h, int fps, int n)
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "FlashTrans.mp4lab." + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var rnd = new Random(7);
+            var paths = new List<string>();
+            for (var i = 0; i < n; i++)
+            {
+                var buf = new byte[w * 4 * h];
+                rnd.NextBytes(buf);
+                for (var p = 3; p < buf.Length; p += 4) buf[p] = 0xFF;
+                var f = Path.Combine(dir, $"f{i:D5}.png");
+                new CapturedImage(w, h, buf).SavePng(f);
+                paths.Add(f);
+            }
+
+            var r = Task.Run(() => Mp4Encoder.SaveAsync(paths, Path.Combine(dir, "out.mp4"), fps))
+                        .GetAwaiter().GetResult();
+            Console.WriteLine($"  OK    {label,-22} {r.Bytes / 1024.0,7:0} KB");
+        }
+        catch (Exception ex)
+        {
+            var inner = ex;
+            while (inner.InnerException is not null) inner = inner.InnerException;
+            Console.WriteLine($"  FAIL  {label,-22} {inner.GetType().Name}: {inner.Message.Trim()}");
+        }
+        finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
     public static void Run()
     {
         foreach (var seconds in (int[])[2, 8])

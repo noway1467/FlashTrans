@@ -41,11 +41,20 @@ public static class Mp4Encoder
     }
 
     /// <summary>
-    /// H.264 要求宽高都是偶数（4:2:0 色度采样，一个色度样本盖 2×2 个亮度像素）。
-    /// 奇数的话编码器直接拒。录制前就把选区吸到偶数，见 RecordService。
-    /// 这儿再兜一层：真是奇数就切掉最后那一行/一列，不让整个录制白费。
+    /// 把边长吸到 4 的倍数。
+    ///
+    /// 4:2:0 色度采样只要求偶数，但系统这个 H.264 编码器实际要 4 的倍数：
+    /// 差 2 的时候 CanTranscode 仍然是 true，TranscodeAsync 才抛 COMException
+    /// 0x80004005「未指定的错误」，看起来就像「这台机器编不了 MP4」。
+    ///
+    /// 实测（`--mp4lab` 按边长扫的，宽高两边一样）：
+    /// 636 成、638 败、640 成、642 败、644 成；476 成、478 败、480 成、482 败。
+    /// 1366×768 正好撞上——所以用户全屏宽度录一段必错，而自测那些 48×32、
+    /// 640×480 的合成帧全是 4 的倍数，一路都是绿的。
+    ///
+    /// 吸下去最多切掉 3 行/列像素，比整段录制废掉划算。
     /// </summary>
-    internal static int Even(int v) => v - (v & 1);
+    internal static int Align4(int v) => v - (v & 3);
 
     /// <summary>
     /// 每像素每帧给多少 bit。屏幕内容不像实拍视频：大片纯色加细小的文字边缘，
@@ -62,20 +71,38 @@ public static class Mp4Encoder
     internal static uint Bitrate(int w, int h, int fps)
         => (uint)Math.Clamp((long)(w * h * fps * BitsPerPixel), 800_000, 40_000_000);
 
+    /// <summary>
+    /// 转码时先写的那个旁路文件，把「临时」放在文件名里而不是后缀上：
+    /// `闪译录制 ….part.mp4`。
+    ///
+    /// 保住 .mp4 后缀是防御性的：Media Foundation 给 StorageFile 挑写出器（sink）
+    /// 参考扩展名，`.part` 结尾理论上可能挑不到 MP4 sink。实测这台机器上
+    /// `x.mp4.part` 也能编（0x80004005 的真因是边长不是 4 的倍数，见 Align4），
+    /// 但后缀跟容器对得上总是更稳，也让半成品文件双击能放。
+    /// </summary>
+    internal static string SidecarPath(string finalPath)
+    {
+        var dir = Path.GetDirectoryName(finalPath) ?? "";
+        var stem = Path.GetFileNameWithoutExtension(finalPath);
+        var ext = Path.GetExtension(finalPath);
+        if (string.IsNullOrEmpty(ext)) ext = ".mp4";
+        return Path.Combine(dir, stem + ".part" + ext);
+    }
+
     public static async Task<AnimResult> SaveAsync(
         IReadOnlyList<string> frames, string outPath, int fps)
     {
         if (frames.Count == 0) throw new InvalidOperationException("没有帧可以编码。");
         fps = Math.Max(1, fps);
         var finalPath = Path.GetFullPath(outPath);
-        var tempPath = finalPath + ".part";
+        var tempPath = SidecarPath(finalPath);
 
         try
         {
             // 拿第一帧定分辨率。录制中区域不变，所有帧一样大。
             var first = AnimEncoder.LoadFrame(frames[0]);
-            var w = Even(first.PixelWidth);
-            var h = Even(first.PixelHeight);
+            var w = Align4(first.PixelWidth);
+            var h = Align4(first.PixelHeight);
             if (w < 2 || h < 2)
                 throw new InvalidOperationException($"区域太小，编不了 MP4（{w}×{h}）。");
 

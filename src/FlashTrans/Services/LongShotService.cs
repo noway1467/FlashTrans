@@ -89,10 +89,23 @@ public static class LongShotService
                 // 对不上。要么这一下滚过了窄带看得见的范围，要么画面真的换了内容。
                 // 先当成滚过了：退回去、把步子减半再来。连着几次都不行才认输——
                 // 接不上就硬拼会在图里留一段没截到的空缺，那比少截一截糟糕得多。
-                if (++retries <= 3 && notches > 1)
+                //
+                // 退回去之后必须重新抓一帧当 prev。滚回来落点跟原来不一定分毫不差
+                // （平滑滚动、行高取整都会差几像素），拿旧的 prev 去比就是在跟一个
+                // 屏幕上从未出现过的画面算位移，量出来的 shift 偏一点，接缝处就会
+                // 重复或者缺几行——就是长图上那些一段一段的错位。
+                if (++retries <= 3)
                 {
                     Wheel(notches);
                     await Task.Delay(80);
+                    var back = await SettledGrabAsync(region);
+                    if (back is not null)
+                    {
+                        prev = back;
+                        band = PickBand(back);
+                    }
+                    // 步子已经是最小的还对不上，那就不是滚过头，是内容真变了
+                    if (notches <= 1) { stop = LongShotStop.Diverged; break; }
                     notches = Math.Max(1, notches / 2);
                     continue;
                 }
@@ -192,7 +205,10 @@ public static class LongShotService
         }
 
         if (votes.Count == 0) return -1;
-        var best = votes.MaxBy(pair => pair.Value);
+        // 票数一样时取最小的位移。MaxBy 单用的话平票按字典枚举顺序决定，同一个画面
+        // 两次跑可能给出不同的数；而且宁可少算也别多算——多算了会把没截到的内容当成
+        // 「已经露出来过」跳掉，图上就缺一段；少算只是接缝处重复几行，看着不明显。
+        var best = votes.OrderByDescending(p => p.Value).ThenBy(p => p.Key).First();
         return best.Key;
     }
 

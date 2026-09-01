@@ -203,6 +203,13 @@ public sealed partial class AppHost
     {
         var hud = new LongShotHud(region);
         hud.Show();
+
+        // 蒙层刚关，还没真从屏幕上下去。不等一下，第一屏拍到的是那层黑蒙层和工具条，
+        // 后面每一屏都是干净页面——拼出来就是「开头一段带着工具，下面才是正文」。
+        // 跟录制那条一样等一拍：先让 WPF 把关闭渲染完，再给 DWM 一点时间合成。
+        await Dispatcher.Yield(DispatcherPriority.Render);
+        await Task.Delay(250);
+
         LongShotResult result;
         try
         {
@@ -310,7 +317,7 @@ public sealed partial class AppHost
     /// </summary>
     static string UniqueRecordPath()
     {
-        var dir = CaptureDir();
+        var dir = RecordDir();
         Directory.CreateDirectory(dir);
         var stem = $"闪译录制 {DateTime.Now:yyyy-MM-dd HHmmss}";
         var path = Path.Combine(dir, stem);
@@ -367,6 +374,13 @@ public sealed partial class AppHost
         if (!string.IsNullOrWhiteSpace(dir)) return dir;
         return Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "FlashTrans");
+    }
+
+    /// <summary>录制文件存放目录。没单独设过就跟截图放一起。</summary>
+    public static string RecordDir()
+    {
+        var dir = SettingsService.Instance.Current.RecordSaveDir;
+        return string.IsNullOrWhiteSpace(dir) ? CaptureDir() : dir;
     }
 
     /// <summary>报告存到哪儿了。点一下能直接在资源管理器里定位到那张图。</summary>
