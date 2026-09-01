@@ -64,7 +64,9 @@ public sealed partial class SettingsWindow
             Field("宽度", SliderRow(S.PopupWidth, 280, 720, 10, v => S.PopupWidth = v, v => $"{v:F0} px")),
             Field("最大高度", SliderRow(S.PopupMaxHeight, 200, 1600, 20, v => S.PopupMaxHeight = v,
                 v => $"{v:F0} px"), "调再高也不会超出屏幕工作区"),
-            Check("弹窗内显示源标签", S.PopupShowTabs, on => S.PopupShowTabs = on));
+            Check("弹窗内显示源标签", S.PopupShowTabs, on => S.PopupShowTabs = on),
+            Check("弹窗一直置顶", S.PopupTopmost, on => S.PopupTopmost = on,
+                "关掉时弹出仍会置顶一次保证看得见，但焦点一走就让位给你点的那个窗口"));
 
         Section(page, "缓存与网络",
             Check("启用翻译缓存", S.CacheEnabled, on => S.CacheEnabled = on,

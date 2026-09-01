@@ -21,6 +21,10 @@ public sealed partial class PopupWindow
         // 新翻译一来，之前收起的那个就作废：按收起快捷键该拿到这一次的结果，
         // 而不是把上一段译文又捞回来。
         _stashed = false;
+        // 每次弹出来都要看得见，所以重新置顶、重新计「激活过没有」；
+        // 拿到焦点又丢掉之后 LowerBelowForeground 会把它放下去。
+        Topmost = true;
+        _everActive = false;
         _text = text;
         _result.CopyRequested -= CopyText;
         _result.CopyRequested += CopyText;
@@ -48,6 +52,41 @@ public sealed partial class PopupWindow
     double CapHeight(Rect work) =>
         work.Height > 0 ? Math.Max(MinHeight, Math.Min(S.PopupMaxHeight, work.Height - 16))
                         : S.PopupMaxHeight;
+
+    /// <summary>
+    /// 焦点被别的窗口拿走后让位：撤掉置顶，并显式插到那个窗口后面。
+    ///
+    /// 只撤置顶不够——HWND_NOTOPMOST 会把窗口摆在所有非置顶窗口的最上面，
+    /// 它照样盖着你刚点的那个程序。所以还要 SetWindowPos 插到前台窗口之后。
+    ///
+    /// 要等真的激活过一次再让位：Show 到 Activate 之间也会过一次 Deactivated，
+    /// 那时候就放下去，弹窗一出来就沉到原窗口底下了。
+    /// </summary>
+    internal void LowerBelowForeground(bool force = false)
+    {
+        if (S.PopupTopmost) return;          // 用户自己要求一直置顶
+        if (_closing || !IsVisible) return;
+        if (!_everActive && !force) return;
+
+        Topmost = false;
+
+        var self = new System.Windows.Interop.WindowInteropHelper(this).Handle;
+        if (self == IntPtr.Zero) return;
+        var fore = Win32.GetForegroundWindow();
+        if (fore == IntPtr.Zero || fore == self) return;
+
+        Win32.SetWindowPos(self, fore, 0, 0, 0, 0,
+            Win32.SWP_NOSIZE | Win32.SWP_NOMOVE | Win32.SWP_NOACTIVATE);
+    }
+
+    /// <summary>把弹窗重新抬到最前（被别的窗口盖住时用快捷键叫它）。</summary>
+    internal void RaiseToFront()
+    {
+        if (!IsVisible) return;
+        Topmost = true;
+        _everActive = false;   // 重新计一次「激活过没有」，否则马上又会让位
+        Activate();
+    }
 
     /// <summary>窗口测完真实高度后，把越过工作区的部分收回来。</summary>
     void ClampIntoWorkArea()
@@ -94,6 +133,8 @@ public sealed partial class PopupWindow
     {
         if (!CanRestore) return false;
         _stashed = false;
+        Topmost = true;
+        _everActive = false;
         Show();
         Activate();
         return true;
@@ -114,6 +155,8 @@ public sealed partial class PopupWindow
         Width = S.PopupWidth;
         _applyingWidth = false;
         MaxHeight = CapHeight(ScreenHelper.WorkAreaOf(this));
+        // 只往上抬，不在这儿往下放：弹出时那次置顶要留到第一次失去焦点为止
+        if (S.PopupTopmost) Topmost = true;
         var hk = HotkeySpec.Parse(S.HkTogglePopup).ToString();
         _stashBtn.ToolTip = hk.Length == 0 ? "临时收起（在设置里配快捷键叫回）" : $"临时收起（{hk} 叫回）";
         Opacity = S.Opacity;
