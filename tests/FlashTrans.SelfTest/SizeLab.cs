@@ -99,6 +99,72 @@ static class SizeLab
         foreach (var n in (int[])[1, 2, 300]) Try($"640×480 {n} 帧", 640, 480, 12, n);
     }
 
+    /// <summary>
+    /// 量「编出来的 MP4 是不是上下颠倒的」。
+    ///
+    /// 用户报「录制的视频是倒转过来的」。上下翻转这件事光看断言看不出来——
+    /// 帧数、时长、盒子结构全对，只是每帧的行序反了。所以这里造一帧
+    /// 上白下黑的图，编成 MP4 再把第一帧解回来，看白的那半落在上面还是下面。
+    ///
+    /// 亮度差比颜色可靠：H.264 是 4:2:0，色度要抽样，纯红纯蓝压完会偏；
+    /// 黑白只动亮度分量，压多狠都还是一边亮一边暗。
+    /// </summary>
+    public static void FlipLab()
+    {
+        Console.WriteLine("=== 上下方向 ===");
+        var dir = Path.Combine(Path.GetTempPath(), "FlashTrans.flip." + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        try
+        {
+            const int w = 320, h = 240;
+            var paths = new List<string>();
+            for (var i = 0; i < 4; i++)
+            {
+                var f = Path.Combine(dir, $"f{i:D5}.png");
+                FlipCheck.Corners(w, h).SavePng(f);
+                paths.Add(f);
+            }
+
+            // 先确认造出来的 PNG 本身方向是对的，不然下面量到的翻转是这儿来的
+            Console.WriteLine("  PNG  源帧      " + Describe(paths[0]));
+
+            var mp4 = Path.Combine(dir, "flip.mp4");
+            Task.Run(() => Mp4Encoder.SaveAsync(paths, mp4, 10)).GetAwaiter().GetResult();
+            var got = Task.Run(() => FlipCheck.FirstMp4FrameAsync(mp4)).GetAwaiter().GetResult();
+            Console.WriteLine("  MP4  解回来    " + Describe(got));
+
+            // GIF / WebP 走的是另一条路（AnimEncoder、img2webp），顺手一起量，
+            // 别假设它们没事
+            foreach (var fmt in (RecordFormat[])[RecordFormat.Gif, RecordFormat.Webp])
+            {
+                var r = Task.Run(() => AnimEncoder.SaveAsync(
+                    paths, Path.Combine(dir, "flip_" + fmt), 10, fmt)).GetAwaiter().GetResult();
+                Console.WriteLine($"  {fmt,-4} 解回来    " + Describe(FlipCheck.Load(r.Path)));
+            }
+        }
+        catch (Exception ex)
+        {
+            var inner = ex;
+            while (inner.InnerException is not null) inner = inner.InnerException;
+            Console.WriteLine($"  FAIL  {inner.GetType().Name}: {inner.Message.Trim()}");
+        }
+        finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    static string Describe(string imgPath) => Describe(FlipCheck.Load(imgPath));
+
+    static string Describe(System.Windows.Media.Imaging.BitmapSource img)
+    {
+        var (top, bottom) = FlipCheck.Halves(img);
+        var (tl, tr, bl, br) = FlipCheck.Quadrants(img);
+        var verdict = top > bottom + 40 ? "上亮下暗（对）"
+            : bottom > top + 40 ? "上暗下亮（上下颠倒了）"
+            : "上下分不出来";
+        if (tl < tr - 20 || bl < br - 20) verdict += "，而且左右也镜像了";
+        return $"{img.PixelWidth}×{img.PixelHeight} 上半亮度 {top:0} 下半 {bottom:0}"
+               + $"（四角 {tl:0}/{tr:0}/{bl:0}/{br:0}）→ {verdict}";
+    }
+
     /// <summary>造 n 帧 w×h 的噪声帧编一次 MP4，只报成没成。</summary>
     static void Try(string label, int w, int h, int fps, int n)
     {

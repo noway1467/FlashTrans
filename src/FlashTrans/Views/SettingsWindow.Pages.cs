@@ -17,23 +17,20 @@ public sealed partial class SettingsWindow
         var page = Page();
 
         Section(page, "启动",
-            Check("开机自动启动（静默驻留托盘）", StartupService.IsEnabled(), on =>
+            Check("开机自动启动", StartupService.IsEnabled(), on =>
             {
                 if (!StartupService.Set(on)) Toast("写入启动项失败，可能被安全软件拦截");
                 S.RunAtStartup = on;
             }),
-            Check("启动时最小化到托盘", S.StartMinimized, on => S.StartMinimized = on,
-                "关掉则启动时直接显示主窗口"),
+            Check("启动时最小化到托盘", S.StartMinimized, on => S.StartMinimized = on),
             Check("关闭窗口时回到托盘", S.CloseToTray, on => S.CloseToTray = on),
             Check("启动时预热网络连接", S.WarmupOnStart, on => S.WarmupOnStart = on,
-                "提前建立 TLS 连接，第一次翻译更快"));
+                "第一次翻译更快"));
 
         Section(page, "输入与响应",
             Check("边输入边翻译", S.TranslateOnType, on => S.TranslateOnType = on),
-            Field("输入停顿延迟", Number(S.TypeDelayMs, 120, 3000, v => S.TypeDelayMs = v, "毫秒"),
-                "停止输入多久后自动翻译"),
-            Check("回车翻译，Shift+回车换行", S.EnterToTranslate, on => S.EnterToTranslate = on,
-                "关掉则回车换行，Ctrl+回车翻译"),
+            Field("输入停顿延迟", Number(S.TypeDelayMs, 120, 3000, v => S.TypeDelayMs = v, "毫秒")),
+            Check("回车翻译，Shift+回车换行", S.EnterToTranslate, on => S.EnterToTranslate = on),
             Field("失败自动切换", Check("出错时自动尝试下一个可用源", S.AutoFallback,
                 on => S.AutoFallback = on)),
             Field("并发上限", Number(S.MaxParallel, 1, 16, v => S.MaxParallel = v, "个请求"),
@@ -41,17 +38,15 @@ public sealed partial class SettingsWindow
 
         Section(page, "划词翻译",
             Field("划词开关", Combo<SelectionMode>(
-                [("关闭划词", SelectionMode.Off), ("选中后显示小图标（推荐）", SelectionMode.Icon),
+                [("关闭划词", SelectionMode.Off), ("选中后显示小图标", SelectionMode.Icon),
                  ("选中后直接弹出译文", SelectionMode.Direct)],
-                S.SelectionMode, v => S.SelectionMode = v, width: 230),
-                $"选「关闭划词」即不再弹小图标；托盘右键或 {HotkeySpec.Parse(S.HkToggleSelection)} 也能随时开关"),
+                S.SelectionMode, v => S.SelectionMode = v, width: 230)),
             Field("需按住的键", Combo<string>(
                 [("不需要", "none"), ("Ctrl", "ctrl"), ("Alt", "alt"), ("Shift", "shift")],
-                S.SelectionModifier.ToLowerInvariant(), v => S.SelectionModifier = v),
-                "按住指定键划词才触发，可避免误弹"),
+                S.SelectionModifier.ToLowerInvariant(), v => S.SelectionModifier = v)),
             Check("双击 Ctrl 翻译选中文本", S.DoubleCtrlWake, on => S.DoubleCtrlWake = on),
             Check("翻译后还原剪贴板", S.RestoreClipboard, on => S.RestoreClipboard = on,
-                "取词要借用剪贴板，勾选后会恢复原内容"),
+                "取词要借用剪贴板"),
             Check("忽略本程序窗口内的选择", S.SkipOwnWindow, on => S.SkipOwnWindow = on),
             Check("监听剪贴板，复制即翻译", S.MonitorClipboard, on => S.MonitorClipboard = on),
             Field("最长取词字数", Number(S.MaxSelectionChars, 100, 20000, v => S.MaxSelectionChars = v, "字")));
@@ -63,19 +58,17 @@ public sealed partial class SettingsWindow
                 S.PopupPlace, v => S.PopupPlace = v)),
             Field("宽度", SliderRow(S.PopupWidth, 280, 720, 10, v => S.PopupWidth = v, v => $"{v:F0} px")),
             Field("最大高度", SliderRow(S.PopupMaxHeight, 200, 1600, 20, v => S.PopupMaxHeight = v,
-                v => $"{v:F0} px"), "调再高也不会超出屏幕工作区"),
+                v => $"{v:F0} px")),
             Check("弹窗内显示源标签", S.PopupShowTabs, on => S.PopupShowTabs = on),
             Check("弹窗一直置顶", S.PopupTopmost, on => S.PopupTopmost = on,
-                "关掉时弹出仍会置顶一次保证看得见，但焦点一走就让位给你点的那个窗口"));
+                "关掉后焦点一走就让位给别的窗口"));
 
         Section(page, "缓存与网络",
-            Check("启用翻译缓存", S.CacheEnabled, on => S.CacheEnabled = on,
-                "相同文本在保留时长内直接返回，几乎零延迟"),
+            Check("启用翻译缓存", S.CacheEnabled, on => S.CacheEnabled = on),
             Field("缓存条数", Number(S.CacheSize, 100, 20000, v => S.CacheSize = v, "条")),
-            Field("保留时长", Number(S.CacheTtlHours, 1, 168, v => S.CacheTtlHours = v, "小时"),
-                "过期条目会自动清理，不必手动清空"),
+            Field("保留时长", Number(S.CacheTtlHours, 1, 168, v => S.CacheTtlHours = v, "小时")),
             Field("代理", Input(S.Proxy, v => S.Proxy = v, "http://127.0.0.1:7890"),
-                "留空表示使用系统代理"),
+                "留空用系统代理"),
             UiKit.Row(8,
                 SmallButton("清空缓存", () =>
                 {
@@ -100,64 +93,54 @@ public sealed partial class SettingsWindow
         var press = string.IsNullOrWhiteSpace(hk) ? "在托盘右键菜单里选「截图」" : $"按 {hk}";
 
         Section(page, "截图",
-            Hint($"{press} 框选区域，工具条在选区下面。"),
+            Hint($"{press} 框选区域。"),
             Field("按回车时", Combo(new (string, CaptureAction)[]
             {
                 ("复制到剪贴板", CaptureAction.Copy),
                 ("保存成图片", CaptureAction.Save),
                 ("识别文字", CaptureAction.Ocr),
                 ("识别并翻译", CaptureAction.OcrTranslate),
-            }, S.CaptureEnterAction, v => S.CaptureEnterAction = v, width: 230),
-                "双击选区也走这个动作"),
+            }, S.CaptureEnterAction, v => S.CaptureEnterAction = v, width: 230)),
             Field("保存到", SaveDirRow(), "留空放在图片文件夹"),
-            Check("点保存时先问存到哪儿", S.CaptureSaveAsk, on => S.CaptureSaveAsk = on,
-                "关掉就直接存进上面那个目录，不打断"),
+            Check("点保存时先问存到哪儿", S.CaptureSaveAsk, on => S.CaptureSaveAsk = on),
             LeftRow(SmallButton("试一下", () => _ = TryCaptureAsync())));
 
         Section(page, "录制动图",
-            Hint($"录的是实时画面，标注不会进去。`Esc` 停下，`{RecordHud.PauseHotkey}` 暂停，"
-                 + "暂停掉的那段不进文件。"),
+            Hint($"录的是实时画面，标注不会进去。`Esc` 停下，`{RecordHud.PauseHotkey}` 暂停。"),
             Field("格式", Combo(new (string, RecordFormat)[]
             {
-                ("WebP（推荐，一般最小）", RecordFormat.Webp),
-                ("GIF（谁都打得开，但大一个数量级）", RecordFormat.Gif),
-                ("MP4（视频，能拖进度条）", RecordFormat.Mp4),
+                ("WebP", RecordFormat.Webp),
+                ("GIF", RecordFormat.Gif),
+                ("MP4", RecordFormat.Mp4),
             }, S.RecordFormat, v => S.RecordFormat = v, width: 260),
                 FormatNote()),
             Field("保存到", RecordDirRow(), "留空跟截图放一起"),
             Field("帧率", SliderRow(S.RecordFps,
                     RecordService.MinFps, RecordService.MaxFps, 1,
-                    v => S.RecordFps = (int)Math.Round(v), v => $"{v:F0} fps"),
-                "调太高界面会卡，反而录不满"),
+                    v => S.RecordFps = (int)Math.Round(v), v => $"{v:F0} fps")),
             Field("最长", SliderRow(S.RecordMaxSeconds,
                     RecordService.MinSeconds, RecordService.MaxSeconds, 1,
-                    v => S.RecordMaxSeconds = (int)Math.Round(v), v => $"{v:F0} 秒"),
-                "到点自己停"));
+                    v => S.RecordMaxSeconds = (int)Math.Round(v), v => $"{v:F0} 秒")));
 
         Section(page, "画笔",
-            Hint("这是起始值，画的时候工具条上随时能改（`Ctrl+滚轮`）。"
-                 + "按住 `Shift` 出正方形 / 正圆 / 直线。"),
+            Hint("画的时候按 `Ctrl+滚轮` 改粗细，按住 `Shift` 出正方形 / 正圆 / 直线。"),
             Field("画笔粗细", SliderRow(S.CapturePenWidth,
                     CaptureLimits.MinPenWidth, CaptureLimits.MaxPenWidth, 1,
-                    v => S.CapturePenWidth = v, v => $"{v:F0} px"),
-                "矩形、圆、箭头也用这个粗细"),
+                    v => S.CapturePenWidth = v, v => $"{v:F0} px")),
             Field("马赛克格子", Number(S.CaptureMosaicBlock,
                     CaptureLimits.MinMosaicBlock, CaptureLimits.MaxMosaicBlock,
-                    v => S.CaptureMosaicBlock = v, "px"),
-                "格子越大遮得越死"));
+                    v => S.CaptureMosaicBlock = v, "px")));
 
         Section(page, "文字标注",
             Hint("打字时 `Ctrl+B` 加粗、`Ctrl+I` 斜体。"),
             Field("字号", SliderRow(S.CaptureFontSize,
                     CaptureLimits.MinFontSize, CaptureLimits.MaxFontSize, 1,
-                    v => S.CaptureFontSize = v, v => $"{v:F0} px"),
-                "字带描边，什么底色都看得清"),
+                    v => S.CaptureFontSize = v, v => $"{v:F0} px")),
             Check("默认加粗", S.CaptureFontBold, on => S.CaptureFontBold = on),
             Check("默认斜体", S.CaptureFontItalic, on => S.CaptureFontItalic = on));
 
         Section(page, "截图工具的键",
-            Hint("只在框选期间管用，可以不带 Ctrl / Alt。点输入框后直接按，"
-                 + "Backspace 清掉。Esc、回车、空格固定。"),
+            Hint("只在框选期间管用。点输入框后直接按，Backspace 清掉。"),
             CaptureKeyField("矩形", S.CkRect, v => S.CkRect = v),
             CaptureKeyField("圆", S.CkEllipse, v => S.CkEllipse = v),
             CaptureKeyField("箭头", S.CkArrow, v => S.CkArrow = v),
@@ -183,25 +166,23 @@ public sealed partial class SettingsWindow
         if (!OcrService.IsAvailable)
             return
             [
-                Hint("识别文字要用系统的语言包，现在没装，工具条上那两个识别按钮会提示装。"
-                     + OcrService.NoEngineHint()),
+                Hint("识别文字要用系统的语言包，现在没装。" + OcrService.NoEngineHint()),
             ];
 
-        var langs = new List<(string, string)> { ("跟随源语言（推荐）", "") };
+        var langs = new List<(string, string)> { ("跟随源语言", "") };
         langs.AddRange(OcrService.AvailableLanguages.Select(t => (OcrService.DisplayName(t), t)));
 
         return
         [
             Hint("认出来的字会弹个框，改完再复制或翻译。"),
-            Field("识别语言", Combo(langs, S.OcrLang, v => S.OcrLang = v, width: 230),
-                "选错会多认错字"),
+            Field("识别语言", Combo(langs, S.OcrLang, v => S.OcrLang = v, width: 230)),
             Check("「识别并翻译」时把原文也复制到剪贴板", S.OcrCopyText, on => S.OcrCopyText = on),
         ];
     }
 
     /// <summary>
     /// 格式那一栏底下的说明。只在这台机器缺东西时才出现一行——
-    /// 三种格式各自什么特点，下拉框的选项里已经写了，不用再重复一遍。
+    /// 三种格式选哪个，选项名本身就够了，不用再挂一串解释。
     /// </summary>
     static string? FormatNote()
     {
@@ -321,13 +302,13 @@ public sealed partial class SettingsWindow
 
         Section(page, "默认语言",
             Field("源语言", fromPicker),
-            Field("目标语言", toPicker, "默认中文，可随时改"),
+            Field("目标语言", toPicker),
             Check("源文已是目标语言时自动互译", S.AutoSwapSameLang, on => S.AutoSwapSameLang = on),
-            Field("互译时改译成", secondPicker, "例如目标是中文、原文也是中文，就译成这个语言"));
+            Field("互译时改译成", secondPicker));
 
         Section(page, "多语言同时翻译",
             Check("启用", S.MultiTargetEnabled, on => S.MultiTargetEnabled = on,
-                "一次请求翻译成下面勾选的所有语言"),
+                "一次翻译成下面勾选的所有语言"),
             BuildMultiTargetEditor());
 
         Section(page, "常用语言",
@@ -439,18 +420,17 @@ public sealed partial class SettingsWindow
         var page = Page();
 
         Section(page, "全局快捷键",
-            Hint("点输入框后直接按组合键；按 Backspace 清除。修饰键至少要有一个 Ctrl / Alt / Shift / Win。"),
+            Hint("点输入框后直接按组合键，Backspace 清除。至少要带一个 Ctrl / Alt / Shift / Win。"),
             HotkeyField("翻译选中文本", S.HkTranslateSelection, v => S.HkTranslateSelection = v),
             HotkeyField("显示 / 隐藏主窗口", S.HkToggleWindow, v => S.HkToggleWindow = v),
             HotkeyField("翻译剪贴板内容", S.HkTranslateClipboard, v => S.HkTranslateClipboard = v),
             HotkeyField("开关划词翻译", S.HkToggleSelection, v => S.HkToggleSelection = v),
             HotkeyField("切换到下一个源", S.HkNextProvider, v => S.HkNextProvider = v),
             HotkeyField("截图", S.HkCaptureOcr, v => S.HkCaptureOcr = v),
-            HotkeyField("收起 / 叫回翻译弹窗", S.HkTogglePopup, v => S.HkTogglePopup = v),
-            Hint("弹窗收起后内容还留着，再按一次原样回来；期间来了新翻译，收起的那个就作废了。"));
+            HotkeyField("收起 / 叫回翻译弹窗", S.HkTogglePopup, v => S.HkTogglePopup = v));
 
         Section(page, "框选时的键",
-            Hint("矩形、画笔、马赛克那些键在「截图」一栏里配，它们只在框选期间管用。"),
+            Hint("矩形、画笔、马赛克那些键在「截图」一栏里配。"),
             KeyInfo("Esc", "退工具 / 取消框选"),
             KeyInfo("Enter", "按「截图」栏里配的那个动作收尾"),
             KeyInfo("Space", "选中鼠标底下那个窗口"),
@@ -462,7 +442,7 @@ public sealed partial class SettingsWindow
             KeyInfo("Ctrl + Tab", "下一个翻译源"),
             KeyInfo("Ctrl + 1 … 9", "切到第 N 个源"),
             KeyInfo("Ctrl + Shift + S", "交换源语言与目标语言"),
-            KeyInfo("Ctrl + D", "双语对照开关（弹窗里是查词典）"),
+            KeyInfo("Ctrl + D", "双语对照开关，弹窗里是查词典"),
             KeyInfo("Ctrl + L", "清空输入"),
             KeyInfo("Ctrl + ,", "打开设置"),
             KeyInfo("Esc", "清空输入 / 关闭窗口"));
@@ -600,25 +580,23 @@ public sealed partial class SettingsWindow
                 S.Theme, v => { S.Theme = v; ThemeService.ApplyTheme(v); ThemeService.ApplyAccent(S.AccentColor); })),
             Field("强调色", BuildAccentPicker()),
             Field("字号", SliderRow(S.FontSize, 11, 22, 0.5, v => S.FontSize = v, v => $"{v:F1}")),
-            Field("字体", Input(S.FontFamily, v => S.FontFamily = v, "留空用系统默认"),
-                "例如 微软雅黑 / Segoe UI"),
+            Field("字体", Input(S.FontFamily, v => S.FontFamily = v, "留空用系统默认")),
             Field("窗口不透明度", SliderRow(S.Opacity, 0.5, 1.0, 0.05, v => S.Opacity = v,
                 v => $"{v * 100:F0}%")),
-            Check("紧凑模式", S.Compact, on => S.Compact = on, "更小的内边距，一屏放更多内容"),
+            Check("紧凑模式", S.Compact, on => S.Compact = on),
             Check("显示耗时", S.ShowLatency, on => S.ShowLatency = on));
 
         Section(page, "结果显示",
-            Check("双语对照", S.Bilingual, on => S.Bilingual = on, "原文与译文成对显示"),
+            Check("双语对照", S.Bilingual, on => S.Bilingual = on),
             Check("逐段对齐", S.BilingualByParagraph, on => S.BilingualByParagraph = on,
-                "多行文本逐段翻译后再配对，排版更整齐，请求略多"),
+                "逐段翻译后再配对，排版更整齐，请求略多"),
             Check("显示聚合标签", S.AggregateTab, on => S.AggregateTab = on,
                 "一个标签里同时看所有源的结果"),
             Check("单词显示音标与释义", S.ShowDictionary, on => S.ShowDictionary = on));
 
         Section(page, "欧路词典",
-            Check("启用欧路词典查询", S.EudicEnabled, on => S.EudicEnabled = on,
-                "结果区的「词典」按钮会把单词发给欧路词典"),
-            Field("程序路径", BuildEudicPathRow(), "留空自动探测（先试 eudic:// 协议）"),
+            Check("启用欧路词典查询", S.EudicEnabled, on => S.EudicEnabled = on),
+            Field("程序路径", BuildEudicPathRow(), "留空自动探测"),
             UiKit.Row(8,
                 SmallButton("自动探测", () =>
                 {
