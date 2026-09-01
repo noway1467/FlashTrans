@@ -27,6 +27,8 @@ public sealed partial class PopupWindow : Window
     bool _widthPinned;
     bool _applyingWidth;
     bool _stashed;
+    bool _everActive;
+    bool _closing;
     CancellationTokenSource? _cts;
     TranslateBatch? _batch;
 
@@ -48,6 +50,9 @@ public sealed partial class PopupWindow : Window
         MaxHeight = S.PopupMaxHeight;
         TextOptions.SetTextFormattingMode(this, TextFormattingMode.Display);
         UseLayoutRounding = true;
+        // 弹出时置顶：划词、剪贴板这些路径没有指向本进程的输入，SetForegroundWindow
+        // 会被系统拒掉，不置顶就可能压在原窗口底下根本看不见。
+        // 但只顶到第一次失去焦点为止，见 LowerBelowForeground。
         Topmost = true;
         SetResourceReference(BackgroundProperty, "Bg");
         SetResourceReference(ForegroundProperty, "Text");
@@ -66,6 +71,11 @@ public sealed partial class PopupWindow : Window
         PreviewKeyDown += OnKey;
         // 这里以前挂了 Deactivated → HidePopup：切一下别的软件窗口，正在看的译文就没了。
         // 弹窗现在只由用户自己收：Esc / 关闭按钮 / 收起按钮，或者被下一次翻译顶掉。
+        //
+        // 但「不关」加上原来那个永久 Topmost，就变成一块甩不掉的浮层：从任务栏点别的
+        // 程序，那个窗口起不到弹窗上面来。所以焦点一走就把置顶撤掉并让位。
+        Activated += (_, _) => _everActive = true;
+        Deactivated += (_, _) => LowerBelowForeground();
         SizeChanged += (_, e) =>
         {
             if (!IsVisible) return;
@@ -91,6 +101,9 @@ public sealed partial class PopupWindow : Window
             var ex = Win32.GetWindowLong(hwnd, Win32.GWL_EXSTYLE);
             Win32.SetWindowLong(hwnd, Win32.GWL_EXSTYLE, ex | Win32.WS_EX_TOOLWINDOW);
         };
+        // 关窗过程中焦点会交出去，那会再走一遍 Deactivated；那时候窗口句柄已经在拆，
+        // 别再去动它的 z-order。
+        Closing += (_, _) => _closing = true;
     }
 
     // ------------------------------------------------------------- 布局

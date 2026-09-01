@@ -80,9 +80,22 @@ public sealed partial class AppHost
     public void TogglePopupWindow()
     {
         if (_popup is null) { Toast("现在没有翻译弹窗"); return; }
-        if (_popup.IsVisible) { _popup.StashPopup(); return; }
+        if (_popup.IsVisible)
+        {
+            // 弹窗不再永久置顶，可能正被别的窗口盖着。这种情况先把它抬上来，
+            // 别一按就收——盖住的时候用户想要的是「让我看见」。
+            if (!IsWindowForeground(_popup)) _popup.RaiseToFront();
+            else _popup.StashPopup();
+            return;
+        }
         if (_popup.RestorePopup()) return;
         Toast("没有收起的翻译弹窗可以叫回");
+    }
+
+    static bool IsWindowForeground(Window w)
+    {
+        var hwnd = new System.Windows.Interop.WindowInteropHelper(w).Handle;
+        return hwnd != IntPtr.Zero && hwnd == Win32.GetForegroundWindow();
     }
 
     // ------------------------------------------------------------- 划词图标

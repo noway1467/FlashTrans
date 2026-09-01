@@ -102,6 +102,11 @@ public sealed class AppSettings
     public double PopupHeight { get; set; } = double.NaN;
     /// <summary>弹窗里也显示源标签页（关掉更紧凑）。</summary>
     public bool PopupShowTabs { get; set; } = true;
+    /// <summary>
+    /// 弹窗一直压在所有窗口上面。默认关：弹出时会先置顶保证看得见，
+    /// 但焦点一走就让位，否则从任务栏点别的程序时那个窗口起不来。
+    /// </summary>
+    public bool PopupTopmost { get; set; }
     public bool DoubleCtrlWake { get; set; }
 
     // ------- 快捷键 -------

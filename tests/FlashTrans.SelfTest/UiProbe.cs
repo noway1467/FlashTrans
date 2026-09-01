@@ -22,6 +22,7 @@ static class UiProbe
         step("弹窗：焦点被抢走也不关闭", () => PopupBlurProbe(host));
         step("弹窗：收起能原样叫回，关掉的叫不回", () => PopupStashProbe(host));
         step("弹窗：最大高度按屏幕工作区收口", () => PopupMaxHeightProbe(host));
+        step("弹窗：焦点一走就撤置顶，让别的窗口盖上来", () => PopupTopmostProbe(host));
         step("托盘菜单：弹出建锚点、收干净、重复收不炸", () => TrayMenuProbe(host));
 
         step("主窗口：构造 + 布局", () => Probe(new MainWindow(host)));
@@ -257,6 +258,58 @@ static class UiProbe
         {
             Close(w);
             s.PopupLeft = l0; s.PopupTop = t0;
+        }
+    }
+
+    /// <summary>
+    /// 「不失去焦点就不关」加上原来那个永久 Topmost，弹窗就成了一块甩不掉的浮层：
+    /// 从任务栏点别的程序，那个窗口起不到弹窗上面来。
+    ///
+    /// 弹出时仍要置顶（划词、剪贴板这些路径抢不到前台，不置顶可能看不见），
+    /// 但拿到焦点又丢掉之后必须撤下来。离屏窗口拿不到真焦点，所以走 force。
+    /// </summary>
+    static void PopupTopmostProbe(AppHost host)
+    {
+        var s = SettingsService.Instance.Current;
+        var (top0, l0, t0) = (s.PopupTopmost, s.PopupLeft, s.PopupTop);
+        var w = new PopupWindow(host);
+        try
+        {
+            s.PopupTopmost = false;
+            w.Left = -4000; w.Top = -4000;
+            w.ShowFor("topmost probe", new Point(-4000, -4000));
+            Pump();
+            if (!w.Topmost) throw new InvalidOperationException("弹出时没置顶，可能压在原窗口底下看不见");
+
+            w.LowerBelowForeground(force: true);
+            Pump();
+            if (w.Topmost) throw new InvalidOperationException("焦点走了还赖在置顶层，别的窗口盖不上来");
+
+            // 被盖住时按快捷键要能重新抬上来
+            w.RaiseToFront();
+            Pump();
+            if (!w.Topmost) throw new InvalidOperationException("叫不上来");
+
+            // 用户明确要求一直置顶时，让位那步不该动它
+            s.PopupTopmost = true;
+            w.LowerBelowForeground(force: true);
+            Pump();
+            if (!w.Topmost) throw new InvalidOperationException("开了「一直置顶」还是被放下去了");
+
+            // 再开一次也得回到置顶
+            s.PopupTopmost = false;
+            w.LowerBelowForeground(force: true);
+            w.ShowFor("topmost probe 2", new Point(-4000, -4000));
+            Pump();
+            if (!w.Topmost) throw new InvalidOperationException("重开没有回到置顶");
+            Console.WriteLine("       弹出置顶→让位撤顶→叫得回来→「一直置顶」不让位");
+            w.ClosePopup();
+            Pump();
+        }
+        finally
+        {
+            s.PopupTopmost = top0; s.PopupLeft = l0; s.PopupTop = t0;
+            Close(w);
         }
     }
 
