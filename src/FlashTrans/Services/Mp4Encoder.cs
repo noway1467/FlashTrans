@@ -210,7 +210,18 @@ public static class Mp4Encoder
     }
 
     /// <summary>
-    /// 读一帧 PNG，转成紧排的 BGRA8 塞进 IBuffer。
+    /// 读一帧 PNG，转成紧排的 BGRA8 塞进 IBuffer，行序是从下往上的。
+    ///
+    /// 为什么要倒着写：Media Foundation 里未压缩的 RGB 格式默认是「自底向上」
+    /// （bottom-up，跟 GDI 的 DIB 一个传统），而 PNG 和我们的 CapturedImage 都是
+    /// 自顶向下。直接喂进去，编出来的视频整个上下颠倒——帧数、时长、盒子结构
+    /// 全是对的，只有行序反了，所以光验容器结构查不出来。`--fliplab` 的实测：
+    /// 源帧四个角亮度 240/160/80/0，不翻的话解回来是 80/0/240/160——上下换了，
+    /// 左右没换，正是纯行序倒置。
+    ///
+    /// 另一条路是把 VideoEncodingProperties 的 stride 设成负数来声明自顶向下，
+    /// 但 WinRT 那层投影没有暴露这个字段（MF_MT_DEFAULT_STRIDE 只能在原生
+    /// IMFMediaType 上设），所以只能在这儿把行倒过来。一次多拷一行的内存。
     ///
     /// 走 DataWriter 而不是 LockBuffer + IMemoryBufferByteAccess：后者在 .NET 5+
     /// 上会抛 InvalidCastException，CsWinRT 的对象不是真 COM RCW，转不过去。
@@ -226,11 +237,28 @@ public static class Mp4Encoder
 
         var stride = w * 4;
         var bytes = new byte[stride * h];
-        // 只取左上 w×h：偶数化可能比原图各少一个像素。
+        // 只取左上 w×h：吸到 4 的倍数可能比原图各少几个像素。
         bgra.CopyPixels(new System.Windows.Int32Rect(0, 0, w, h), bytes, stride, 0);
+        FlipRows(bytes, stride, h);
 
         using var writer = new DataWriter();
         writer.WriteBytes(bytes);
         return writer.DetachBuffer();
+    }
+
+    /// <summary>把 h 行像素首尾对调，原地翻转上下。</summary>
+    internal static void FlipRows(byte[] bytes, int stride, int h)
+    {
+        var row = new byte[stride];
+        // BlockCopy 前面要写 System.：这个文件 using 了 Windows.Storage.Streams，
+        // 那里面也有个 Buffer 类，不限定的话是二义引用。
+        for (var y = 0; y < h / 2; y++)
+        {
+            var top = y * stride;
+            var bottom = (h - 1 - y) * stride;
+            System.Buffer.BlockCopy(bytes, top, row, 0, stride);
+            System.Buffer.BlockCopy(bytes, bottom, bytes, top, stride);
+            System.Buffer.BlockCopy(row, 0, bytes, bottom, stride);
+        }
     }
 }

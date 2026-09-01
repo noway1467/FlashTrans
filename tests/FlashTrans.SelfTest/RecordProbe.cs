@@ -47,6 +47,9 @@ static class RecordProbe
         step("录制：MP4 码率和边长对齐的算法", Mp4MathProbe);
         step("录制：1366×766 这种非 4 倍数尺寸也能编 MP4", Mp4OddSizeProbe);
         step("录制：MP4 旁路文件的后缀还是 .mp4", Mp4SidecarProbe);
+        step("录制：MP4 画面方向没反（不是上下颠倒的）", Mp4OrientationProbe);
+        step("录制：三种格式的画面方向一致", OrientationAllFormatsProbe);
+        step("录制：翻行是原地对调，翻两次回到原样", FlipRowsProbe);
     }
 
     static void Need(bool ok, string what)
@@ -1025,6 +1028,105 @@ static class RecordProbe
             "旁路文件跟最终文件同名，转码会直接写进用户看到的那个文件");
         Need(Path.GetFileName(side).Contains(".part", StringComparison.Ordinal),
             $"旁路文件名里看不出是临时文件：{side}");
+    }
+
+    /// <summary>
+    /// 编出来的 MP4 不能是上下颠倒的。
+    ///
+    /// 1.7.1 之前就是颠倒的，而上面那些 MP4 探针一项都没红——帧数、时长、
+    /// ftyp/moov/mdat 全对，只有每帧的行序反了。原因是 Media Foundation 把
+    /// 未压缩 RGB 当成自底向上（bottom-up），而我们喂的是自顶向下的行。
+    ///
+    /// 造一帧四个角亮度都不同的图，编完解回来比四个角：只验上下会漏掉左右镜像。
+    /// 用亮度不用颜色——H.264 是 4:2:0，色度抽样过纯色也会偏，亮度不会。
+    /// </summary>
+    static void Mp4OrientationProbe()
+    {
+        if (!Mp4Encoder.Available) return;
+
+        var (dir, paths) = WriteCornerFrames(4);
+        try
+        {
+            var mp4 = Path.Combine(dir, "orient.mp4");
+            Task.Run(() => Mp4Encoder.SaveAsync(paths, mp4, 10)).GetAwaiter().GetResult();
+
+            // 先验源帧本身是对的，不然下面红了分不清是谁的锅
+            NeedCorners(FlipCheck.Load(paths[0]), "源 PNG");
+            NeedCorners(Task.Run(() => FlipCheck.FirstMp4FrameAsync(mp4)).GetAwaiter().GetResult(),
+                "MP4 解回来的第一帧");
+        }
+        finally { Wipe(dir); }
+    }
+
+    /// <summary>
+    /// 三种格式方向要一致。GIF 和 WebP 走 AnimEncoder / img2webp，不碰
+    /// MediaStreamSource，本来就是对的；这一项盯的是「以后谁改了某一条路
+    /// 的行序，另外两条还是对的」这种不一致。
+    /// </summary>
+    static void OrientationAllFormatsProbe()
+    {
+        var (dir, paths) = WriteCornerFrames(4);
+        try
+        {
+            foreach (var fmt in (RecordFormat[])[RecordFormat.Gif, RecordFormat.Webp, RecordFormat.Mp4])
+            {
+                if (fmt == RecordFormat.Mp4 && !Mp4Encoder.Available) continue;
+                var res = Task.Run(() => AnimEncoder.SaveAsync(
+                    paths, Path.Combine(dir, "orient_" + fmt), 10, fmt)).GetAwaiter().GetResult();
+
+                var img = res.Format == RecordFormat.Mp4
+                    ? Task.Run(() => FlipCheck.FirstMp4FrameAsync(res.Path)).GetAwaiter().GetResult()
+                    : FlipCheck.Load(res.Path);
+                NeedCorners(img, $"{res.Format} 的第一帧");
+            }
+        }
+        finally { Wipe(dir); }
+    }
+
+    /// <summary>四个角的亮度要还是「左上最亮、右下最暗」。</summary>
+    static void NeedCorners(System.Windows.Media.Imaging.BitmapSource img, string what)
+    {
+        var (tl, tr, bl, br) = FlipCheck.Quadrants(img);
+        var got = $"{what} 四角亮度 {tl:0}/{tr:0}/{bl:0}/{br:0}（要 240/160/80/0）";
+        // 容差 30：GIF 只有 256 色要量化，H.264 有损，边界还会糊
+        Need(Math.Abs(tl - 240) <= 30 && Math.Abs(tr - 160) <= 30
+             && Math.Abs(bl - 80) <= 30 && Math.Abs(br - 30) <= 60,
+            bl > tl && br > tr ? got + "：上下颠倒了" : got);
+    }
+
+    /// <summary>写 n 帧「四角亮度不同」的 PNG。</summary>
+    static (string Dir, List<string> Paths) WriteCornerFrames(int n)
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "FlashTrans.orient." + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        var paths = new List<string>();
+        for (var i = 0; i < n; i++)
+        {
+            // 240×160：都是 4 的倍数，这一项要盯的是方向不是对齐
+            var p = Path.Combine(dir, $"c{i:D5}.png");
+            FlipCheck.Corners(240, 160).SavePng(p);
+            paths.Add(p);
+        }
+        return (dir, paths);
+    }
+
+    static void FlipRowsProbe()
+    {
+        // 3 行 × 每行 2 像素，行内容分别是全 1、全 2、全 3
+        const int stride = 8, h = 3;
+        var buf = new byte[stride * h];
+        for (var y = 0; y < h; y++)
+            for (var i = 0; i < stride; i++) buf[y * stride + i] = (byte)(y + 1);
+
+        Mp4Encoder.FlipRows(buf, stride, h);
+        Need(buf[0] == 3 && buf[stride] == 2 && buf[2 * stride] == 1,
+            $"翻完的行序不对：{buf[0]}/{buf[stride]}/{buf[2 * stride]}");
+
+        Mp4Encoder.FlipRows(buf, stride, h);
+        Need(buf[0] == 1 && buf[stride] == 2 && buf[2 * stride] == 3, "翻两次没回到原样");
+
+        // 奇数行时中间那行留在原地，别把它也搬了
+        Need(buf.Skip(stride).Take(stride).All(b => b == 2), "中间那行被改坏了");
     }
 
     static void Mp4FailureCleanupProbe()
