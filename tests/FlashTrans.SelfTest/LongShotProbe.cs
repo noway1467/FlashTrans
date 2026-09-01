@@ -17,6 +17,8 @@ static class LongShotProbe
         step("长截图：画面整体换了内容时拒绝拼接", DivergeProbe);
         step("长截图：留白处不会被当成滚到底", FlatBandProbe);
         step("长截图：接起来的长图行数和内容都对", StackProbe);
+        step("长截图：固定浮层不会被误判成滚到底", FixedOverlayProbe);
+        step("长截图：滚动距离超过初始窄带也能对齐", LargeShiftProbe);
     }
 
     // ------------------------------------------------------------- 造图
@@ -162,5 +164,30 @@ static class LongShotProbe
                     $"第 {i / 4 / W} 行第 {i / 4 % W} 列对不上（拼接结果和原图不一致）");
 
         Console.WriteLine($"       {parts.Count} 段接成 {joined.Width}x{joined.Height}，逐像素与原页面一致");
+    }
+
+    static void FixedOverlayProbe()
+    {
+        var page = Page(1200);
+        var prev = Frame(page, 0);
+        var scrolled = Frame(page, 90);
+        const int overlayHeight = 60;
+        var pixels = (byte[])scrolled.Pixels.Clone();
+        Array.Copy(prev.Pixels, (H - overlayHeight) * prev.Stride,
+            pixels, (H - overlayHeight) * prev.Stride, overlayHeight * prev.Stride);
+        var next = new CapturedImage(W, H, pixels);
+        var got = LongShotService.FindShift(prev, next, LongShotService.PickBand(prev));
+        if (got != 90)
+            throw new InvalidOperationException($"固定浮层遮住底部时应算出 90，实际是 {got}");
+    }
+
+    static void LargeShiftProbe()
+    {
+        var page = Page(1200);
+        var prev = Frame(page, 0);
+        var next = Frame(page, 150);
+        var got = LongShotService.FindShift(prev, next, bandTop: 80);
+        if (got != 150)
+            throw new InvalidOperationException($"滚了 150 行、初始窄带在 80 行时应算出 150，实际是 {got}");
     }
 }

@@ -99,7 +99,8 @@ public static class RecordService
         Action<int, TimeSpan>? onProgress = null,
         Func<bool>? cancelled = null,
         Func<bool>? paused = null,
-        int? maxPausedMs = null)
+        int? maxPausedMs = null,
+        Func<RECT, CapturedImage?>? capture = null)
     {
         // 默认那道闸是 10 分钟，自测等不了；留个口子让它传小值进来。
         var pauseLimit = maxPausedMs ?? MaxPausedMinutes * 60_000;
@@ -171,7 +172,7 @@ public static class RecordService
             CapturedImage? img;
             try
             {
-                img = await Task.Run(() => ScreenCapture.Grab(region));
+                img = await Task.Run(() => (capture ?? ScreenCapture.Grab)(region));
             }
             catch (Exception ex)
             {

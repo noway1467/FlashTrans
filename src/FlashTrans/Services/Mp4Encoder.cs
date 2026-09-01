@@ -67,101 +67,119 @@ public static class Mp4Encoder
     {
         if (frames.Count == 0) throw new InvalidOperationException("没有帧可以编码。");
         fps = Math.Max(1, fps);
+        var finalPath = Path.GetFullPath(outPath);
+        var tempPath = finalPath + ".part";
 
-        // 拿第一帧定分辨率。录制中区域不变，所有帧一样大。
-        var first = AnimEncoder.LoadFrame(frames[0]);
-        var w = Even(first.PixelWidth);
-        var h = Even(first.PixelHeight);
-        if (w < 2 || h < 2)
-            throw new InvalidOperationException($"区域太小，编不了 MP4（{w}×{h}）。");
-
-        var descriptor = new VideoStreamDescriptor(
-            VideoEncodingProperties.CreateUncompressed(MediaEncodingSubtypes.Bgra8, (uint)w, (uint)h));
-
-        var source = new MediaStreamSource(descriptor)
+        try
         {
-            // 帧是现成的，不是实时流。BufferTime 留着的话转码器会先等一段。
-            BufferTime = TimeSpan.Zero,
-            Duration = TimeSpan.FromSeconds((double)frames.Count / fps),
-        };
+            // 拿第一帧定分辨率。录制中区域不变，所有帧一样大。
+            var first = AnimEncoder.LoadFrame(frames[0]);
+            var w = Even(first.PixelWidth);
+            var h = Even(first.PixelHeight);
+            if (w < 2 || h < 2)
+                throw new InvalidOperationException($"区域太小，编不了 MP4（{w}×{h}）。");
 
-        var frameDuration = TimeSpan.FromSeconds(1.0 / fps);
-        var next = 0;
-        Exception? failure = null;
+            var descriptor = new VideoStreamDescriptor(
+                VideoEncodingProperties.CreateUncompressed(MediaEncodingSubtypes.Bgra8, (uint)w, (uint)h));
 
-        source.SampleRequested += (_, args) =>
-        {
-            var req = args.Request;
-            if (next >= frames.Count)
+            var source = new MediaStreamSource(descriptor)
             {
-                // 不给样本就是流结束了。必须显式走这一步，不然转码器一直等。
-                req.Sample = null;
-                return;
+                // 帧是现成的，不是实时流。BufferTime 留着的话转码器会先等一段。
+                BufferTime = TimeSpan.Zero,
+                Duration = TimeSpan.FromSeconds((double)frames.Count / fps),
+            };
+
+            var frameDuration = TimeSpan.FromSeconds(1.0 / fps);
+            var next = 0;
+            Exception? failure = null;
+
+            source.SampleRequested += (_, args) =>
+            {
+                var req = args.Request;
+                if (next >= frames.Count)
+                {
+                    // 不给样本就是流结束了。必须显式走这一步，不然转码器一直等。
+                    req.Sample = null;
+                    return;
+                }
+                try
+                {
+                    var i = next++;
+                    req.Sample = MediaStreamSample.CreateFromBuffer(
+                        ToBuffer(frames[i], w, h), frameDuration * i);
+                    req.Sample.Duration = frameDuration;
+                    // 每帧都当关键帧候选：屏幕录制常要来回拖进度条。
+                    req.Sample.KeyFrame = i == 0;
+                }
+                catch (Exception ex)
+                {
+                    // 这个回调是转码器在自己的线程上调的，抛出去就没人接了，
+                    // 表现是转码莫名其妙地成功但文件是残的。记下来，等外面统一报。
+                    failure ??= ex;
+                    req.Sample = null;
+                }
+            };
+
+            var bitrate = ForceBitrate ?? Bitrate(w, h, fps);
+
+            // 视频属性自己建，不走 CreateMp4(quality) 那套预设：预设会按它自己的档位
+            // 填好宽高帧率码率，事后改 profile.Video 的字段不一定被采纳。
+            var profile = new MediaEncodingProfile { Container = new ContainerEncodingProperties() };
+            profile.Container.Subtype = MediaEncodingSubtypes.Mpeg4;
+            profile.Audio = null;   // 只录画面，不录声音
+
+            var video = VideoEncodingProperties.CreateH264();
+            video.Width = (uint)w;
+            video.Height = (uint)h;
+            video.Bitrate = bitrate;
+            video.FrameRate.Numerator = (uint)fps;
+            video.FrameRate.Denominator = 1;
+            video.PixelAspectRatio.Numerator = 1;
+            video.PixelAspectRatio.Denominator = 1;
+            profile.Video = video;
+
+            // 先写旁路临时文件。转码半路失败时，用户目录里不能出现 0 字节的假 MP4。
+            var dir = Path.GetDirectoryName(finalPath)
+                ?? throw new InvalidOperationException("输出路径没有目录部分。");
+            Directory.CreateDirectory(dir);
+            var folder = await StorageFolder.GetFolderFromPathAsync(dir);
+            var file = await folder.CreateFileAsync(
+                Path.GetFileName(tempPath), CreationCollisionOption.ReplaceExisting);
+
+            using (var stream = await file.OpenAsync(FileAccessMode.ReadWrite))
+            {
+                var transcoder = new MediaTranscoder { HardwareAccelerationEnabled = true };
+                var prepared = await transcoder.PrepareMediaStreamSourceTranscodeAsync(
+                    source, stream, profile);
+                if (!prepared.CanTranscode)
+                    throw new InvalidOperationException(
+                        $"系统拒绝转码（{prepared.FailureReason}）。这台机器可能没装 H.264 编码器。");
+
+                await prepared.TranscodeAsync();
             }
+
+            if (failure is not null)
+                throw new InvalidOperationException("喂帧的时候出错了：" + failure.Message, failure);
+
+            var info = new FileInfo(tempPath);
+            if (!info.Exists || info.Length == 0)
+                throw new InvalidOperationException("转码跑完了但文件是空的。");
+
+            File.Move(tempPath, finalPath, overwrite: true);
+            return new AnimResult(finalPath, RecordFormat.Mp4, info.Length);
+        }
+        catch
+        {
             try
             {
-                var i = next++;
-                req.Sample = MediaStreamSample.CreateFromBuffer(
-                    ToBuffer(frames[i], w, h), frameDuration * i);
-                req.Sample.Duration = frameDuration;
-                // 每帧都当关键帧候选：屏幕录制常要来回拖进度条。
-                req.Sample.KeyFrame = i == 0;
+                if (File.Exists(tempPath)) File.Delete(tempPath);
             }
-            catch (Exception ex)
+            catch (Exception cleanupEx)
             {
-                // 这个回调是转码器在自己的线程上调的，抛出去就没人接了，
-                // 表现是转码莫名其妙地成功但文件是残的。记下来，等外面统一报。
-                failure ??= ex;
-                req.Sample = null;
+                Log.Warn("清理 MP4 临时文件失败：" + cleanupEx.Message);
             }
-        };
-
-        var bitrate = ForceBitrate ?? Bitrate(w, h, fps);
-
-        // 视频属性自己建，不走 CreateMp4(quality) 那套预设：预设会按它自己的档位
-        // 填好宽高帧率码率，事后改 profile.Video 的字段不一定被采纳。
-        var profile = new MediaEncodingProfile { Container = new ContainerEncodingProperties() };
-        profile.Container.Subtype = MediaEncodingSubtypes.Mpeg4;
-        profile.Audio = null;   // 只录画面，不录声音
-
-        var video = VideoEncodingProperties.CreateH264();
-        video.Width = (uint)w;
-        video.Height = (uint)h;
-        video.Bitrate = bitrate;
-        video.FrameRate.Numerator = (uint)fps;
-        video.FrameRate.Denominator = 1;
-        video.PixelAspectRatio.Numerator = 1;
-        video.PixelAspectRatio.Denominator = 1;
-        profile.Video = video;
-
-        // 先建好文件再开流：CreateFileAsync 要分开的目录和文件名。
-        var dir = Path.GetDirectoryName(Path.GetFullPath(outPath))
-            ?? throw new InvalidOperationException("输出路径没有目录部分。");
-        Directory.CreateDirectory(dir);
-        var folder = await StorageFolder.GetFolderFromPathAsync(dir);
-        var file = await folder.CreateFileAsync(
-            Path.GetFileName(outPath), CreationCollisionOption.ReplaceExisting);
-
-        using (var stream = await file.OpenAsync(FileAccessMode.ReadWrite))
-        {
-            var transcoder = new MediaTranscoder { HardwareAccelerationEnabled = true };
-            var prepared = await transcoder.PrepareMediaStreamSourceTranscodeAsync(
-                source, stream, profile);
-            if (!prepared.CanTranscode)
-                throw new InvalidOperationException(
-                    $"系统拒绝转码（{prepared.FailureReason}）。这台机器可能没装 H.264 编码器。");
-
-            await prepared.TranscodeAsync();
+            throw;
         }
-
-        if (failure is not null)
-            throw new InvalidOperationException("喂帧的时候出错了：" + failure.Message, failure);
-
-        var info = new FileInfo(outPath);
-        if (!info.Exists || info.Length == 0)
-            throw new InvalidOperationException("转码跑完了但文件是空的。");
-
-        return new AnimResult(outPath, RecordFormat.Mp4, info.Length);
     }
 
     /// <summary>
