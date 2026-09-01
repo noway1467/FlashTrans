@@ -25,7 +25,9 @@ public sealed partial class AppHost
         {
             // 弹窗和划词图标会挡住要截的内容，先收走。
             // 主窗口留着：用户可能就是想截它里面的东西。
-            _popup?.HidePopup();
+            // 收起而不是关掉：这是我们为了拍图把它挪开，不是用户不要了，
+            // 取消截图后还能按快捷键把它叫回来。
+            _popup?.StashPopup();
             HideSelectionIcon();
             // 让上面两个窗口真的从屏幕上消失再抓图，否则会被拍进去
             await Task.Yield();

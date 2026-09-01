@@ -5,7 +5,8 @@ namespace FlashTrans.Interop;
 
 public enum HotkeyAction
 {
-    TranslateSelection, ToggleWindow, TranslateClipboard, ToggleSelection, NextProvider, CaptureOcr
+    TranslateSelection, ToggleWindow, TranslateClipboard, ToggleSelection, NextProvider, CaptureOcr,
+    TogglePopup
 }
 
 /// <summary>全局热键注册。冲突时返回失败原因，交给界面提示。</summary>
@@ -29,6 +30,7 @@ public sealed class HotkeyManager(IntPtr hwnd) : IDisposable
         Bind(HotkeyAction.ToggleSelection, s.HkToggleSelection, "开关划词翻译");
         Bind(HotkeyAction.NextProvider, s.HkNextProvider, "切换下一个翻译源");
         Bind(HotkeyAction.CaptureOcr, s.HkCaptureOcr, "截图");
+        Bind(HotkeyAction.TogglePopup, s.HkTogglePopup, "收起/叫回翻译弹窗");
     }
 
     void Bind(HotkeyAction action, string? text, string label)

@@ -163,7 +163,9 @@ public sealed class SettingsService
         s.Opacity = Math.Clamp(s.Opacity, 0.4, 1.0);
         s.MaxParallel = Math.Clamp(s.MaxParallel, 1, 16);
         s.PopupWidth = Math.Clamp(s.PopupWidth, 260, 900);
-        s.PopupMaxHeight = Math.Clamp(s.PopupMaxHeight, 180, 1200);
+        // 上限放到 2400 是为了 4K / 竖屏；实际显示时 PopupWindow 还会按当前屏幕的工作区收一次，
+        // 所以这里夹得比设置页的滑块宽，不会把用户调好的值悄悄改小。
+        s.PopupMaxHeight = Math.Clamp(s.PopupMaxHeight, 180, 2400);
         s.WinWidth = Math.Clamp(s.WinWidth, 380, 2400);
         s.WinHeight = Math.Clamp(s.WinHeight, 260, 1800);
         s.TypeDelayMs = Math.Clamp(s.TypeDelayMs, 150, 3000);

@@ -18,6 +18,9 @@ public sealed partial class PopupWindow
         text = text.Trim();
         if (text.Length == 0) return;
 
+        // 新翻译一来，之前收起的那个就作废：按收起快捷键该拿到这一次的结果，
+        // 而不是把上一段译文又捞回来。
+        _stashed = false;
         _text = text;
         _result.CopyRequested -= CopyText;
         _result.CopyRequested += CopyText;
@@ -31,22 +34,74 @@ public sealed partial class PopupWindow
 
         Place(anchor);
         Show();
+        // Place 只能按估高摆，高度自适应下真实高度要等测量完才知道，
+        // 上限放宽以后差得更多，摆完得照实际高度再收一次边。
+        ClampIntoWorkArea();
         Activate();
         Run();
     }
 
-    public void HidePopup()
+    /// <summary>
+    /// 设置里的上限能调到比屏幕还高（4K / 竖屏用得上），落到具体某块屏上还得再收一次，
+    /// 不然窗口会伸到任务栏底下去。
+    /// </summary>
+    double CapHeight(Rect work) =>
+        work.Height > 0 ? Math.Max(MinHeight, Math.Min(S.PopupMaxHeight, work.Height - 16))
+                        : S.PopupMaxHeight;
+
+    /// <summary>窗口测完真实高度后，把越过工作区的部分收回来。</summary>
+    void ClampIntoWorkArea()
+    {
+        if (double.IsNaN(Left) || double.IsNaN(Top)) return;
+        var w = ActualWidth > 0 ? ActualWidth : Width;
+        var h = ActualHeight > 0 ? ActualHeight : MinHeight;
+        if (double.IsNaN(w) || double.IsNaN(h)) return;
+
+        var work = ScreenHelper.WorkAreaOf(this);
+        if (work.Width <= 0 || work.Height <= 0) return;
+
+        Left = Math.Clamp(Left, work.Left, Math.Max(work.Left, work.Right - w));
+        Top = Math.Clamp(Top, work.Top, Math.Max(work.Top, work.Bottom - h));
+    }
+
+    /// <summary>用户主动关掉。内容作废，收起快捷键不会再把它叫回来。</summary>
+    public void ClosePopup()
     {
         _cts?.Cancel();
+        _stashed = false;
         if (!IsVisible) return;
         PersistGeometry();
         Hide();
     }
 
+    /// <summary>
+    /// 临时收起。位置、译文、正在跑的翻译都留着（不取消 _cts，
+    /// 收起期间译完了，叫回来直接就是结果），等快捷键再叫回来。
+    /// </summary>
+    public void StashPopup()
+    {
+        if (!IsVisible) return;
+        PersistGeometry();
+        _stashed = true;
+        Hide();
+    }
+
+    /// <summary>有没有被收起、等着叫回来的内容。</summary>
+    public bool CanRestore => _stashed && _text.Length > 0 && !IsVisible;
+
+    /// <summary>把收起的弹窗原样放回来，不重译。没有可恢复的就返回 false。</summary>
+    public bool RestorePopup()
+    {
+        if (!CanRestore) return false;
+        _stashed = false;
+        Show();
+        Activate();
+        return true;
+    }
+
     public void OnSettingsChanged()
     {
         ApplyLayoutSettings();
-        _pin.IsChecked = !S.PopupCloseOnBlur;
         RebuildTabs();
         UpdateLangLabel();
         if (_batch is not null) _result.ShowBatch(_batch, _aggregate);
@@ -58,7 +113,9 @@ public sealed partial class PopupWindow
         _applyingWidth = true;
         Width = S.PopupWidth;
         _applyingWidth = false;
-        MaxHeight = S.PopupMaxHeight;
+        MaxHeight = CapHeight(ScreenHelper.WorkAreaOf(this));
+        var hk = HotkeySpec.Parse(S.HkTogglePopup).ToString();
+        _stashBtn.ToolTip = hk.Length == 0 ? "临时收起（在设置里配快捷键叫回）" : $"临时收起（{hk} 叫回）";
         Opacity = S.Opacity;
         FontSize = S.FontSize;
         if (!string.IsNullOrWhiteSpace(S.FontFamily))
@@ -74,7 +131,10 @@ public sealed partial class PopupWindow
     void Place(Point? anchor)
     {
         var work = ScreenHelper.WorkAreaAt(ScreenHelper.CursorPos(), this);
-        var h = _userResized && !double.IsNaN(S.PopupHeight) ? S.PopupHeight : Math.Min(240, S.PopupMaxHeight);
+
+        MaxHeight = CapHeight(work);
+
+        var h = _userResized && !double.IsNaN(S.PopupHeight) ? S.PopupHeight : Math.Min(360, MaxHeight);
 
         if (_userResized && !double.IsNaN(S.PopupHeight))
         {
@@ -295,7 +355,7 @@ public sealed partial class PopupWindow
     {
         var ctrl = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
 
-        if (e.Key == Key.Escape) { e.Handled = true; HidePopup(); }
+        if (e.Key == Key.Escape) { e.Handled = true; ClosePopup(); }
         else if (ctrl && e.Key == Key.Tab) { e.Handled = true; SelectNext(); }
         else if (ctrl && e.Key == Key.C) { e.Handled = true; CopyResult(); }
         else if (ctrl && e.Key == Key.D) { e.Handled = true; Lookup(_text); }

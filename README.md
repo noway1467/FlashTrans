@@ -38,8 +38,11 @@ tools\publish.cmd small    # 依赖已安装的 .NET 9 Desktop Runtime，体积�
 | `Ctrl+Alt+E` | 翻译剪贴板内容 |
 | `Ctrl+Alt+S` | 开关划词监听 |
 | `Ctrl+Alt+A` | 截图 |
+| `Ctrl+Alt+H` | 收起 / 叫回翻译弹窗 |
 
 弹窗内：`Esc` 关闭 · `Ctrl+Tab` 换源 · `Ctrl+C` 复制译文 · `Ctrl+D` 查欧路词典 · `Ctrl+E` 展开到主窗口 · `Ctrl+1..9` 选标签。
+
+翻译弹窗**只由你自己收**，切到别的软件不会把它关掉。想暂时腾开屏幕按 `Ctrl+Alt+H` 收起，再按一次原样回来（译文和位置都留着，不重新翻译）；期间来了新翻译，收起的那个就作废。`Esc` 或关闭按钮是「不要了」，之后叫不回来。
 
 全部可在「设置 → 快捷键」里改。另可开启「连按两次 Ctrl 唤醒」。
 
@@ -96,7 +99,7 @@ dotnet build tests\FlashTrans.SelfTest -c Release
 tests\FlashTrans.SelfTest\bin\Release\net9.0-windows10.0.19041.0\FlashTrans.SelfTest.exe
 ```
 
-在真实 WPF 环境里把每个窗口、每个设置页都构造一遍，另外覆盖缓存淘汰、抓屏与 OCR、标注的命中与改形状、长截图的位移计算。不带参数 71 项，`--net` 加上联网的共 79 项。
+在真实 WPF 环境里把每个窗口、每个设置页都构造一遍，另外覆盖缓存淘汰、抓屏与 OCR、标注的命中与改形状、长截图的位移计算。不带参数 75 项，`--net` 加上联网的共 83 项。
 
 其他参数：`--net` 测各源连通性，`--timing` 打出聚合时每个源的耗时，`--shot` 把各窗口和截图工具条渲成 PNG 写到 `shots\`（样式改动只能看图，断言看不出好不好看），`--benchmark` 测启动耗时。
 

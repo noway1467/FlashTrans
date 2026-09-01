@@ -18,7 +18,6 @@ public sealed partial class PopupWindow : Window
     readonly StackPanel _tabStrip = new() { Orientation = Orientation.Horizontal };
     readonly List<(ToggleButton Btn, string? ProviderId)> _tabs = [];
     readonly TextBlock _status = new();
-    readonly ToggleButton _pin;
     readonly TextBlock _langLabel = new();
 
     string _text = "";
@@ -27,6 +26,7 @@ public sealed partial class PopupWindow : Window
     bool _userResized;
     bool _widthPinned;
     bool _applyingWidth;
+    bool _stashed;
     CancellationTokenSource? _cts;
     TranslateBatch? _batch;
 
@@ -61,20 +61,11 @@ public sealed partial class PopupWindow : Window
             UseAeroCaptionButtons = false,
         });
 
-        _pin = PillToggle("钉住", S.PopupCloseOnBlur == false, on =>
-        {
-            S.PopupCloseOnBlur = !on;
-            SettingsService.Instance.Touch();
-        });
-        _pin.ToolTip = "钉住后失去焦点也不关闭";
-
         Content = BuildLayout();
 
         PreviewKeyDown += OnKey;
-        Deactivated += (_, _) =>
-        {
-            if (S.PopupCloseOnBlur && _pin.IsChecked != true) HidePopup();
-        };
+        // 这里以前挂了 Deactivated → HidePopup：切一下别的软件窗口，正在看的译文就没了。
+        // 弹窗现在只由用户自己收：Esc / 关闭按钮 / 收起按钮，或者被下一次翻译顶掉。
         SizeChanged += (_, e) =>
         {
             if (!IsVisible) return;
@@ -148,7 +139,6 @@ public sealed partial class PopupWindow : Window
         bar.Children.Add(left);
 
         var tools = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
-        tools.Children.Add(_pin);
         tools.Children.Add(UiKit.IconButton(UiKit.IconCopy, "复制译文", (_, _) => CopyResult(), 12));
         tools.Children.Add(UiKit.IconButton(UiKit.IconRefresh, "重新翻译", (_, _) =>
         {
@@ -157,7 +147,9 @@ public sealed partial class PopupWindow : Window
             Run();
         }, 12));
         tools.Children.Add(UiKit.IconButton(UiKit.IconExpand, "在主窗口中打开", (_, _) => _host.ExpandToMain(_text), 12));
-        tools.Children.Add(UiKit.IconButton(UiKit.IconClose, "关闭（Esc）", (_, _) => HidePopup(), 12));
+        _stashBtn = UiKit.IconButton(UiKit.IconMinimize, "临时收起", (_, _) => StashPopup(), 12);
+        tools.Children.Add(_stashBtn);
+        tools.Children.Add(UiKit.IconButton(UiKit.IconClose, "关闭（Esc）", (_, _) => ClosePopup(), 12));
         UiKit.SetGrid(tools, col: 1);
         bar.Children.Add(tools);
 
@@ -228,22 +220,5 @@ public sealed partial class PopupWindow : Window
     }
 
     Button _dictBtn = null!;
-
-    ToggleButton PillToggle(string text, bool isChecked, Action<bool> onChange)
-    {
-        var btn = new ToggleButton
-        {
-            Content = text,
-            IsChecked = isChecked,
-            FontSize = 11,
-            Height = 22,
-            Padding = new Thickness(8, 0, 8, 0),
-            Margin = new Thickness(0, 0, 4, 0),
-            Focusable = false,
-        };
-        btn.SetResourceReference(StyleProperty, "ProviderTab");
-        btn.Checked += (_, _) => onChange(true);
-        btn.Unchecked += (_, _) => onChange(false);
-        return btn;
-    }
+    Button _stashBtn = null!;
 }
