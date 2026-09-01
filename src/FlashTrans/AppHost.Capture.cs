@@ -40,6 +40,11 @@ public sealed partial class AppHost
                 await LongShotAsync(picked.Region);
                 return;
             }
+            if (picked.WantsRecord)
+            {
+                await RecordAsync(picked.Region);
+                return;
+            }
             await HandleAsync(picked.Action, picked.Image);
         }
         catch (Exception ex)
@@ -230,6 +235,80 @@ public sealed partial class AppHost
             note = string.IsNullOrEmpty(note) ? "这块区域没滚动，就截到这一屏。" : note;
 
         ShowLongShotPreview(result.Image, note);
+    }
+
+    /// <summary>
+    /// 录制动图：在刚选好的区域上按节拍抓帧，编成 WebP（或 GIF）存进截图目录。
+    ///
+    /// 不弹「另存为」：录完已经等了一段时间，再拦一个对话框太啰嗦。
+    /// 直接存进截图目录，用提示条给个「点一下定位到文件」。
+    /// </summary>
+    async Task RecordAsync(RECT region)
+    {
+        var fps = RecordService.ClampFps(S.RecordFps);
+        var maxSec = RecordService.ClampSeconds(S.RecordMaxSeconds);
+
+        var hud = new RecordHud(region, maxSec);
+        hud.Show();
+
+        // 蒙层刚关，还没真从屏幕上下去。不等一下，头几帧录进去的是那层黑蒙层。
+        await Dispatcher.Yield(DispatcherPriority.Render);
+        await Task.Delay(250);
+
+        RecordFrames? frames = null;
+        try
+        {
+            frames = await RecordService.RunAsync(region, fps, maxSec,
+                onProgress: hud.Report,
+                cancelled: () => hud.Stopped);
+
+            if (frames.Stopped == RecordStop.Failed || frames.Paths.Count == 0)
+            {
+                Toast("录制没成功，一帧都没抓到");
+                return;
+            }
+
+            hud.ReportEncoding(frames.Paths.Count);
+            var result = await AnimEncoder.SaveAsync(
+                frames.Paths, UniqueRecordPath(), frames.EffectiveFps > 0
+                    ? (int)Math.Round(frames.EffectiveFps) : fps,
+                S.RecordFormat);
+
+            var note = result.FellBackToGif ? "（没找到 img2webp，存成了 GIF）" : "";
+            Toast($"已保存：{Path.GetFileName(result.Path)}"
+                  + $"（{Mb(result.Bytes)} · {frames.Paths.Count} 帧 · "
+                  + $"{frames.EffectiveFps:0.#} fps）{note}",
+                () => RevealInExplorer(result.Path));
+        }
+        catch (Exception ex)
+        {
+            Log.Error("录制失败", ex);
+            Toast("录制失败：" + ex.Message);
+        }
+        finally
+        {
+            hud.Close();
+            frames?.Cleanup();
+        }
+    }
+
+    static string Mb(long bytes) =>
+        bytes >= 1024 * 1024 ? $"{bytes / 1024.0 / 1024.0:0.#} MB" : $"{bytes / 1024.0:0} KB";
+
+    /// <summary>
+    /// 录制文件的路径，不带扩展名——真正存成什么后缀要等编码完才知道
+    /// （要 WebP 但没有 img2webp 时会退回 GIF）。
+    /// 两种后缀都占用了才算重名，免得 a.webp 存在时把 a.gif 也顶掉。
+    /// </summary>
+    static string UniqueRecordPath()
+    {
+        var dir = CaptureDir();
+        Directory.CreateDirectory(dir);
+        var stem = $"闪译录制 {DateTime.Now:yyyy-MM-dd HHmmss}";
+        var path = Path.Combine(dir, stem);
+        for (var i = 2; File.Exists(path + ".webp") || File.Exists(path + ".gif"); i++)
+            path = Path.Combine(dir, $"{stem}({i})");
+        return path;
     }
 
     /// <summary>弹长图预览。用户在这儿挑存哪儿、要不要识别。</summary>

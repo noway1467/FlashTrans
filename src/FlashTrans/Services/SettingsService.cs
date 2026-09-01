@@ -176,6 +176,8 @@ public sealed class SettingsService
         s.CapturePenWidth = CaptureLimits.ClampPenWidth(s.CapturePenWidth);
         s.CaptureFontSize = CaptureLimits.ClampFontSize(s.CaptureFontSize);
         s.CaptureMosaicBlock = CaptureLimits.ClampMosaicBlock(s.CaptureMosaicBlock);
+        s.RecordFps = RecordService.ClampFps(s.RecordFps);
+        s.RecordMaxSeconds = RecordService.ClampSeconds(s.RecordMaxSeconds);
     }
 
     static void Encrypt(AppSettings s)

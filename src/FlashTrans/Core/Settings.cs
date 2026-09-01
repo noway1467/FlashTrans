@@ -24,6 +24,20 @@ public enum CaptureAction
     OcrTranslate,
 }
 
+/// <summary>录制出来的动图存成什么格式。</summary>
+public enum RecordFormat
+{
+    /// <summary>
+    /// 动图 WebP。同样画面比 GIF 小一个数量级，而且不会被砍成 256 色——
+    /// 录代码、录界面时 GIF 的色阶断层很明显。
+    /// 代价是要有 img2webp.exe，WPF/WIC 里根本没有 WebP 编码器（见 AnimEncoder）。
+    /// 找不到那个程序时自动退回 Gif，不会让用户白录一遍。
+    /// </summary>
+    Webp,
+    /// <summary>动图 GIF。谁都打得开，而且自己就能编，不依赖外部程序。</summary>
+    Gif,
+}
+
 public sealed class AppSettings
 {
     /// <summary>配置结构版本，用于升级时补默认值，见 SettingsService.Migrate。</summary>
@@ -143,6 +157,19 @@ public sealed class AppSettings
     /// <summary>文字标注用斜体。</summary>
     public bool CaptureFontItalic { get; set; }
 
+    // ------- 录制动图 -------
+    /// <summary>
+    /// 每秒录几帧。一帧要走一次 BitBlt 加一次 PNG 编码，调太高界面自己会卡，
+    /// 反过来拉低了实际帧率，得不到更流畅的图；而且体积基本按帧数线性涨。
+    /// </summary>
+    public int RecordFps { get; set; } = 10;
+    /// <summary>
+    /// 最长录多少秒，到点自己停。这是给「按了开始就走开」兜底的：
+    /// 没有上限的话回来会发现攒了几百兆的临时帧。
+    /// </summary>
+    public int RecordMaxSeconds { get; set; } = 30;
+    public RecordFormat RecordFormat { get; set; } = RecordFormat.Webp;
+
     // ------- 截图工具条上的键 -------
     // 这些是蒙层里的键，不是全局热键，所以允许不带修饰键（蒙层期间没别人抢键盘）。
     // 留空 = 这个功能没有键，只能点工具条。
@@ -160,6 +187,8 @@ public sealed class AppSettings
     public string CkOcr { get; set; } = "Ctrl+D";
     public string CkOcrTranslate { get; set; } = "Ctrl+Shift+D";
     public string CkLongShot { get; set; } = "Ctrl+L";
+    /// <summary>开始录制动图。</summary>
+    public string CkRecord { get; set; } = "Ctrl+R";
 
     // ------- 截图 OCR -------
     /// <summary>识别语言。空 = 跟着「源语言」，源语言是自动时用系统装的第一个 OCR 包。</summary>

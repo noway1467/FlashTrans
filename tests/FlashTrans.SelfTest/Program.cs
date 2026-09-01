@@ -38,6 +38,7 @@ static class Program
         UiProbe.RunAll(host, Step);
         OcrProbe.RunAll(Step);
         LongShotProbe.RunAll(Step);
+        RecordProbe.RunAll(Step);
 
         if (args.Contains("--net")) NetProbe.Run(Step);
         if (args.Contains("--timing")) TimingProbe.Run();

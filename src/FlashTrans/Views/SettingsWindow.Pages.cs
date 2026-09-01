@@ -101,7 +101,7 @@ public sealed partial class SettingsWindow
 
         Section(page, "截图",
             Hint($"{press} 后框选一块区域，选区下面会出来工具条：矩形、圆、箭头、画笔、马赛克、"
-                 + "文字，还有复制、保存、识别文字、识别并翻译、长截图。"),
+                 + "文字，还有复制、保存、识别文字、识别并翻译、长截图、录制动图。"),
             Field("按回车时", Combo(new (string, CaptureAction)[]
             {
                 ("复制到剪贴板", CaptureAction.Copy),
@@ -114,6 +114,25 @@ public sealed partial class SettingsWindow
             Check("点保存时先问存到哪儿", S.CaptureSaveAsk, on => S.CaptureSaveAsk = on,
                 "关掉就直接存进上面那个目录，不打断"),
             LeftRow(SmallButton("试一下", () => _ = TryCaptureAsync())));
+
+        Section(page, "录制动图",
+            Hint("框选之后点工具条上的「录制」，那块区域开始录，`Esc` 或者点浮条停下。"
+                 + "录的是实时画面，不是刚才那张定格图——画的标注不会进动图。"
+                 + "存进上面那个保存目录。"),
+            Field("格式", Combo(new (string, RecordFormat)[]
+            {
+                ("WebP（体积小很多）", RecordFormat.Webp),
+                ("GIF（谁都打得开）", RecordFormat.Gif),
+            }, S.RecordFormat, v => S.RecordFormat = v, width: 230),
+                Img2WebpNote()),
+            Field("帧率", SliderRow(S.RecordFps,
+                    RecordService.MinFps, RecordService.MaxFps, 1,
+                    v => S.RecordFps = (int)Math.Round(v), v => $"{v:F0} fps"),
+                "调太高界面自己会卡，反而录不满这个帧率；体积基本按帧数线性涨"),
+            Field("最长", SliderRow(S.RecordMaxSeconds,
+                    RecordService.MinSeconds, RecordService.MaxSeconds, 1,
+                    v => S.RecordMaxSeconds = (int)Math.Round(v), v => $"{v:F0} 秒"),
+                "到点自己停，给「按了开始就走开」兜底"));
 
         Section(page, "画笔",
             Hint("这儿设的是每次截图的起始值。真正画的时候在工具条上随时能改："
@@ -162,7 +181,8 @@ public sealed partial class SettingsWindow
             CaptureKeyField("保存", S.CkSave, v => S.CkSave = v),
             CaptureKeyField("识别文字", S.CkOcr, v => S.CkOcr = v),
             CaptureKeyField("识别并翻译", S.CkOcrTranslate, v => S.CkOcrTranslate = v),
-            CaptureKeyField("长截图", S.CkLongShot, v => S.CkLongShot = v));
+            CaptureKeyField("长截图", S.CkLongShot, v => S.CkLongShot = v),
+            CaptureKeyField("录制动图", S.CkRecord, v => S.CkRecord = v));
 
         Section(page, "文字识别", BuildOcrRows());
 
@@ -190,6 +210,16 @@ public sealed partial class SettingsWindow
                 "图片和文字一起进剪贴板，粘到哪儿由对方挑"),
         ];
     }
+
+    /// <summary>
+    /// 格式那一栏底下的说明。WebP 要靠外部的 img2webp.exe，
+    /// 装没装直接影响会存成什么，所以这里如实说现在是哪种情况。
+    /// </summary>
+    static string Img2WebpNote()
+        => AnimEncoder.WebpAvailable
+            ? "WebP 可用。同样画面通常比 GIF 小一个数量级，而且不会被砍成 256 色"
+            : $"没找到 {AnimEncoder.Img2WebpRelative}，选 WebP 也会存成 GIF。"
+              + "把它放到那个位置就能出真 WebP";
 
     /// <summary>
     /// 保存目录：输入框加两个按钮。
