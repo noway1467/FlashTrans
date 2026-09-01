@@ -42,6 +42,8 @@ static class RecordProbe
         step("录制：选区宽高吸到偶数（H.264 要求）", SnapEvenProbe);
         step("录制：暂停键要「刚按下」才翻转，按住不会来回切", PauseChordProbe);
         step("录制：真编 MP4，容器和时长都对", Mp4RealProbe);
+        step("录制：MP4 从 WPF 界面线程也能编", Mp4UiProbe);
+        step("录制：MP4 失败不留下空文件或额外 WebP", Mp4FailureCleanupProbe);
         step("录制：MP4 码率和偶数化的算法", Mp4MathProbe);
     }
 
@@ -655,6 +657,21 @@ static class RecordProbe
         };
     }
 
+    static CapturedImage FakeCapture(RECT region)
+    {
+        var width = Math.Max(2, region.Right - region.Left);
+        var height = Math.Max(2, region.Bottom - region.Top);
+        var pixels = new byte[width * height * 4];
+        for (var i = 0; i < pixels.Length; i += 4)
+        {
+            pixels[i] = 0x40;
+            pixels[i + 1] = 0x80;
+            pixels[i + 2] = 0xC0;
+            pixels[i + 3] = 0xFF;
+        }
+        return new CapturedImage(width, height, pixels);
+    }
+
     /// <summary>
     /// 暂停期间一帧都不该抓，恢复之后还能接着抓。
     ///
@@ -669,7 +686,8 @@ static class RecordProbe
         {
             var run = RecordService.RunAsync(SmallRegion(), fps: 10, maxSeconds: 10,
                 onProgress: (n, _) => frames = n,
-                paused: () => Volatile.Read(ref paused));
+                paused: () => Volatile.Read(ref paused),
+                capture: FakeCapture);
 
             // 录够几帧再按暂停
             while (Volatile.Read(ref frames) < 3) await Task.Delay(20);
@@ -715,7 +733,8 @@ static class RecordProbe
         var r = Task.Run(async () =>
         {
             var run = RecordService.RunAsync(SmallRegion(), fps: 10, maxSeconds: 3,
-                paused: () => Volatile.Read(ref paused));
+                paused: () => Volatile.Read(ref paused),
+                capture: FakeCapture);
             await Task.Delay(300);
             Volatile.Write(ref paused, true);
             await Task.Delay(700);
@@ -751,7 +770,8 @@ static class RecordProbe
             var run = RecordService.RunAsync(SmallRegion(), fps: 10, maxSeconds: 60,
                 onProgress: (n, _) => frames = n,
                 paused: () => Volatile.Read(ref frames) >= 2,   // 录到 2 帧就一直暂停着
-                maxPausedMs: 300);
+                maxPausedMs: 300,
+                capture: FakeCapture);
             return await run;
         }).GetAwaiter().GetResult();
 
@@ -892,6 +912,64 @@ static class RecordProbe
                 $"时长不对：{seconds:0.00} 秒（10 帧 10 fps 该是 1 秒左右）");
             Console.WriteLine($"       MP4 {res.Bytes / 1024.0:0} KB，时长 {seconds:0.00}s，"
                               + $"盒子：{string.Join(" ", boxes.Take(6))}");
+        }
+        finally { Wipe(dir); }
+    }
+
+    static void Mp4UiProbe()
+    {
+        if (!Mp4Encoder.Available) return;
+
+        var (dir, paths) = WriteFrames(10);
+        try
+        {
+            var dispatcher = System.Windows.Threading.Dispatcher.CurrentDispatcher;
+            SynchronizationContext.SetSynchronizationContext(
+                new System.Windows.Threading.DispatcherSynchronizationContext(dispatcher));
+            var task = AnimEncoder.SaveAsync(
+                paths, Path.Combine(dir, "ui-out"), fps: 10, RecordFormat.Mp4);
+            var frame = new System.Windows.Threading.DispatcherFrame();
+            task.ContinueWith(_ => frame.Continue = false,
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.FromCurrentSynchronizationContext());
+            System.Windows.Threading.Dispatcher.PushFrame(frame);
+
+            var res = task.GetAwaiter().GetResult();
+            Need(res.Format == RecordFormat.Mp4 && !res.FellBack,
+                $"UI 线程转码退档：{res.Format}（{res.FellBackWhy}）");
+            Need(res.Bytes > 0 && new FileInfo(res.Path).Length == res.Bytes,
+                "UI 线程转码输出为空或大小不一致");
+            var (boxes, seconds) = WalkMp4(File.ReadAllBytes(res.Path));
+            Need(boxes.Contains("moov") && boxes.Contains("mdat"),
+                "UI 线程转码缺少 MP4 数据盒子");
+            Need(seconds is >= 0.5 and <= 2.0,
+                $"UI 线程转码时长不对：{seconds:0.00} 秒");
+        }
+        finally { Wipe(dir); }
+    }
+
+    static void Mp4FailureCleanupProbe()
+    {
+        if (!Mp4Encoder.Available) return;
+
+        var (dir, paths) = WriteFrames(1);
+        paths.Add(Path.Combine(dir, "missing-frame.png"));
+        var outNoExt = Path.Combine(dir, "failed-output");
+        try
+        {
+            try
+            {
+                Task.Run(() => AnimEncoder.SaveAsync(
+                    paths, outNoExt, fps: 10, RecordFormat.Mp4))
+                    .GetAwaiter().GetResult();
+                throw new InvalidOperationException("无效帧没有让 MP4 编码失败");
+            }
+            catch (InvalidOperationException) { }
+
+            Need(!File.Exists(outNoExt + ".mp4"), "MP4 失败后留下了最终文件");
+            Need(!File.Exists(outNoExt + ".mp4.part"), "MP4 失败后留下了临时文件");
+            Need(!File.Exists(outNoExt + ".webp"), "MP4 失败后偷偷生成了 WebP");
         }
         finally { Wipe(dir); }
     }

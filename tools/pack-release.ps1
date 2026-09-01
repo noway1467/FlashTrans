@@ -1,12 +1,12 @@
 # Zips the published folders in dist\ into release archives.
-#   powershell -NoProfile -File tools\pack-release.ps1 [-Version 1.5.0]
+#   powershell -NoProfile -File tools\pack-release.ps1 [-Version 1.7.1]
 #
 # Why zip the folder instead of shrinking the exe: single-file compression
 # (EnableCompressionInSingleFile) gets the exe to ~62MB but pushes cold start
 # from ~0.4s to 1.8-2.8s, because the whole bundle has to be inflated to a temp
 # dir on every launch. A zip costs the user one extraction and keeps the fast
 # start. Downloads are the same size either way.
-param([string]$Version = '1.5.0')
+param([string]$Version = '1.7.1')
 
 $ErrorActionPreference = 'Stop'
 # $PSScriptRoot is empty when the script is piped in on stdin - fall back to cwd,

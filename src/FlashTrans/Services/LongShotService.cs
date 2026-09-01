@@ -167,13 +167,33 @@ public static class LongShotService
     internal static int FindShift(CapturedImage prev, CapturedImage next, int bandTop)
     {
         if (prev.Width != next.Width || prev.Height != next.Height) return -1;
+        if (Same(prev, next)) return 0;
 
-        // 位移 d 意味着 prev 的第 y 行跑到了 next 的第 y-d 行。
-        // 从小到大试，先中的那个才是真位移——从大处试起会在重复内容
-        // （等距的行、纯色块）上认成滚了好几屏。
-        for (var d = 0; d <= bandTop; d++)
-            if (BandMatches(prev, bandTop, next, bandTop - d, prev.Width)) return d;
-        return -1;
+        var bottom = prev.Height - Band;
+        if (bottom < Band) return -1;
+
+        var start = Math.Clamp(bandTop, Band, bottom);
+        var votes = new Dictionary<int, int>();
+        var step = Math.Max(1, Band / 2);
+        var anchors = new HashSet<int>();
+
+        for (var t = start; t >= Band; t -= step)
+            if (BandHasVariation(prev, t)) anchors.Add(t);
+        if (BandHasVariation(prev, bottom)) anchors.Add(bottom);
+
+        foreach (var t in anchors)
+        {
+            var maxShift = Math.Min(t, bottom);
+            for (var d = 1; d <= maxShift; d++)
+            {
+                if (!BandMatches(prev, t, next, t - d, prev.Width)) continue;
+                votes[d] = votes.TryGetValue(d, out var count) ? count + 1 : 1;
+            }
+        }
+
+        if (votes.Count == 0) return -1;
+        var best = votes.MaxBy(pair => pair.Value);
+        return best.Key;
     }
 
     /// <summary>
@@ -191,13 +211,18 @@ public static class LongShotService
         // 只搜底下一小段的话，下方有整屏留白的页面会一条都找不到。
         for (var t = bottom; t >= Band; t -= Band / 2)
         {
-            var varied = 0;
-            for (var i = 2; i < Band; i += 2)
-                if (!RowMatches(img, t, img, t + i, img.Width, RowTolerance)) varied++;
-            if (varied >= 3) return t;
+            if (BandHasVariation(img, t)) return t;
         }
         // 整块都是平的。那也没什么可接的，返回底部让它按「到底了」收场。
         return bottom;
+    }
+
+    static bool BandHasVariation(CapturedImage img, int top)
+    {
+        var varied = 0;
+        for (var i = 2; i < Band; i += 2)
+            if (!RowMatches(img, top, img, top + i, img.Width, RowTolerance)) varied++;
+        return varied >= 3;
     }
 
     static bool BandMatches(CapturedImage a, int ay, CapturedImage b, int by, int w)

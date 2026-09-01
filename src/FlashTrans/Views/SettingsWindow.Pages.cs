@@ -102,6 +102,7 @@ public sealed partial class SettingsWindow
         Section(page, "截图",
             Hint($"{press} 后框选一块区域，选区下面会出来工具条：矩形、圆、箭头、画笔、马赛克、"
                  + "文字，还有复制、保存、识别文字、识别并翻译、长截图、录制动图。"),
+            Hint("长截图会自动向下滚动并拼接；页面滚不动时仍会保留已经截到的内容，按 Esc 可以随时停下。"),
             Field("按回车时", Combo(new (string, CaptureAction)[]
             {
                 ("复制到剪贴板", CaptureAction.Copy),
@@ -216,21 +217,21 @@ public sealed partial class SettingsWindow
     }
 
     /// <summary>
-    /// 格式那一栏底下的说明。WebP 要靠外部的 img2webp.exe、MP4 要靠系统的 H.264
-    /// 编码器，缺哪个都会改存成别的，所以这里如实说这台机器现在是哪种情况。
+    /// 格式那一栏底下的说明。WebP 要靠外部的 img2webp.exe，MP4 要靠系统的 H.264
+    /// 编码器；MP4 失败时不再静默改存另一种格式。
     /// </summary>
     static string FormatNote()
     {
         var notes = new List<string>
         {
-            "实测同样内容 WebP 一般最小，MP4 跟它同一量级、还能拖进度条，GIF 比这两个大一个数量级；"
-            + "动图（WebP/GIF）的好处是在聊天窗口和网页里自动循环播",
+            "WebP 一般体积较小，MP4 可以拖进度条，GIF 兼容性最好但体积较大；"
+            + "选择 MP4 时只生成 MP4，编码失败会提示，不会留下空文件或偷偷改成 WebP",
         };
         if (!AnimEncoder.WebpAvailable)
             notes.Add($"没找到 {AnimEncoder.Img2WebpRelative}，选 WebP 会存成 GIF——"
                       + "这个文件本该随包发布，缺了就是被漏拷了，整个文件夹一起拷就好");
         if (!Mp4Encoder.Available)
-            notes.Add("这台机器上没找到系统的 H.264 编码器（精简版系统会这样），选 MP4 会存成 WebP");
+            notes.Add("这台机器上没找到系统的 H.264 编码器（精简版系统会这样），MP4 当前不可用");
         return string.Join("。", notes);
     }
 

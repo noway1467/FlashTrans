@@ -64,20 +64,20 @@ public static class AnimEncoder
         var dir = Path.GetDirectoryName(outNoExt);
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
 
-        // MP4 走系统自带的 H.264 编码器。它可能不在（N 版、精简版），
-        // 那就退到 WebP 这条；WebP 那条自己还会再退到 GIF。
+        // MP4 走系统自带的 H.264 编码器。编码失败时不能静默改成另一种格式，
+        // 否则用户会同时看到一个空 MP4 和一个自己没选的 WebP。
         if (want == RecordFormat.Mp4)
         {
+            var mp4Path = outNoExt + ".mp4";
             try
             {
-                var m = await Mp4Encoder.SaveAsync(frames, outNoExt + ".mp4", fps);
+                var m = await Mp4Encoder.SaveAsync(frames, mp4Path, fps);
                 return m with { Wanted = want };
             }
             catch (Exception ex)
             {
-                Log.Warn("编 MP4 失败，改存 WebP：" + ex.Message);
-                var f = await SaveWebpOrGifAsync(frames, outNoExt, fps);
-                return f with { Wanted = want, FellBackWhy = "系统没有 H.264 编码器" };
+                Log.Error("编 MP4 失败，未生成替代文件", ex);
+                throw new InvalidOperationException("MP4 编码失败：" + ex.Message, ex);
             }
         }
 
