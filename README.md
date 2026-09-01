@@ -28,7 +28,7 @@ tools\publish.cmd small    # 依赖已安装的 .NET 9 Desktop Runtime，体积�
 
 产物在 `dist\`。打包前先退出正在运行的实例（托盘右键最后一项）。
 
-`fast` 包免安装，但**整个文件夹要一起拷**——单文件发布不会把 WPF 的原生 DLL 塞进 exe，只拿 exe 走会启动失败。两个包都要保留同目录下的 `Assets\app.ico`，托盘图标从它加载。
+`fast` 包免安装，但**整个文件夹要一起拷**——单文件发布不会把 WPF 的原生 DLL 塞进 exe，只拿 exe 走会启动失败。两个包都要保留同目录下的 `Assets\`：`app.ico` 是托盘图标，`tools\img2webp.exe` 是录制动图存 WebP 用的编码器（漏拷它不会崩，但 WebP 会退回 GIF，体积差 20 倍以上）。
 
 ## 默认快捷键
 
@@ -92,7 +92,11 @@ OCR 用的是 Windows 自带的 `Windows.Media.Ocr`，**不联网、不上传、
 
 跟不上目标帧率时（区域大、机器忙）按**实测帧率**写延时，所以回放速度始终是真实速度，不会变成快放。
 
-**格式**：GIF 开箱可用，程序自己编，不依赖外部程序。**WebP 需要额外放一个 `img2webp.exe`** 到 exe 旁边的 `Assets\tools\` 目录——WPF 和 WIC 里没有 WebP 编码器，动图 WebP 还要写 VP8X/ANIM/ANMF 容器块，只能外挂官方工具。没放的话选了 WebP 也会存成 GIF，提示条里会说一声。怎么拿、怎么放见 `src\FlashTrans\Assets\tools\README.txt`。同样画面 WebP 通常比 GIF 小一个数量级，而且不会被砍成 256 色。
+**格式默认 WebP**，比 GIF 小得多：实测同样 10 帧 640×480 的屏幕内容，GIF 1014 KB，WebP 39 KB——**小 26 倍**，而且不会被砍成 256 色（GIF 只有 256 色，录代码和界面时色阶断层很明显）。
+
+WebP 靠 exe 旁边 `Assets\tools\img2webp.exe`（libwebp 官方工具，已随包发布）。WPF 和 WIC 里没有 WebP 编码器，系统从 Win10 1809 起也只带解码器，动图 WebP 还要写 VP8X/ANIM/ANMF 容器块，只能外挂。万一那个文件丢了（比如只拷了个 exe 走），选 WebP 会自动退回 GIF，提示条和设置页都会说一声，不会让你白录一遍。
+
+GIF 那条路是程序自己编的，不碰任何外部程序，要给谁都能打开的文件时用它。
 
 ## 设置与数据
 
@@ -114,7 +118,7 @@ dotnet build tests\FlashTrans.SelfTest -c Release
 tests\FlashTrans.SelfTest\bin\Release\net9.0-windows10.0.19041.0\FlashTrans.SelfTest.exe
 ```
 
-在真实 WPF 环境里把每个窗口、每个设置页都构造一遍，另外覆盖缓存淘汰、抓屏与 OCR、标注的命中与改形状、长截图的位移计算、动图编码（编完解回来逐帧比，验帧序、延时和循环标记）。不带参数 88 项，`--net` 加上联网的共 100 项。
+在真实 WPF 环境里把每个窗口、每个设置页都构造一遍，另外覆盖缓存淘汰、抓屏与 OCR、标注的命中与改形状、长截图的位移计算、动图编码（编完解回来逐帧比，验帧序、延时和循环标记）。不带参数 91 项，`--net` 加上联网的共 103 项。
 
 其他参数：`--net` 测各源连通性，`--timing` 打出聚合时每个源的耗时，`--shot` 把各窗口和截图工具条渲成 PNG 写到 `shots\`（样式改动只能看图，断言看不出好不好看），`--benchmark` 测启动耗时。
 
@@ -124,7 +128,7 @@ WPF / .NET 9 / C#，约 1 万行。Win32 交互（全局热键、低级鼠标键
 
 **依赖**：没有任何第三方库。唯一的非框架引用是微软自己的 Windows SDK 投影，靠目标框架 `net9.0-windows10.0.19041.0` 隐式带进来，只为调用系统的 `Windows.Media.Ocr`。
 
-录制动图存 WebP 时会调一个外部程序 `img2webp.exe`（libwebp，BSD-3-Clause），**它不在发布包里**，要用得自己放，见上面「录制动图」。不放就走 GIF，那条路是程序自己编的，不碰任何外部程序。
+录制动图存 WebP 时会调一个外部程序 `img2webp.exe`（libwebp 1.6.0，BSD-3-Clause，许可证在 `Assets\tools\libwebp-COPYING.txt`）。它是随包发布的独立可执行文件，不是链进程序里的库——删掉它程序照样跑，只是 WebP 会退回 GIF。
 
 ## 许可
 

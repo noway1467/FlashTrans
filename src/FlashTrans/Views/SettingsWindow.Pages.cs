@@ -121,7 +121,7 @@ public sealed partial class SettingsWindow
                  + "存进上面那个保存目录。"),
             Field("格式", Combo(new (string, RecordFormat)[]
             {
-                ("WebP（体积小很多）", RecordFormat.Webp),
+                ("WebP（推荐，体积小得多）", RecordFormat.Webp),
                 ("GIF（谁都打得开）", RecordFormat.Gif),
             }, S.RecordFormat, v => S.RecordFormat = v, width: 230),
                 Img2WebpNote()),
@@ -217,9 +217,9 @@ public sealed partial class SettingsWindow
     /// </summary>
     static string Img2WebpNote()
         => AnimEncoder.WebpAvailable
-            ? "WebP 可用。同样画面通常比 GIF 小一个数量级，而且不会被砍成 256 色"
-            : $"没找到 {AnimEncoder.Img2WebpRelative}，选 WebP 也会存成 GIF。"
-              + "把它放到那个位置就能出真 WebP";
+            ? "WebP 比 GIF 小得多（实测同样内容小 20 倍以上），也不会被砍成 256 色"
+            : $"没找到 {AnimEncoder.Img2WebpRelative}，选 WebP 会存成 GIF。"
+              + "这个文件本该随包发布，缺了就是被漏拷了——整个文件夹一起拷就好";
 
     /// <summary>
     /// 保存目录：输入框加两个按钮。
