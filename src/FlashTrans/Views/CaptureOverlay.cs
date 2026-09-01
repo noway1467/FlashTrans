@@ -18,6 +18,8 @@ public sealed record CaptureOutcome(CaptureAction Action, CapturedImage? Image, 
     public static readonly CaptureOutcome Cancelled = new(CaptureAction.None, null, default);
     /// <summary>用户点了长截图，还没真正截完——宿主要接着走滚动拼接那条路。</summary>
     public bool WantsLongShot { get; init; }
+    /// <summary>用户点了录制，宿主要接着在这块区域上录动图。</summary>
+    public bool WantsRecord { get; init; }
 }
 
 /// <summary>
@@ -170,6 +172,20 @@ public sealed partial class CaptureOverlay : Window
     {
         if (!_layer.HasSelection) return;
         _result = new CaptureOutcome(CaptureAction.None, null, SelectionInScreen()) { WantsLongShot = true };
+        CloseOnce();
+    }
+
+    /// <summary>
+    /// 录制：同样把选区交出去，由宿主在真实屏幕上录。
+    ///
+    /// 画过的标注不会进动图——录的是蒙层关掉之后的实时画面，
+    /// 而标注是画在那张定格图上的。这是应该的：录像要的是接下来发生的事，
+    /// 不是刚才那一瞬间。
+    /// </summary>
+    void FinishRecord()
+    {
+        if (!_layer.HasSelection) return;
+        _result = new CaptureOutcome(CaptureAction.None, null, SelectionInScreen()) { WantsRecord = true };
         CloseOnce();
     }
 

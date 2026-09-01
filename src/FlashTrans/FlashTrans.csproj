@@ -12,7 +12,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>FlashTrans</AssemblyName>
     <RootNamespace>FlashTrans</RootNamespace>
-    <Version>1.5.2</Version>
+    <Version>1.6.0</Version>
     <Product>闪译 FlashTrans</Product>
     <Company>FlashTrans</Company>
     <ApplicationManifest>app.manifest</ApplicationManifest>
@@ -58,6 +58,13 @@
          ArgumentNullException，把整个窗口的 XAML 加载带崩。
          None 只管拷文件，不注册内容文件，pack URI 就老实回退到上面的 Resource。 -->
     <None Include="Assets\app.ico" CopyToOutputDirectory="PreserveNewest" />
+
+    <!-- 录制动图存 WebP 要用的 img2webp.exe，放到 Assets\tools\ 就会被拷到输出目录，
+         没放也不影响编译（通配符匹配不到就是空集）。为什么是外挂一个程序、
+         从哪儿拿，见那个目录里的 README.txt 和 Services\AnimEncoder.cs。
+         许可证跟着一起拷：BSD-3-Clause 要求二次分发时带上。 -->
+    <None Include="Assets\tools\*.exe" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Assets\tools\libwebp-COPYING.txt" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

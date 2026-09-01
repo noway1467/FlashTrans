@@ -43,6 +43,11 @@ public sealed partial class CaptureOverlay
     static readonly Geometry IconLong = Geometry.Parse(
         "M8,2.5 V13.5 M5,5.5 L8,2.5 L11,5.5 M5,10.5 L8,13.5 L11,10.5");
     static readonly Geometry IconCross = Geometry.Parse("M4,4 L12,12 M12,4 L4,12");
+    // 录制：两个同心圆。只画一个圆的话跟上面那个「椭圆」工具一模一样，
+    // 并排摆在一条工具条上分不出谁是谁。
+    static readonly Geometry IconRecord = Geometry.Parse(
+        "M8,3 C10.8,3 13,5.2 13,8 C13,10.8 10.8,13 8,13 C5.2,13 3,10.8 3,8 C3,5.2 5.2,3 8,3 Z "
+        + "M8,6.2 C9,6.2 9.8,7 9.8,8 C9.8,9 9,9.8 8,9.8 C7,9.8 6.2,9 6.2,8 C6.2,7 7,6.2 8,6.2 Z");
 
     readonly List<(CaptureTool Tool, Button Btn)> _toolButtons = [];
     Button? _undoBtn;
@@ -166,6 +171,7 @@ public sealed partial class CaptureOverlay
         row.Children.Add(Sep());
 
         row.Children.Add(ActionBtn("长截图", Tip("往下滚动接着截", S.CkLongShot), FinishLongShot, IconLong));
+        row.Children.Add(ActionBtn("录制", Tip("把这块区域录成动图", S.CkRecord), FinishRecord, IconRecord));
         row.Children.Add(Sep());
 
         row.Children.Add(ActionBtn("识别文字", Tip("识别出来的字直接复制走", S.CkOcr),
@@ -833,6 +839,7 @@ public sealed partial class CaptureOverlay
         yield return (HotkeySpec.Parse(S.CkOcrTranslate), () => Finish(CaptureAction.OcrTranslate));
         yield return (HotkeySpec.Parse(S.CkOcr), () => Finish(CaptureAction.Ocr));
         yield return (HotkeySpec.Parse(S.CkLongShot), FinishLongShot);
+        yield return (HotkeySpec.Parse(S.CkRecord), FinishRecord);
         yield return (HotkeySpec.Parse(S.CkRect), () => ToggleTool(CaptureTool.Rect));
         yield return (HotkeySpec.Parse(S.CkEllipse), () => ToggleTool(CaptureTool.Ellipse));
         yield return (HotkeySpec.Parse(S.CkArrow), () => ToggleTool(CaptureTool.Arrow));
