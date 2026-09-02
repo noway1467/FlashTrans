@@ -6,7 +6,7 @@
 # from ~0.4s to 1.8-2.8s, because the whole bundle has to be inflated to a temp
 # dir on every launch. A zip costs the user one extraction and keeps the fast
 # start. Downloads are the same size either way.
-param([string]$Version = '1.7.1')
+param([string]$Version = '1.7.3')
 
 $ErrorActionPreference = 'Stop'
 # $PSScriptRoot is empty when the script is piped in on stdin - fall back to cwd,

@@ -29,9 +29,12 @@ public sealed class RecordHud : Window
     readonly TextBlock _text;
     readonly TextBlock _hint;
     readonly TextBlock _pauseLabel;
+    readonly TextBlock _muteLabel;
+    readonly Border _muteButton;
     readonly Ellipse _dot;
     readonly RECT _region;
     readonly int _maxSeconds;
+    readonly bool _captureAudio;
     int _ticks;
     /// <summary>Esc 已经松开过一次了，从现在起按下才算「停」。见轮询那段。</summary>
     bool _escArmed;
@@ -48,10 +51,14 @@ public sealed class RecordHud : Window
     /// <summary>正暂停着。录制那边每拍问一次，为 true 就不抓帧、也不走时钟。</summary>
     public bool Paused { get; private set; }
 
-    public RecordHud(RECT region, int maxSeconds)
+    /// <summary>用户按了静音按钮，当前是否静音。</summary>
+    public bool Muted { get; private set; }
+
+    public RecordHud(RECT region, int maxSeconds, bool captureAudio)
     {
         _region = region;
         _maxSeconds = maxSeconds;
+        _captureAudio = captureAudio;
 
         WindowStyle = WindowStyle.None;
         ResizeMode = ResizeMode.NoResize;
@@ -112,6 +119,32 @@ public sealed class RecordHud : Window
             TogglePause();
         };
 
+        _muteLabel = new TextBlock
+        {
+            Text = _captureAudio ? "🔊" : "🔇",
+            FontSize = 13,
+            Foreground = new SolidColorBrush(Color.FromRgb(0xE6, 0xE8, 0xEC)),
+            VerticalAlignment = VerticalAlignment.Center,
+            FontFamily = new FontFamily("Segoe UI Emoji"),
+        };
+
+        _muteButton = new Border
+        {
+            Background = new SolidColorBrush(Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF)),
+            CornerRadius = new CornerRadius(5),
+            Padding = new Thickness(8, 2, 8, 3),
+            Margin = new Thickness(6, 0, 0, 0),
+            Cursor = Cursors.Hand,
+            Child = _muteLabel,
+            ToolTip = "静音 / 取消静音",
+            Visibility = AudioCapture.IsAvailable && _captureAudio ? Visibility.Visible : Visibility.Collapsed,
+        };
+        _muteButton.MouseLeftButtonUp += (_, e) =>
+        {
+            e.Handled = true;
+            ToggleMute();
+        };
+
         _hint = new TextBlock
         {
             Text = $"{PauseHotkey} 暂停 · Esc 停止并保存",
@@ -126,6 +159,7 @@ public sealed class RecordHud : Window
         row.Children.Add(_dot);
         row.Children.Add(_text);
         row.Children.Add(pause);
+        row.Children.Add(_muteButton);
         row.Children.Add(_hint);
 
         Content = new Border
@@ -231,6 +265,17 @@ public sealed class RecordHud : Window
         // 「录制中…」和「已暂停」宽度不一样，SizeToContent 会把浮条往右撑，重新居中一下。
         // Report 那边不这么做：秒数每帧都在变，每帧重摆会看着抖。
         if (IsLoaded) Place();
+    }
+
+    /// <summary>静音 / 取消静音。只有开着音频录制时才显示这个按钮。</summary>
+    internal void ToggleMute()
+    {
+        if (_encoding || Stopped || !_captureAudio) return;
+        Muted = !Muted;
+        _muteLabel.Text = Muted ? "🔇" : "🔊";
+        _muteButton.Background = new SolidColorBrush(Muted
+            ? Color.FromArgb(0x50, 0xFF, 0x3B, 0x30)    // 静音：红底提示
+            : Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF));
     }
 
     /// <summary>

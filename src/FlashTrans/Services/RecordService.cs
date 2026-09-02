@@ -29,6 +29,8 @@ public sealed record RecordFrames(
     /// <summary>暂停了几次、一共暂停了多久。只用来在提示里说一声。</summary>
     public int Pauses { get; init; }
     public TimeSpan PausedFor { get; init; }
+    /// <summary>音频文件路径（录制 MP4 且开启了音频录制时才有）。</summary>
+    public string? AudioPath { get; init; }
 
     public void Cleanup()
     {
@@ -95,6 +97,8 @@ public static class RecordService
     /// 在 region（屏幕物理像素）上录。
     /// onProgress 每抓一帧调一次，参数是帧数和已经录了多久（不含暂停掉的时间）。
     /// cancelled 返回 true 就停；paused 返回 true 就挂着不抓帧。
+    /// captureAudio 为 true 时同时录制系统音频（只对 MP4 有效）。
+    /// muted 每拍问一次，返回 true 就把音频拧成无声（照样写，不然音画会错位）。
     /// </summary>
     public static async Task<RecordFrames> RunAsync(
         RECT region, int fps, int maxSeconds,
@@ -102,7 +106,9 @@ public static class RecordService
         Func<bool>? cancelled = null,
         Func<bool>? paused = null,
         int? maxPausedMs = null,
-        Func<RECT, CapturedImage?>? capture = null)
+        Func<RECT, CapturedImage?>? capture = null,
+        bool captureAudio = false,
+        Func<bool>? muted = null)
     {
         // 默认那道闸是 10 分钟，自测等不了；留个口子让它传小值进来。
         var pauseLimit = maxPausedMs ?? MaxPausedMinutes * 60_000;
@@ -118,6 +124,33 @@ public static class RecordService
         var maxFrames = Math.Max(1, fps * maxSeconds);
         var stop = RecordStop.Limit;
         double firstAt = 0, lastAt = 0;
+
+        // 音频录制
+        AudioCapture? audioCapture = null;
+        string? audioPath = null;
+        if (captureAudio)
+        {
+            try
+            {
+                audioPath = Path.Combine(dir, "audio.m4a");
+                audioCapture = new AudioCapture();
+                var audioErr = await audioCapture.StartAsync(audioPath);
+                if (audioErr is not null)
+                {
+                    Log.Warn("音频录制启动失败：" + audioErr);
+                    audioCapture.Dispose();
+                    audioCapture = null;
+                    audioPath = null;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("音频录制启动异常：" + ex.Message);
+                audioCapture?.Dispose();
+                audioCapture = null;
+                audioPath = null;
+            }
+        }
 
         // 所有调度都走「活动时钟」= 墙上时钟 - 暂停掉的时间。这样两件事同时成立：
         // 回放是连续的（暂停期间不抓帧，动图里不会多出一段静止画面），
@@ -149,6 +182,8 @@ public static class RecordService
                     stop = RecordStop.PausedTooLong;
                     break;
                 }
+                // 画面不抓了，声音也得停住，不然音频比视频长一截，恢复之后全错位。
+                audioCapture?.SetPaused(true);
                 // 暂停时用固定的短间隔轮询，跟帧率无关——2 fps 下也要一按就恢复。
                 await Task.Delay(50);
                 continue;
@@ -158,7 +193,12 @@ public static class RecordService
                 // 刚恢复：把这一段计进暂停总时长。
                 pausedMs += sw.Elapsed.TotalMilliseconds - pauseAt;
                 pauseAt = -1;
+                audioCapture?.SetPaused(false);
             }
+
+            // 静音是每拍问一次的：用户录到一半点了那个按钮，这里才看得见。
+            if (audioCapture is not null && muted is not null)
+                audioCapture.SetMuted(muted());
 
             // 按绝对时刻等，不是「每次睡 interval」——后者会把每帧的处理时间
             // 累加进去，录 30 秒实际只录到 20 秒的内容。
@@ -205,16 +245,39 @@ public static class RecordService
         if (pauseAt >= 0) pausedMs += sw.Elapsed.TotalMilliseconds - pauseAt;
         sw.Stop();
 
+        // 停止音频录制
+        if (audioCapture is not null)
+        {
+            try
+            {
+                var audioErr = await audioCapture.StopAsync();
+                if (audioErr is not null)
+                {
+                    Log.Warn("音频录制停止失败：" + audioErr);
+                    audioPath = null;   // 文件可能是坏的，不交出去
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("音频录制停止异常：" + ex.Message);
+                audioPath = null;
+            }
+            finally
+            {
+                audioCapture.Dispose();
+            }
+        }
+
         var active = TimeSpan.FromMilliseconds(Math.Max(0, sw.Elapsed.TotalMilliseconds - pausedMs));
         var pausedFor = TimeSpan.FromMilliseconds(pausedMs);
 
         if (paths.Count == 0)
             return new RecordFrames(dir, paths, TimeSpan.Zero, fps, RecordStop.Failed)
-            { Pauses = pauses, PausedFor = pausedFor };
+            { Pauses = pauses, PausedFor = pausedFor, AudioPath = audioPath };
 
         return new RecordFrames(dir, paths, active,
             Effective(paths.Count, firstAt, lastAt, fps), stop)
-        { Pauses = pauses, PausedFor = pausedFor };
+        { Pauses = pauses, PausedFor = pausedFor, AudioPath = audioPath };
     }
 
     /// <summary>

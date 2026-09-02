@@ -182,6 +182,8 @@ public sealed class AppSettings
     /// 单独一个设置是因为录屏文件比截图大得多，常有人想把它扔到别的盘。
     /// </summary>
     public string RecordSaveDir { get; set; } = "";
+    /// <summary>录制 MP4 时是否录制系统声音（扬声器输出）。</summary>
+    public bool RecordAudio { get; set; } = true;
 
     // ------- 截图工具条上的键 -------
     // 这些是蒙层里的键，不是全局热键，所以允许不带修饰键（蒙层期间没别人抢键盘）。

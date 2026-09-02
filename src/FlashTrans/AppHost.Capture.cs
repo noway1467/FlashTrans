@@ -254,8 +254,9 @@ public sealed partial class AppHost
     {
         var fps = RecordService.ClampFps(S.RecordFps);
         var maxSec = RecordService.ClampSeconds(S.RecordMaxSeconds);
+        var captureAudio = S.RecordAudio && S.RecordFormat == RecordFormat.Mp4;
 
-        var hud = new RecordHud(region, maxSec);
+        var hud = new RecordHud(region, maxSec, captureAudio);
         hud.Show();
 
         // 蒙层刚关，还没真从屏幕上下去。不等一下，头几帧录进去的是那层黑蒙层。
@@ -268,7 +269,9 @@ public sealed partial class AppHost
             frames = await RecordService.RunAsync(region, fps, maxSec,
                 onProgress: hud.Report,
                 cancelled: () => hud.Stopped,
-                paused: () => hud.Paused);
+                paused: () => hud.Paused,
+                captureAudio: captureAudio,
+                muted: () => hud.Muted);
 
             if (frames.Stopped == RecordStop.Failed || frames.Paths.Count == 0)
             {
@@ -280,7 +283,7 @@ public sealed partial class AppHost
             var result = await AnimEncoder.SaveAsync(
                 frames.Paths, UniqueRecordPath(), frames.EffectiveFps > 0
                     ? (int)Math.Round(frames.EffectiveFps) : fps,
-                S.RecordFormat);
+                S.RecordFormat, frames.AudioPath);
 
             var note = result.FellBack
                 ? $"（{result.FellBackWhy}，存成了 {result.Format.ToString().ToUpperInvariant()}）"
