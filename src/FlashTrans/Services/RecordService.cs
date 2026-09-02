@@ -132,7 +132,7 @@ public static class RecordService
         {
             try
             {
-                audioPath = Path.Combine(dir, "audio.m4a");
+                audioPath = Path.Combine(dir, "audio.wav");
                 audioCapture = new AudioCapture();
                 var audioErr = await audioCapture.StartAsync(audioPath);
                 if (audioErr is not null)
