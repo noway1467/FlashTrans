@@ -153,7 +153,7 @@ public static class Mp4Encoder
             // 填好宽高帧率码率，事后改 profile.Video 的字段不一定被采纳。
             var profile = new MediaEncodingProfile { Container = new ContainerEncodingProperties() };
             profile.Container.Subtype = MediaEncodingSubtypes.Mpeg4;
-            profile.Audio = null;   // 只录画面，不录声音（音频单独录制到 .m4a）
+            profile.Audio = null;   // 只录画面，不录声音（音频单独录制到 .wav）
 
             var video = VideoEncodingProperties.CreateH264();
             video.Width = (uint)w;
@@ -288,7 +288,7 @@ public static class Mp4Encoder
     /// 合成音频和视频到一个 MP4 文件。
     ///
     /// videoPath: 纯视频的 MP4 文件（从 MediaStreamSource 转码出来的）
-    /// audioPath: 音频文件（.m4a，AAC 编码）
+    /// audioPath: 系统声音文件（.wav，PCM）
     /// outPath: 合成后的输出文件
     ///
     /// 使用 MediaComposition 来合并音视频轨。这是 WinRT 提供的高层 API，

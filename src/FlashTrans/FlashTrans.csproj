@@ -12,7 +12,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>FlashTrans</AssemblyName>
     <RootNamespace>FlashTrans</RootNamespace>
-    <Version>1.7.3</Version>
+    <Version>1.7.4</Version>
     <Product>闪译 FlashTrans</Product>
     <Company>FlashTrans</Company>
     <ApplicationManifest>app.manifest</ApplicationManifest>

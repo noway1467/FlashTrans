@@ -39,6 +39,7 @@ static class Program
         OcrProbe.RunAll(Step);
         LongShotProbe.RunAll(Step);
         RecordProbe.RunAll(Step);
+        Step("录制：MP4 包含系统声音音轨", AudioMp4Probe.Run);
 
         if (args.Contains("--net")) NetProbe.Run(Step);
         if (args.Contains("--timing")) TimingProbe.Run();
