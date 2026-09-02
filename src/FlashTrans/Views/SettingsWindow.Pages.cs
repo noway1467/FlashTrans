@@ -114,6 +114,7 @@ public sealed partial class SettingsWindow
                 ("MP4", RecordFormat.Mp4),
             }, S.RecordFormat, v => S.RecordFormat = v, width: 260),
                 FormatNote()),
+            Check("录制声音", S.RecordAudio, on => S.RecordAudio = on, AudioNote()),
             Field("保存到", RecordDirRow(), "留空跟截图放一起"),
             Field("帧率", SliderRow(S.RecordFps,
                     RecordService.MinFps, RecordService.MaxFps, 1,
@@ -193,6 +194,15 @@ public sealed partial class SettingsWindow
             notes.Add("这台机器没有系统 H.264 编码器，MP4 用不了");
         return notes.Count == 0 ? null : string.Join("。", notes);
     }
+
+    /// <summary>
+    /// 录音开关的说明。默认开，但 WebP / GIF 不支持音轨；
+    /// 找不到渲染设备时提前说一句，比录完才发现只有画面好。
+    /// </summary>
+    static string AudioNote()
+        => AudioCapture.IsAvailable
+            ? "只对 MP4 生效，录的是扬声器输出"
+            : "没找到音频输出设备，可能录不到声音";
 
     /// <summary>截图保存目录。</summary>
     UIElement SaveDirRow()

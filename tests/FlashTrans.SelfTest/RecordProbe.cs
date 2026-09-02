@@ -347,7 +347,7 @@ static class RecordProbe
     static void HudProbe()
     {
         var region = new RECT { Left = 100, Top = 100, Right = 400, Bottom = 300 };
-        var hud = new RecordHud(region, maxSeconds: 30);
+        var hud = new RecordHud(region, maxSeconds: 30, captureAudio: false);
         try
         {
             hud.ShowInTaskbar = false;
@@ -383,7 +383,7 @@ static class RecordProbe
     /// </summary>
     static void EscArmProbe()
     {
-        var hud = new RecordHud(new RECT { Left = 0, Top = 0, Right = 100, Bottom = 100 }, 30);
+        var hud = new RecordHud(new RECT { Left = 0, Top = 0, Right = 100, Bottom = 100 }, 30, captureAudio: false);
         try
         {
             Need(!hud.Stopped, "刚建出来不该是已停止");
@@ -860,7 +860,7 @@ static class RecordProbe
     /// </summary>
     static void PauseChordProbe()
     {
-        var hud = new RecordHud(SmallRegion(), 30);
+        var hud = new RecordHud(SmallRegion(), 30, captureAudio: false);
         try
         {
             hud.Show();

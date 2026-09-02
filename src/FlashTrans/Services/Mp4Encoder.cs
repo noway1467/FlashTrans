@@ -90,7 +90,7 @@ public static class Mp4Encoder
     }
 
     public static async Task<AnimResult> SaveAsync(
-        IReadOnlyList<string> frames, string outPath, int fps)
+        IReadOnlyList<string> frames, string outPath, int fps, string? audioPath = null)
     {
         if (frames.Count == 0) throw new InvalidOperationException("没有帧可以编码。");
         fps = Math.Max(1, fps);
@@ -153,7 +153,7 @@ public static class Mp4Encoder
             // 填好宽高帧率码率，事后改 profile.Video 的字段不一定被采纳。
             var profile = new MediaEncodingProfile { Container = new ContainerEncodingProperties() };
             profile.Container.Subtype = MediaEncodingSubtypes.Mpeg4;
-            profile.Audio = null;   // 只录画面，不录声音
+            profile.Audio = null;   // 只录画面，不录声音（音频单独录制到 .m4a）
 
             var video = VideoEncodingProperties.CreateH264();
             video.Width = (uint)w;
@@ -191,6 +191,28 @@ public static class Mp4Encoder
             var info = new FileInfo(tempPath);
             if (!info.Exists || info.Length == 0)
                 throw new InvalidOperationException("转码跑完了但文件是空的。");
+
+            // 如果有音频文件，需要合成音视频
+            if (!string.IsNullOrEmpty(audioPath) && File.Exists(audioPath))
+            {
+                var muxedPath = tempPath + ".muxed.mp4";
+                try
+                {
+                    await MuxAudioVideoAsync(tempPath, audioPath, muxedPath);
+                    File.Delete(tempPath);  // 删除只有视频的临时文件
+                    File.Move(muxedPath, finalPath, overwrite: true);
+                    var muxedInfo = new FileInfo(finalPath);
+                    return new AnimResult(finalPath, RecordFormat.Mp4, muxedInfo.Length);
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn("音视频合成失败，保存纯视频文件：" + ex.Message);
+                    // 合成失败，退回到纯视频
+                    if (File.Exists(muxedPath)) File.Delete(muxedPath);
+                    File.Move(tempPath, finalPath, overwrite: true);
+                    return new AnimResult(finalPath, RecordFormat.Mp4, info.Length);
+                }
+            }
 
             File.Move(tempPath, finalPath, overwrite: true);
             return new AnimResult(finalPath, RecordFormat.Mp4, info.Length);
@@ -260,5 +282,40 @@ public static class Mp4Encoder
             System.Buffer.BlockCopy(bytes, bottom, bytes, top, stride);
             System.Buffer.BlockCopy(row, 0, bytes, bottom, stride);
         }
+    }
+
+    /// <summary>
+    /// 合成音频和视频到一个 MP4 文件。
+    ///
+    /// videoPath: 纯视频的 MP4 文件（从 MediaStreamSource 转码出来的）
+    /// audioPath: 音频文件（.m4a，AAC 编码）
+    /// outPath: 合成后的输出文件
+    ///
+    /// 使用 MediaComposition 来合并音视频轨。这是 WinRT 提供的高层 API，
+    /// 比直接操作 MediaFoundation 的 IMFSourceReader/IMFSinkWriter 简单很多。
+    /// </summary>
+    static async Task MuxAudioVideoAsync(string videoPath, string audioPath, string outPath)
+    {
+        var composition = new Windows.Media.Editing.MediaComposition();
+
+        // 加载视频文件
+        var videoFile = await StorageFile.GetFileFromPathAsync(videoPath);
+        var videoClip = await Windows.Media.Editing.MediaClip.CreateFromFileAsync(videoFile);
+        composition.Clips.Add(videoClip);
+
+        // 加载音频文件
+        var audioFile = await StorageFile.GetFileFromPathAsync(audioPath);
+        var audioClip = await Windows.Media.Editing.BackgroundAudioTrack.CreateFromFileAsync(audioFile);
+        composition.BackgroundAudioTracks.Add(audioClip);
+
+        // 渲染到输出文件
+        var dir = Path.GetDirectoryName(outPath)
+            ?? throw new InvalidOperationException("输出路径没有目录部分。");
+        Directory.CreateDirectory(dir);
+        var folder = await StorageFolder.GetFolderFromPathAsync(dir);
+        var file = await folder.CreateFileAsync(
+            Path.GetFileName(outPath), CreationCollisionOption.ReplaceExisting);
+
+        await composition.RenderToFileAsync(file, Windows.Media.Editing.MediaTrimmingPreference.Fast);
     }
 }

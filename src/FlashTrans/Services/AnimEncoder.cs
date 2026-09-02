@@ -55,9 +55,11 @@ public static class AnimEncoder
     /// <summary>
     /// 把 frames（按顺序的 PNG 路径）编成一张动图，存到 outPath 去掉扩展名之后
     /// 加上真正的后缀。返回实际存成了什么。
+    /// audioPath: 可选的音频文件路径（只对 MP4 有效）。
     /// </summary>
     public static async Task<AnimResult> SaveAsync(
-        IReadOnlyList<string> frames, string outNoExt, int fps, RecordFormat want)
+        IReadOnlyList<string> frames, string outNoExt, int fps, RecordFormat want,
+        string? audioPath = null)
     {
         if (frames.Count == 0) throw new InvalidOperationException("没有帧可以编码。");
 
@@ -71,7 +73,7 @@ public static class AnimEncoder
             var mp4Path = outNoExt + ".mp4";
             try
             {
-                var m = await Mp4Encoder.SaveAsync(frames, mp4Path, fps);
+                var m = await Mp4Encoder.SaveAsync(frames, mp4Path, fps, audioPath);
                 return m with { Wanted = want };
             }
             catch (Exception ex)

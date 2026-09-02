@@ -86,7 +86,7 @@ static class ShotProbe
         ShotHud(outDir, "hud-longshot.png",
                 r => new LongShotHud(r), h => ((LongShotHud)h).Report(1289, 2));
         ShotHud(outDir, "hud-record.png",
-                r => new RecordHud(r, 30), h => ((RecordHud)h).Report(42, TimeSpan.FromSeconds(3.4)));
+                r => new RecordHud(r, 30, captureAudio: true), h => ((RecordHud)h).Report(42, TimeSpan.FromSeconds(3.4)));
 
         ThemeService.ApplyTheme(s.Theme);
         ThemeService.ApplyAccent(s.AccentColor);
