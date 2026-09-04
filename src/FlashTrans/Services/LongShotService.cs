@@ -38,7 +38,10 @@ public static class LongShotService
     const int TransitionSamples = 36;
     const int StableSamples = 5;
     const int ForwardConfirmSamples = 5;
-    const int BottomSamples = 10;
+    const int BottomSamples = 12;
+    const int MaxStationaryAttempts = 3;
+    const int RecoveryAttempts = 2;
+    const int AnimatedAlignmentSamples = 22;
     const int MaxNotchesPerStep = 2;
 
     /// <summary>拼出来最高多少像素。再长就没人看了，也怕无限滚动的页面停不下来。</summary>
@@ -125,17 +128,27 @@ public static class LongShotService
         // 先小步试。一格滚多远各家程序不一样，测出来之后下面会自己调。
         var notches = band > 150 ? 2 : 1;
         var stop = LongShotStop.Bottom;
+        var stationaryAttempts = 0;
 
         while (true)
         {
             if (cancelled?.Invoke() == true) { stop = LongShotStop.Cancelled; break; }
             if (frames >= MaxFrames || total >= MaxHeight) { stop = LongShotStop.Limit; break; }
 
-            if (prepareWindow) MoveCursorToScrollSpot(region);
-            scroll(-notches);
-            if (prepareWindow) MoveCursorToHoverSafeSpot(region);
-            var transition = await WaitForScrollAsync(
-                region, prev, band, capture, delay, cancelled);
+            ScrollFrame? transition = null;
+            for (var attempt = 0; attempt <= RecoveryAttempts; attempt++)
+            {
+                if (attempt == 0)
+                {
+                    if (prepareWindow) MoveCursorToScrollSpot(region);
+                    scroll(-notches);
+                    if (prepareWindow) MoveCursorToHoverSafeSpot(region);
+                }
+
+                transition = await WaitForScrollAsync(
+                    region, prev, band, capture, delay, cancelled);
+                if (transition is not null) break;
+            }
             if (transition is null)
             {
                 stop = cancelled?.Invoke() == true
@@ -146,7 +159,16 @@ public static class LongShotService
 
             var next = transition.Value.Frame;
             var shift = transition.Value.Shift;
-            if (shift == 0) break;                      // 滚不动了，到底
+            if (shift == 0)
+            {
+                if (++stationaryAttempts < MaxStationaryAttempts)
+                {
+                    notches = 1;
+                    continue;
+                }
+                break;                                  // 连续多次没动，才判定到底
+            }
+            stationaryAttempts = 0;
 
             // 横向滚动条、状态栏这类固定底栏不会跟正文一起滚。若仍从 next 最底下
             // 截 shift 行，它会在每个分片末尾重复一次，同时漏掉同等高度的正文。
@@ -216,7 +238,11 @@ public static class LongShotService
             var now = await Task.Run(() => capture(region));
             if (now is null) return null;
 
-            var shift = await Task.Run(() => FindShift(previous, now, bandTop));
+            var shift = await Task.Run(() =>
+            {
+                var found = FindShift(previous, now, bandTop);
+                return found >= 0 || !Similar(previous, now) ? found : 0;
+            });
             if (shift < 0)
             {
                 lastShift = int.MinValue;
@@ -243,7 +269,8 @@ public static class LongShotService
                         return new ScrollFrame(now, 0);
                 }
                 else if (sameShift >= StableSamples + ForwardConfirmSamples
-                         && sameFrame >= StableSamples + ForwardConfirmSamples)
+                         && (sameFrame >= StableSamples + ForwardConfirmSamples
+                             || sameShift >= AnimatedAlignmentSamples))
                 {
                     return new ScrollFrame(now, shift);
                 }
@@ -364,7 +391,7 @@ public static class LongShotService
             }
         }
 
-        if (votes.Count == 0) return Similar(prev, next) ? 0 : -1;
+        if (votes.Count == 0) return -1;
         // 票数一样时取最小的位移。MaxBy 单用的话平票按字典枚举顺序决定，同一个画面
         // 两次跑可能给出不同的数；而且宁可少算也别多算——多算了会把没截到的内容当成
         // 「已经露出来过」跳掉，图上就缺一段；少算只是接缝处重复几行，看着不明显。
@@ -549,5 +576,12 @@ public static class LongShotService
                 return;
             }
         }
+
+        var fallback = new POINT
+        {
+            X = Math.Clamp(region.Left + 2, screen.Left, screen.Right - 1),
+            Y = Math.Clamp(region.Top + 2, screen.Top, screen.Bottom - 1),
+        };
+        Win32.SetCursorPos(fallback.X, fallback.Y);
     }
 }

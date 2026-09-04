@@ -41,6 +41,13 @@ static class Program
             return _fail == 0 ? 0 : 1;
         }
 
+        if (args.Contains("--only-longshot"))
+        {
+            LongShotProbe.RunAll(Step);
+            app.Shutdown();
+            return _fail == 0 ? 0 : 1;
+        }
+
         var host = new AppHost();
         UiProbe.RunAll(host, Step);
         OcrProbe.RunAll(Step);
