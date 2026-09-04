@@ -111,8 +111,6 @@ public static class LongShotService
             FocusWindowAt(cx, cy);
             MoveCursorToScrollSpot(region);
             await delay(120);
-            MoveCursorToHoverSafeSpot(region);
-            await delay(80);
         }
 
         var first = await SettledGrabAsync(region, capture, delay, cancelled);
@@ -142,7 +140,6 @@ public static class LongShotService
                 {
                     if (prepareWindow) MoveCursorToScrollSpot(region);
                     scroll(-notches);
-                    if (prepareWindow) MoveCursorToHoverSafeSpot(region);
                 }
 
                 transition = await WaitForScrollAsync(
@@ -551,37 +548,4 @@ public static class LongShotService
         Win32.SetCursorPos(x, y);
     }
 
-    static void MoveCursorToHoverSafeSpot(RECT region)
-    {
-        var screen = ScreenCapture.VirtualScreen();
-        var w = Math.Max(1, region.Right - region.Left);
-        var h = Math.Max(1, region.Bottom - region.Top);
-        var cx = region.Left + w / 2;
-        var cy = region.Top + h / 2;
-        var gap = 12;
-        var candidates = new[]
-        {
-            new POINT { X = region.Right + gap, Y = cy },
-            new POINT { X = region.Left - gap, Y = cy },
-            new POINT { X = cx, Y = region.Top - gap },
-            new POINT { X = cx, Y = region.Bottom + gap },
-        };
-
-        foreach (var point in candidates)
-        {
-            if (point.X >= screen.Left && point.X < screen.Right
-                && point.Y >= screen.Top && point.Y < screen.Bottom)
-            {
-                Win32.SetCursorPos(point.X, point.Y);
-                return;
-            }
-        }
-
-        var fallback = new POINT
-        {
-            X = Math.Clamp(region.Left + 2, screen.Left, screen.Right - 1),
-            Y = Math.Clamp(region.Top + 2, screen.Top, screen.Bottom - 1),
-        };
-        Win32.SetCursorPos(fallback.X, fallback.Y);
-    }
 }
