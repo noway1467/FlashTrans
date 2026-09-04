@@ -163,8 +163,8 @@ static class SettingsProbe
     /// <summary>用户碰上的就是这个：升级换了个带版本号的文件夹，Run 项还指着老路径。</summary>
     static void DetectsMovedExe()
     {
-        const string now = @"C:\App\FlashTrans-1.7.6\FlashTrans.exe";
-        const string old = @"C:\App\FlashTrans-1.7.5\FlashTrans.exe";
+        const string now = @"C:\App\FlashTrans-1.7.7\FlashTrans.exe";
+        const string old = @"C:\App\FlashTrans-1.7.6\FlashTrans.exe";
 
         if (!StartupService.Aligned($"\"{now}\" --tray", now))
             throw new InvalidOperationException("指着自己却说不一致");
