@@ -19,7 +19,7 @@ public sealed record AnimResult(string Path, RecordFormat Format, long Bytes)
 }
 
 /// <summary>
-/// 把一串 PNG 帧编成动图。
+/// 把一串临时位图帧编成动图。
 ///
 /// GIF 这条自己就能编完：LZW 和调色板借 WPF 的 GifBitmapEncoder，它缺的只是
 /// 帧延时和循环标记，编完在字节流里补上（见 PatchGif）。
@@ -48,12 +48,27 @@ public static class AnimEncoder
     public static bool WebpAvailable => FindImg2Webp() is not null;
 
     /// <summary>GIF 的延时单位是 1/100 秒，WebP 的是毫秒。</summary>
-    internal static int DelayCentis(int fps) => Math.Max(2, (int)Math.Round(100.0 / fps));
-
-    internal static int DelayMillis(int fps) => Math.Max(10, (int)Math.Round(1000.0 / fps));
+    internal static int DelayCentis(int fps)
+        => Math.Max(2, (int)Math.Round(100.0 / Math.Max(1, fps)));
 
     /// <summary>
-    /// 把 frames（按顺序的 PNG 路径）编成一张动图，存到 outPath 去掉扩展名之后
+    /// GIF 只能用厘秒记录延时。用累计时间取整，让 60 fps 在 1/2 厘秒之间交错，
+    /// 而不是把每一帧都粗暴地固定成 2 厘秒。
+    /// </summary>
+    internal static int GifDelayCentis(int fps, int frameIndex)
+    {
+        fps = Math.Max(1, fps);
+        frameIndex = Math.Max(0, frameIndex);
+        var start = Math.Round(frameIndex * 100.0 / fps, MidpointRounding.AwayFromZero);
+        var end = Math.Round((frameIndex + 1) * 100.0 / fps, MidpointRounding.AwayFromZero);
+        return Math.Max(1, (int)(end - start));
+    }
+
+    internal static int DelayMillis(int fps)
+        => Math.Max(10, (int)Math.Round(1000.0 / Math.Max(1, fps)));
+
+    /// <summary>
+    /// 把 frames（按顺序的临时位图路径）编成一张动图，存到 outPath 去掉扩展名之后
     /// 加上真正的后缀。返回实际存成了什么。
     /// audioPath: 可选的音频文件路径（只对 MP4 有效）。
     /// </summary>
@@ -182,9 +197,9 @@ public static class AnimEncoder
     /// </summary>
     internal static void BuildGif(IReadOnlyList<string> frames, string outPath, int fps)
     {
-        var delay = DelayCentis(fps);
         using var fs = File.Create(outPath);
         var started = false;
+        var frameIndex = 0;
 
         foreach (var path in frames)
         {
@@ -196,7 +211,7 @@ public static class AnimEncoder
                 WriteGifHeader(fs, one.Width, one.Height);
                 started = true;
             }
-            WriteGifFrame(fs, one, delay);
+            WriteGifFrame(fs, one, GifDelayCentis(fps, frameIndex++));
         }
 
         if (!started) throw new InvalidOperationException("一帧都没能编码。");

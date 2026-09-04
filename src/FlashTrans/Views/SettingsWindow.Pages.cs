@@ -17,11 +17,15 @@ public sealed partial class SettingsWindow
         var page = Page();
 
         Section(page, "启动",
-            Check("开机自动启动", StartupService.IsEnabled(), on =>
+            // 勾选状态取自 settings.json，不取注册表：Run 项里存的是绝对路径，
+            // 程序换过目录之后那条命令就废了，拿它当勾选依据只会显示「开着」而实际启不动。
+            // 真正把注册表对齐到这个值的地方是 AppHost（每次启动 + 每次改设置）。
+            Check("开机自动启动", S.RunAtStartup, on =>
             {
-                if (!StartupService.Set(on)) Toast("写入启动项失败，可能被安全软件拦截");
                 S.RunAtStartup = on;
-            }),
+                if (!StartupService.Sync(on))
+                    Toast(on ? "写入启动项失败，可能被安全软件拦截" : "移除启动项失败，可能被安全软件拦截");
+            }, StartupHint()),
             Check("启动时最小化到托盘", S.StartMinimized, on => S.StartMinimized = on),
             Check("关闭窗口时回到托盘", S.CloseToTray, on => S.CloseToTray = on),
             Check("启动时预热网络连接", S.WarmupOnStart, on => S.WarmupOnStart = on,
@@ -29,7 +33,9 @@ public sealed partial class SettingsWindow
 
         Section(page, "输入与响应",
             Check("边输入边翻译", S.TranslateOnType, on => S.TranslateOnType = on),
-            Field("输入停顿延迟", Number(S.TypeDelayMs, 120, 3000, v => S.TypeDelayMs = v, "毫秒")),
+            Field("输入停顿延迟", Number(S.TypeDelayMs,
+                    AppSettings.MinTypeDelayMs, AppSettings.MaxTypeDelayMs,
+                    v => S.TypeDelayMs = v, "毫秒")),
             Check("回车翻译，Shift+回车换行", S.EnterToTranslate, on => S.EnterToTranslate = on),
             Field("失败自动切换", Check("出错时自动尝试下一个可用源", S.AutoFallback,
                 on => S.AutoFallback = on)),
@@ -84,6 +90,15 @@ public sealed partial class SettingsWindow
 
     // ------------------------------------------------------------- 截图
 
+    /// <summary>
+    /// 开机自启那一行底下的说明。只在「勾着但注册表里没有这条」时出现：
+    /// 那种情况以前完全没有提示，用户只能等下次开机才发现没启动。
+    /// </summary>
+    static string? StartupHint()
+        => S.RunAtStartup && !StartupService.IsRegistered()
+            ? "启动项没能写进注册表，可能被安全软件拦截了"
+            : null;
+
     /// <summary>截图页。自己一栏：动作默认值、画笔、蒙层里的那些键、识别语言。</summary>
     UIElement BuildCapturePage()
     {
@@ -106,7 +121,7 @@ public sealed partial class SettingsWindow
             LeftRow(SmallButton("试一下", () => _ = TryCaptureAsync())));
 
         Section(page, "录制动图",
-            Hint($"录的是实时画面，标注不会进去。`Esc` 停下，`{RecordHud.PauseHotkey}` 暂停。"),
+            Hint($"录的是实时画面，最高 60 fps；实际帧率会随选区大小和机器性能变化。高流畅场景优先选 WebP / MP4，部分 GIF 播放器会限速。标注不会进去。`Esc` 停下，`{RecordHud.PauseHotkey}` 暂停。"),
             Field("格式", Combo(new (string, RecordFormat)[]
             {
                 ("WebP", RecordFormat.Webp),

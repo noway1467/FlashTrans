@@ -33,6 +33,13 @@ public static class LongShotService
     const int ColStep = 3;
     /// <summary>一行里允许多少比例的点对不上还算同一行。抗一点渲染抖动和亚像素文字。</summary>
     const double RowTolerance = 0.06;
+    const int ScrollKickDelayMs = 100;
+    const int ScrollPollMs = 60;
+    const int TransitionSamples = 36;
+    const int StableSamples = 5;
+    const int ForwardConfirmSamples = 5;
+    const int BottomSamples = 10;
+    const int MaxNotchesPerStep = 2;
 
     /// <summary>拼出来最高多少像素。再长就没人看了，也怕无限滚动的页面停不下来。</summary>
     public const int MaxHeight = 40000;
@@ -48,19 +55,64 @@ public static class LongShotService
                                                       Action<int, int>? onProgress = null,
                                                       Func<bool>? cancelled = null)
     {
+        var restoreCursor = Win32.GetCursorPos(out var originalCursor);
+        var session = ScreenCaptureSession.Open(
+            region.Left, region.Top, region.Right - region.Left, region.Bottom - region.Top);
+        try
+        {
+            var capture = session is null
+                ? ScreenCapture.Grab
+                : new Func<RECT, CapturedImage?>(_ => session.Grab());
+            return await RunCoreAsync(region, onProgress, cancelled,
+                                      capture, Wheel, DelayAsync, prepareWindow: true);
+        }
+        finally
+        {
+            session?.Dispose();
+            if (restoreCursor) Win32.SetCursorPos(originalCursor.X, originalCursor.Y);
+        }
+    }
+
+    internal static async Task<LongShotResult> RunForTestAsync(
+        RECT region,
+        Func<RECT, CapturedImage?> capture,
+        Action<int> scroll,
+        Action<int, int>? onProgress = null,
+        Func<bool>? cancelled = null,
+        Func<int, Task>? delay = null)
+        => await RunCoreAsync(region, onProgress, cancelled, capture, scroll,
+                              delay ?? DelayAsync, prepareWindow: false);
+
+    static Task DelayAsync(int milliseconds) => Task.Delay(milliseconds);
+
+    static async Task<LongShotResult> RunCoreAsync(
+        RECT region,
+        Action<int, int>? onProgress,
+        Func<bool>? cancelled,
+        Func<RECT, CapturedImage?> capture,
+        Action<int> scroll,
+        Func<int, Task> delay,
+        bool prepareWindow)
+    {
         var w = region.Right - region.Left;
         var h = region.Bottom - region.Top;
         if (w <= 0 || h <= Band) return new LongShotResult(null, 0, LongShotStop.Failed);
 
-        // 滚动落在鼠标底下那个窗口上，先把光标摆到区域中间并把那个窗口激活。
-        // 激活要在抓第一帧之前做完：标题栏的高亮会变，不然第一帧和后面的接缝处颜色不一样。
-        var cx = region.Left + w / 2;
-        var cy = region.Top + h / 2;
-        Win32.SetCursorPos(cx, cy);
-        FocusWindowAt(cx, cy);
-        await Task.Delay(120);
+        if (prepareWindow)
+        {
+            // 滚动落在鼠标底下那个窗口上，先把光标摆到区域中间并把那个窗口激活。
+            // 激活要在抓第一帧之前做完：标题栏的高亮会变，不然第一帧和后面的接缝处颜色不一样。
+            var cx = region.Left + w / 2;
+            var cy = region.Top + h / 2;
+            Win32.SetCursorPos(cx, cy);
+            FocusWindowAt(cx, cy);
+            MoveCursorToScrollSpot(region);
+            await delay(120);
+            MoveCursorToHoverSafeSpot(region);
+            await delay(80);
+        }
 
-        var first = await SettledGrabAsync(region);
+        var first = await SettledGrabAsync(region, capture, delay, cancelled);
         if (first is null) return new LongShotResult(null, 0, LongShotStop.Failed);
 
         // 边接边攒。每段都是「新露出来的那几行」，最后一次性拼成一张。
@@ -72,7 +124,6 @@ public static class LongShotService
         var frames = 1;
         // 先小步试。一格滚多远各家程序不一样，测出来之后下面会自己调。
         var notches = band > 150 ? 2 : 1;
-        var retries = 0;
         var stop = LongShotStop.Bottom;
 
         while (true)
@@ -80,40 +131,21 @@ public static class LongShotService
             if (cancelled?.Invoke() == true) { stop = LongShotStop.Cancelled; break; }
             if (frames >= MaxFrames || total >= MaxHeight) { stop = LongShotStop.Limit; break; }
 
-            Wheel(-notches);
-            var next = await SettledGrabAsync(region);
-            if (next is null) { stop = LongShotStop.Failed; break; }
-
-            var shift = FindShift(prev, next, band);
-            if (shift < 0)
+            if (prepareWindow) MoveCursorToScrollSpot(region);
+            scroll(-notches);
+            if (prepareWindow) MoveCursorToHoverSafeSpot(region);
+            var transition = await WaitForScrollAsync(
+                region, prev, band, capture, delay, cancelled);
+            if (transition is null)
             {
-                // 对不上。要么这一下滚过了窄带看得见的范围，要么画面真的换了内容。
-                // 先当成滚过了：退回去、把步子减半再来。连着几次都不行才认输——
-                // 接不上就硬拼会在图里留一段没截到的空缺，那比少截一截糟糕得多。
-                //
-                // 退回去之后必须重新抓一帧当 prev。滚回来落点跟原来不一定分毫不差
-                // （平滑滚动、行高取整都会差几像素），拿旧的 prev 去比就是在跟一个
-                // 屏幕上从未出现过的画面算位移，量出来的 shift 偏一点，接缝处就会
-                // 重复或者缺几行——就是长图上那些一段一段的错位。
-                if (++retries <= 3)
-                {
-                    Wheel(notches);
-                    await Task.Delay(80);
-                    var back = await SettledGrabAsync(region);
-                    if (back is not null)
-                    {
-                        prev = back;
-                        band = PickBand(back);
-                    }
-                    // 步子已经是最小的还对不上，那就不是滚过头，是内容真变了
-                    if (notches <= 1) { stop = LongShotStop.Diverged; break; }
-                    notches = Math.Max(1, notches / 2);
-                    continue;
-                }
-                stop = LongShotStop.Diverged;
+                stop = cancelled?.Invoke() == true
+                    ? LongShotStop.Cancelled
+                    : LongShotStop.Diverged;
                 break;
             }
-            retries = 0;
+
+            var next = transition.Value.Frame;
+            var shift = transition.Value.Shift;
             if (shift == 0) break;                      // 滚不动了，到底
 
             // 横向滚动条、状态栏这类固定底栏不会跟正文一起滚。若仍从 next 最底下
@@ -148,7 +180,8 @@ public static class LongShotService
             // 下一次滚多少跟着实测走。上限是窄带能认出的最大位移，再多就对不上了，
             // 留三成余量。
             var perNotch = Math.Max(1.0, (double)shift / notches);
-            notches = Math.Clamp((int)(band * 0.7 / perNotch), 1, 15);
+            var safeDistance = Math.Max(1, band - Band);
+            notches = Math.Clamp((int)(safeDistance * 0.7 / perNotch), 1, MaxNotchesPerStep);
         }
 
         return new LongShotResult(Stack(parts, w), frames, stop);
@@ -158,19 +191,95 @@ public static class LongShotService
 
     /// <summary>
     /// 抓一帧，但要等画面稳住。平滑滚动会滚一小会儿，太早抓会拍到滚动中间的样子，
-    /// 跟下一帧对不上。连着抓两张一样才算稳。
+    /// 跟下一帧对不上。连续观察到画面足够接近才算稳。
     /// </summary>
-    static async Task<CapturedImage?> SettledGrabAsync(RECT region)
+    readonly record struct ScrollFrame(CapturedImage Frame, int Shift);
+
+    static async Task<ScrollFrame?> WaitForScrollAsync(
+        RECT region,
+        CapturedImage previous,
+        int bandTop,
+        Func<RECT, CapturedImage?> capture,
+        Func<int, Task> delay,
+        Func<bool>? cancelled)
     {
-        var prev = ScreenCapture.Grab(region);
+        await delay(ScrollKickDelayMs);
+        CapturedImage? last = null;
+        var lastShift = int.MinValue;
+        var sameShift = 0;
+        var sameFrame = 0;
+        var zeroFrames = 0;
+
+        for (var i = 0; i < TransitionSamples; i++)
+        {
+            if (cancelled?.Invoke() == true) return null;
+            var now = await Task.Run(() => capture(region));
+            if (now is null) return null;
+
+            var shift = await Task.Run(() => FindShift(previous, now, bandTop));
+            if (shift < 0)
+            {
+                lastShift = int.MinValue;
+                sameShift = 0;
+                sameFrame = 0;
+                zeroFrames = 0;
+            }
+            else
+            {
+                if (shift == lastShift) sameShift++;
+                else { lastShift = shift; sameShift = 1; }
+
+                var similar = last is not null && await Task.Run(() => shift == 0
+                    ? Similar(last, now)
+                    : SimilarRows(last, now, now.Height - shift, shift));
+                if (similar)
+                    sameFrame++;
+                else sameFrame = 1;
+
+                if (shift == 0)
+                {
+                    zeroFrames++;
+                    if (zeroFrames >= BottomSamples && sameFrame >= StableSamples)
+                        return new ScrollFrame(now, 0);
+                }
+                else if (sameShift >= StableSamples + ForwardConfirmSamples
+                         && sameFrame >= StableSamples + ForwardConfirmSamples)
+                {
+                    return new ScrollFrame(now, shift);
+                }
+                else
+                {
+                    zeroFrames = 0;
+                }
+            }
+
+            last = now;
+            await delay(ScrollPollMs);
+        }
+
+        return null;
+    }
+
+    static async Task<CapturedImage?> SettledGrabAsync(
+        RECT region,
+        Func<RECT, CapturedImage?> capture,
+        Func<int, Task> delay,
+        Func<bool>? cancelled = null)
+    {
+        if (cancelled?.Invoke() == true) return null;
+        var prev = await Task.Run(() => capture(region));
         if (prev is null) return null;
+        var stable = 0;
 
         for (var i = 0; i < 12; i++)
         {
-            await Task.Delay(40);
-            var now = ScreenCapture.Grab(region);
+            if (cancelled?.Invoke() == true) return null;
+            await delay(40);
+            var now = await Task.Run(() => capture(region));
             if (now is null) return prev;
-            if (Same(prev, now)) return now;
+            if (await Task.Run(() => Similar(prev, now))) stable++;
+            else stable = 0;
+            if (stable >= StableSamples) return now;
             prev = now;
         }
         // 一直在动（视频、动画）。就用最后这张，对齐那步会去判断能不能接上。
@@ -183,6 +292,39 @@ public static class LongShotService
         if (a.Width != b.Width || a.Height != b.Height) return false;
         for (var y = 0; y < a.Height; y += 4)
             if (!RowMatches(a, y, b, y, a.Width, 0)) return false;
+        return true;
+    }
+
+    static bool Similar(CapturedImage a, CapturedImage b)
+    {
+        if (a.Width != b.Width || a.Height != b.Height) return false;
+        var rows = 0;
+        var different = 0;
+        for (var y = 0; y < a.Height; y += 4)
+        {
+            rows++;
+            if (!RowMatches(a, y, b, y, a.Width, 0.02) && ++different > Math.Max(1, rows / 20))
+                return false;
+        }
+        return true;
+    }
+
+    static bool SimilarRows(CapturedImage a, CapturedImage b, int top, int height)
+    {
+        if (a.Width != b.Width || a.Height != b.Height) return false;
+        top = Math.Clamp(top, 0, a.Height);
+        var bottom = Math.Clamp(top + height, top, a.Height);
+        if (top >= bottom) return true;
+
+        var rows = 0;
+        var different = 0;
+        for (var y = top; y < bottom; y += 4)
+        {
+            rows++;
+            if (!RowMatches(a, y, b, y, a.Width, 0.02)
+                && ++different > Math.Max(1, rows / 20))
+                return false;
+        }
         return true;
     }
 
@@ -222,7 +364,7 @@ public static class LongShotService
             }
         }
 
-        if (votes.Count == 0) return -1;
+        if (votes.Count == 0) return Similar(prev, next) ? 0 : -1;
         // 票数一样时取最小的位移。MaxBy 单用的话平票按字典枚举顺序决定，同一个画面
         // 两次跑可能给出不同的数；而且宁可少算也别多算——多算了会把没截到的内容当成
         // 「已经露出来过」跳掉，图上就缺一段；少算只是接缝处重复几行，看着不明显。
@@ -362,13 +504,50 @@ public static class LongShotService
     /// <summary>
     /// 把这个点上的窗口激活。滚轮消息默认送给前台窗口，不激活的话滚的是别人。
     /// </summary>
-    static void FocusWindowAt(int x, int y)
+    static IntPtr FocusWindowAt(int x, int y)
     {
         var hwnd = Win32.WindowFromPoint(new POINT { X = x, Y = y });
-        if (hwnd == IntPtr.Zero) return;
+        if (hwnd == IntPtr.Zero) return IntPtr.Zero;
         // 命中的可能是个子控件，要的是它所属的顶层窗口
         var root = Win32.GetAncestor(hwnd, Win32.GA_ROOT);
         if (root != IntPtr.Zero) hwnd = root;
         Win32.SetForegroundWindow(hwnd);
+        return hwnd;
+    }
+
+    static void MoveCursorToScrollSpot(RECT region)
+    {
+        var width = Math.Max(1, region.Right - region.Left);
+        var height = Math.Max(1, region.Bottom - region.Top);
+        var x = Math.Clamp(region.Right - Math.Min(6, width), region.Left, region.Right - 1);
+        var y = region.Top + height / 2;
+        Win32.SetCursorPos(x, y);
+    }
+
+    static void MoveCursorToHoverSafeSpot(RECT region)
+    {
+        var screen = ScreenCapture.VirtualScreen();
+        var w = Math.Max(1, region.Right - region.Left);
+        var h = Math.Max(1, region.Bottom - region.Top);
+        var cx = region.Left + w / 2;
+        var cy = region.Top + h / 2;
+        var gap = 12;
+        var candidates = new[]
+        {
+            new POINT { X = region.Right + gap, Y = cy },
+            new POINT { X = region.Left - gap, Y = cy },
+            new POINT { X = cx, Y = region.Top - gap },
+            new POINT { X = cx, Y = region.Bottom + gap },
+        };
+
+        foreach (var point in candidates)
+        {
+            if (point.X >= screen.Left && point.X < screen.Right
+                && point.Y >= screen.Top && point.Y < screen.Bottom)
+            {
+                Win32.SetCursorPos(point.X, point.Y);
+                return;
+            }
+        }
     }
 }

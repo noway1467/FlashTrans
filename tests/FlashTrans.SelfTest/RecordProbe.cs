@@ -21,6 +21,9 @@ static class RecordProbe
     public static void RunAll(Action<string, Action> step)
     {
         step("录制：帧延时按帧率换算", DelayMathProbe);
+        step("录制：60 fps 的 GIF 用交错延时保持平均帧率", GifHighFpsDelayProbe);
+        step("录制：小区域 60 fps 能持续采样", HighFpsCaptureProbe);
+        step("录制：三种格式都能编码 60 fps", HighFpsEncodeProbe);
         step("录制：实测帧率按帧间隔算", EffectiveFpsProbe);
         step("录制：动图 GIF 能解回来，帧数和尺寸都对", GifRoundTripProbe);
         step("录制：每帧画面对得上，没有错位或重复", GifFrameOrderProbe);
@@ -125,10 +128,74 @@ static class RecordProbe
         Need(AnimEncoder.DelayMillis(10) == 100, "10 fps 应该是 100 毫秒一帧");
         Need(AnimEncoder.DelayCentis(30) == 3, "30 fps 约 3 厘秒一帧");
         Need(AnimEncoder.DelayMillis(30) == 33, "30 fps 约 33 毫秒一帧");
-        // GIF 的延时不能给 0 或 1：多数浏览器把这两个值当成「按默认速度播」，
-        // 结果是录得越快播得越慢，正好反了。夹在 2（=50fps）以上。
+        // 固定延时辅助方法仍保留 2 厘秒下限；真正编 GIF 时会用累计时间交错 1/2，
+        // 才能在格式允许的范围内逼近 60 fps。
         Need(AnimEncoder.DelayCentis(200) == 2, "帧率再高，GIF 延时也不能低于 2 厘秒");
         Need(AnimEncoder.DelayMillis(500) == 10, "WebP 延时不能低于 10 毫秒");
+        Need(AnimEncoder.DelayMillis(60) == 17, "60 fps 的 WebP 延时应约为 17 毫秒");
+    }
+
+    static void GifHighFpsDelayProbe()
+    {
+        var delays = Enumerable.Range(0, 60)
+            .Select(i => AnimEncoder.GifDelayCentis(60, i))
+            .ToArray();
+        Need(delays.All(d => d is 1 or 2), "60 fps GIF 延时只能在 1/2 厘秒之间交错");
+        Need(delays.Contains(1) && delays.Contains(2), "60 fps GIF 没有交错延时");
+        Need(delays.Sum() == 100, "60 帧 GIF 一秒的累计延时不对");
+    }
+
+    static void HighFpsCaptureProbe()
+    {
+        var result = Task.Run(() => RecordService.RunAsync(
+                SmallRegion(), fps: 60, maxSeconds: 2, capture: FakeCapture))
+            .GetAwaiter().GetResult();
+        try
+        {
+            Need(result.Stopped != RecordStop.Failed, "60 fps 录制失败");
+            Need(result.Paths.Count >= 80 && result.Paths.Count <= 120,
+                $"60 fps 小区域帧数不合理：{result.Paths.Count}");
+            Need(result.EffectiveFps >= 35,
+                $"60 fps 小区域实测过低：{result.EffectiveFps:0.#}");
+            Need(result.Paths.All(File.Exists), "高帧率录制有临时帧缺失");
+        }
+        finally { result.Cleanup(); }
+    }
+
+    static void HighFpsEncodeProbe()
+    {
+        var (dir, paths) = WriteFrames(60);
+        try
+        {
+            var gif = AnimEncoder.SaveAsync(
+                    paths, Path.Combine(dir, "high-gif"), 60, RecordFormat.Gif)
+                .GetAwaiter().GetResult();
+            var (delays, images) = WalkGif(File.ReadAllBytes(gif.Path));
+            Need(images == 60 && delays.Count == 60, "60 fps GIF 帧数或延时块不完整");
+            Need(delays.Sum() == 100, "60 fps GIF 一秒累计延时不对");
+
+            if (AnimEncoder.WebpAvailable)
+            {
+                var webp = AnimEncoder.SaveAsync(
+                        paths, Path.Combine(dir, "high-webp"), 60, RecordFormat.Webp)
+                    .GetAwaiter().GetResult();
+                Need(webp.Format == RecordFormat.Webp && webp.Bytes > 0,
+                    "60 fps WebP 编码失败");
+            }
+
+            if (Mp4Encoder.Available)
+            {
+                var mp4 = AnimEncoder.SaveAsync(
+                        paths, Path.Combine(dir, "high-mp4"), 60, RecordFormat.Mp4)
+                    .GetAwaiter().GetResult();
+                var (boxes, seconds) = WalkMp4(File.ReadAllBytes(mp4.Path));
+                Need(mp4.Format == RecordFormat.Mp4 && boxes.Contains("moov") && boxes.Contains("mdat"),
+                    "60 fps MP4 容器不完整");
+                Need(seconds is >= 0.5 and <= 1.5,
+                    $"60 fps MP4 时长不对：{seconds:0.00}s");
+            }
+        }
+        finally { Wipe(dir); }
     }
 
     static void EffectiveFpsProbe()
@@ -146,6 +213,7 @@ static class RecordProbe
 
     static void ClampProbe()
     {
+        Need(RecordService.MaxFps == 60, "录制帧率上限应为 60 fps");
         Need(RecordService.ClampFps(0) == RecordService.MinFps, "帧率下限");
         Need(RecordService.ClampFps(999) == RecordService.MaxFps, "帧率上限");
         Need(RecordService.ClampSeconds(0) == RecordService.MinSeconds, "时长下限");
@@ -795,24 +863,22 @@ static class RecordProbe
     /// <summary>
     /// 时长上限是按秒算的，不是「录满 fps × 秒数 帧就收」。
     ///
-    /// 要 30 fps 而机器只跟得上十几帧的时候，光数帧的话「最长 2 秒」会变成
-    /// 录满 60 帧、实际过了四五秒。这里要一块大区域 + 高帧率去逼出「跟不上」，
+    /// 要 60 fps 而机器只跟得上十几帧的时候，光数帧的话「最长 2 秒」会变成
+    /// 录满 120 帧、实际拖很久。这里要一块大区域 + 高帧率去逼出「跟不上」，
     /// 然后验墙上时间没超出上限太多。
     /// </summary>
     static void TimeCapProbe()
     {
-        // 要真的跟不上才测得到这条：拿整个虚拟屏 + 30 fps。一帧全屏 BitBlt 加 PNG
-        // 编码远不止 33 毫秒，帧数一定凑不满 fps × 秒数，这时候只能靠时间收。
+        // 用整个虚拟屏 + 高帧率覆盖「编码跟不上」的情况；优化后也允许刚好录满
+        // 帧数上限，关键是墙上时间不能越过时长预算太多。
         var s = ScreenCapture.VirtualScreen();
-        var r = Task.Run(() => RecordService.RunAsync(s, fps: 30, maxSeconds: 2))
+        var r = Task.Run(() => RecordService.RunAsync(s, fps: 60, maxSeconds: 2))
                     .GetAwaiter().GetResult();
         try
         {
             Need(r.Stopped != RecordStop.Failed, "一帧都没抓到");
-            var full = 30 * 2;
-            Need(r.Paths.Count < full,
-                $"全屏 30 fps 居然录满了 {full} 帧，这一项没测到时长那条规则"
-                + "（换更大的区域或更高的帧率）");
+            var full = 60 * 2;
+            Need(r.Paths.Count <= full, $"帧数超过上限：{r.Paths.Count} > {full}");
             Need(r.Elapsed.TotalSeconds <= 2.8,
                 $"超了时长上限：{r.Elapsed.TotalSeconds:0.00}s（上限 2s，"
                 + $"抓到 {r.Paths.Count} 帧 / 上限 {full} 帧）");

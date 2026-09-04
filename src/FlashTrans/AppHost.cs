@@ -48,6 +48,7 @@ public sealed partial class AppHost : IDisposable
 
         if (!startHidden) ShowMainWindow(focusInput: true);
         WarmupWhenIdle();
+        SyncStartupWhenIdle();
         if (startHidden) PreloadWhenIdle();
     }
 
@@ -260,6 +261,28 @@ public sealed partial class AppHost : IDisposable
         _tray.UpdateTip(TrayTip());
         _main?.OnSettingsChanged();
         _popup?.OnSettingsChanged();
+        // 「重置为默认设置」这类不经过那个复选框的改动也要跟着落地
+        StartupService.Sync(s.RunAtStartup);
+    }
+
+    /// <summary>
+    /// 开机自启项对齐。Run 项里存的是绝对路径，程序换过目录（升级换成带版本号的文件夹就算）
+    /// 之后那条命令指向一个不存在的 exe：开机什么都不会启动，而设置里还勾着。
+    /// 放到空闲时做，不占启动路径；路径没变就只读一次注册表，不写。
+    /// </summary>
+    void SyncStartupWhenIdle()
+    {
+        var timer = new DispatcherTimer(DispatcherPriority.ApplicationIdle)
+        {
+            Interval = TimeSpan.FromMilliseconds(800)
+        };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            try { StartupService.Sync(S.RunAtStartup); }
+            catch (Exception ex) { Log.Warn("对齐开机自启项失败：" + ex.Message); }
+        };
+        timer.Start();
     }
 
     /// <summary>

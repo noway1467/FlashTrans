@@ -52,7 +52,7 @@ public sealed class AppSettings
     public int Version { get; set; } = CurrentVersion;
 
     /// <summary>加新的默认源/字段时 +1，并在 Migrate 里补一段。</summary>
-    public const int CurrentVersion = 3;
+    public const int CurrentVersion = 4;
 
     // ------- 翻译源 -------
     public List<ProviderConfig> Providers { get; set; } = [];
@@ -101,6 +101,12 @@ public sealed class AppSettings
     // 550ms 太肉：打完最后一个字还要干等半秒多才开始请求。300ms 够滤掉连续击键，
     // 又不会让人觉得卡。真正的耗时在网络那边，防抖不该再叠一大截。
     public int TypeDelayMs { get; set; } = 300;
+    /// <summary>
+    /// 输入停顿延迟的可选范围。设置页的输入框和 SettingsService.Normalize 必须用同一对值，
+    /// 各写一遍的话（曾经是 120 对 150）用户填的数字下次启动会被悄悄改掉。
+    /// </summary>
+    public const int MinTypeDelayMs = 150;
+    public const int MaxTypeDelayMs = 3000;
     public bool EnterToTranslate { get; set; } = true;
 
     // ------- 划词 / 弹窗 -------
@@ -167,10 +173,9 @@ public sealed class AppSettings
 
     // ------- 录制动图 -------
     /// <summary>
-    /// 每秒录几帧。一帧要走一次 BitBlt 加一次 PNG 编码，调太高界面自己会卡，
-    /// 反过来拉低了实际帧率，得不到更流畅的图；而且体积基本按帧数线性涨。
+    /// 每秒录几帧。高帧率会增加临时帧体积，录制器会用有界并行写入尽量跟上。
     /// </summary>
-    public int RecordFps { get; set; } = 10;
+    public int RecordFps { get; set; } = 30;
     /// <summary>
     /// 最长录多少秒，到点自己停。这是给「按了开始就走开」兜底的：
     /// 没有上限的话回来会发现攒了几百兆的临时帧。
@@ -227,6 +232,9 @@ public sealed class AppSettings
 
     public ProviderConfig? Find(string id) => Providers.FirstOrDefault(p => p.Id == id);
 
+    // 算出来的，不是设置项。不排掉的话它会被写进 settings.json：整份翻译源配置
+    // （含 DPAPI 加密后的密钥）多存一遍，文件大一倍，读回来时又完全没人要。
+    [JsonIgnore]
     public IEnumerable<ProviderConfig> EnabledProviders => Providers.Where(p => p.Enabled);
 
     public List<string> ResolveTargets()

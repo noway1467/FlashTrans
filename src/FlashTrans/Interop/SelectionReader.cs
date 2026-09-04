@@ -105,6 +105,113 @@ public static class SelectionReader
         }
     }
 
+    /// <summary>以标准 CF_DIB 格式写入图片，避免依赖 WPF 的延迟渲染。</summary>
+    public static void SetImage(CapturedImage image)
+    {
+        SetImageAndText(image, null);
+    }
+
+    /// <summary>一次性写入图片和可选文字，避免后写的文字覆盖图片格式。</summary>
+    public static void SetImageAndText(CapturedImage image, string? text)
+    {
+        if (image.Width <= 0 || image.Height <= 0)
+            throw new ArgumentException("图片尺寸无效。", nameof(image));
+
+        var pixelBytes = checked(image.Stride * image.Height);
+        var totalBytes = checked((long)40 + pixelBytes);
+        Exception? last = null;
+
+        for (var attempt = 0; attempt < 8; attempt++)
+        {
+            if (!Win32.OpenClipboard(IntPtr.Zero))
+            {
+                Thread.Sleep(15);
+                continue;
+            }
+
+            IntPtr dib = IntPtr.Zero;
+            IntPtr textMem = IntPtr.Zero;
+            try
+            {
+                dib = Win32.GlobalAlloc(Win32.GMEM_MOVEABLE, (IntPtr)totalBytes);
+                if (dib == IntPtr.Zero) throw new InvalidOperationException("分配图片剪贴板内存失败。");
+                WriteDib(dib, image, pixelBytes);
+
+                if (!string.IsNullOrEmpty(text))
+                {
+                    var textBytes = checked((text.Length + 1) * 2);
+                    textMem = Win32.GlobalAlloc(Win32.GMEM_MOVEABLE, (IntPtr)textBytes);
+                    if (textMem == IntPtr.Zero)
+                        throw new InvalidOperationException("分配文字剪贴板内存失败。");
+                    WriteText(textMem, text);
+                }
+
+                if (!Win32.EmptyClipboard())
+                    throw new InvalidOperationException("清空剪贴板失败。");
+                if (Win32.SetClipboardData(Win32.CF_DIB, dib) == IntPtr.Zero)
+                    throw new InvalidOperationException("写入图片剪贴板数据失败。");
+                dib = IntPtr.Zero;
+
+                if (textMem != IntPtr.Zero)
+                {
+                    if (Win32.SetClipboardData(Win32.CF_UNICODETEXT, textMem) == IntPtr.Zero)
+                        throw new InvalidOperationException("写入文字剪贴板数据失败。");
+                    textMem = IntPtr.Zero;
+                }
+                return;
+            }
+            catch (Exception ex)
+            {
+                last = ex;
+            }
+            finally
+            {
+                if (dib != IntPtr.Zero) Win32.GlobalFree(dib);
+                if (textMem != IntPtr.Zero) Win32.GlobalFree(textMem);
+                Win32.CloseClipboard();
+            }
+
+            Thread.Sleep(15);
+        }
+
+        throw new InvalidOperationException("剪贴板正被其他程序占用，图片未复制。", last);
+    }
+
+    static void WriteDib(IntPtr hMem, CapturedImage image, int pixelBytes)
+    {
+        var p = Win32.GlobalLock(hMem);
+        if (p == IntPtr.Zero) throw new InvalidOperationException("锁定图片剪贴板内存失败。");
+        try
+        {
+            Marshal.WriteInt32(p, 0, 40);
+            Marshal.WriteInt32(p, 4, image.Width);
+            Marshal.WriteInt32(p, 8, image.Height);
+            Marshal.WriteInt16(p, 12, 1);
+            Marshal.WriteInt16(p, 14, 32);
+            Marshal.WriteInt32(p, 16, 0);
+            Marshal.WriteInt32(p, 20, pixelBytes);
+            Marshal.WriteInt32(p, 24, 3780);
+            Marshal.WriteInt32(p, 28, 3780);
+            Marshal.WriteInt32(p, 32, 0);
+            Marshal.WriteInt32(p, 36, 0);
+            for (var y = 0; y < image.Height; y++)
+            {
+                var source = (image.Height - 1 - y) * image.Stride;
+                Marshal.Copy(image.Pixels, source,
+                             IntPtr.Add(p, 40 + y * image.Stride), image.Stride);
+            }
+        }
+        finally { Win32.GlobalUnlock(hMem); }
+    }
+
+    static void WriteText(IntPtr hMem, string text)
+    {
+        var p = Win32.GlobalLock(hMem);
+        if (p == IntPtr.Zero) throw new InvalidOperationException("锁定文字剪贴板内存失败。");
+        try { Marshal.Copy((text + '\0').ToCharArray(), 0, p, text.Length + 1); }
+        finally { Win32.GlobalUnlock(hMem); }
+    }
+
     /// <summary>热键可能仍按住 Alt/Shift/Win，先松开，否则 Ctrl+C 会变成组合键。</summary>
     static void ReleaseModifiers()
     {

@@ -230,6 +230,7 @@ public static class Win32
     [DllImport("kernel32.dll")] public static extern IntPtr GlobalSize(IntPtr hMem);
 
     public const uint CF_UNICODETEXT = 13;
+    public const uint CF_DIB = 8;
     public const uint GMEM_MOVEABLE = 0x0002;
 
     // ---- 托盘 ----

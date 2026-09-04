@@ -2,6 +2,7 @@
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using FlashTrans.Core;
 using FlashTrans.Interop;
 using FlashTrans.Services;
@@ -17,7 +18,7 @@ static class UiProbe
         var s = SettingsService.Instance.Current;
 
         step("托盘图标：句柄非空", TrayIconProbe);
-        step("剪贴板：原生读写往返", ClipboardProbe);
+        RunClipboardProbes(step);
         step("弹窗：只拖宽度也能记住", () => PopupWidthProbe(host));
         step("弹窗：焦点被抢走也不关闭", () => PopupBlurProbe(host));
         step("弹窗：收起能原样叫回，关掉的叫不回", () => PopupStashProbe(host));
@@ -106,6 +107,12 @@ static class UiProbe
         step("识别结果：清空后按复制不关窗", OcrResultEmptyProbe);
     }
 
+    public static void RunClipboardProbes(Action<string, Action> step)
+    {
+        step("剪贴板：原生读写往返", ClipboardProbe);
+        step("剪贴板：图片和文字能被其他程序读回", ClipboardImageProbe);
+    }
+
     // ------------------------------------------------------------- 具体探测
 
     /// <summary>托盘图标以前用 LoadImage 读 exe，必然返回 NULL，通知区域就是个透明空位。</summary>
@@ -170,6 +177,7 @@ static class UiProbe
     /// <summary>剪贴板改走原生 API：OpenClipboard 是全局锁，OLE 版会把浏览器一起拖住。</summary>
     static void ClipboardProbe()
     {
+        var originalData = Clipboard.GetDataObject();
         var original = SelectionReader.ReadText();
         try
         {
@@ -186,8 +194,57 @@ static class UiProbe
         }
         finally
         {
-            if (!string.IsNullOrEmpty(original)) SelectionReader.SetText(original);
+            RestoreClipboard(originalData, original);
         }
+    }
+
+    static void ClipboardImageProbe()
+    {
+        var originalData = Clipboard.GetDataObject();
+        try
+        {
+            var pixels = new byte[]
+            {
+                0x10, 0x20, 0xE0, 0xFF, 0x20, 0xE0, 0x30, 0xFF,
+                0x40, 0x30, 0x20, 0xFF, 0xE0, 0x40, 0x50, 0xFF,
+            };
+            var image = new CapturedImage(2, 2, pixels);
+            SelectionReader.SetImageAndText(image, "clipboard image probe");
+
+            var data = Clipboard.GetDataObject();
+            if (data is null || !data.GetDataPresent(DataFormats.Dib))
+                throw new InvalidOperationException("剪贴板里没有标准 DIB 图片格式");
+
+            var back = Clipboard.GetImage();
+            if (back is null || back.PixelWidth != image.Width || back.PixelHeight != image.Height)
+                throw new InvalidOperationException("图片尺寸读回不一致");
+
+            var bgra = back.Format == PixelFormats.Bgra32
+                ? back
+                : new FormatConvertedBitmap(back, PixelFormats.Bgra32, null, 0);
+            var actual = new byte[pixels.Length];
+            bgra.CopyPixels(actual, image.Stride, 0);
+            if (!actual.AsSpan().SequenceEqual(pixels))
+                throw new InvalidOperationException("图片像素读回不一致");
+            if (!string.Equals(SelectionReader.ReadText(), "clipboard image probe", StringComparison.Ordinal))
+                throw new InvalidOperationException("图片+文字写入后文字格式丢失");
+        }
+        finally
+        {
+            RestoreClipboard(originalData, null);
+        }
+    }
+
+    static void RestoreClipboard(IDataObject? originalData, string? originalText)
+    {
+        try
+        {
+            if (originalData is not null)
+                Clipboard.SetDataObject(originalData, copy: true);
+            else if (!string.IsNullOrEmpty(originalText))
+                SelectionReader.SetText(originalText);
+        }
+        catch { }
     }
 
     /// <summary>
