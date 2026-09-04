@@ -741,7 +741,6 @@ sealed class CaptureSelectionLayer : FrameworkElement
         if (!_hasSel || _sel.Width < 1 || _sel.Height < 1)
         {
             dc.DrawRectangle(Dim, null, full);
-            DrawHint(dc, full);
             return;
         }
 
@@ -772,18 +771,6 @@ sealed class CaptureSelectionLayer : FrameworkElement
     /// <summary>有没有马赛克要画。没有就别去做那张全屏的马赛克图，白花时间。</summary>
     bool _mosaicNeeded() =>
         _drawing is MosaicAnnotation || _items.Exists(a => a is MosaicAnnotation);
-
-    void DrawHint(DrawingContext dc, Rect full)
-    {
-        var t = Text("拖动选择区域　·　Esc 取消　·　空格截当前窗口", 15);
-        const double pad = 14;
-        var w = t.Width + pad * 2;
-        var h = t.Height + pad;
-        var x = full.Left + (full.Width - w) / 2;
-        var y = full.Top + full.Height * 0.42;
-        dc.DrawRoundedRectangle(LabelBack, null, new Rect(x, y, w, h), 8, 8);
-        dc.DrawText(t, new Point(x + pad, y + pad / 2));
-    }
 
     /// <summary>选区边上引四条线到屏幕边缘，方便对齐。只在拖的时候画，画完就收。</summary>
     static void DrawGuides(DrawingContext dc, Rect sel, Rect full)

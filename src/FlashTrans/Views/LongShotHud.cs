@@ -72,7 +72,6 @@ public sealed class LongShotHud : Window
             Padding = new Thickness(12, 8, 12, 9),
             Cursor = Cursors.Hand,
             Child = row,
-            ToolTip = "点一下停下",
         };
         ((Border)Content).MouseLeftButtonUp += (_, _) => Cancelled = true;
 

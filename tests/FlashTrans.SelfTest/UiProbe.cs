@@ -1039,6 +1039,9 @@ static class UiProbe
                 hud.UpdateLayout();
                 Pump();
 
+                if (hud.Content is Border border && border.ToolTip is not null)
+                    throw new InvalidOperationException($"{what}：停止浮条不应带悬浮提示");
+
                 var before = AllText(hud);
                 hud.Report(1289, 2);
                 hud.UpdateLayout();
