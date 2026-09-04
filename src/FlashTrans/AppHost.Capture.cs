@@ -231,7 +231,7 @@ public sealed partial class AppHost
         {
             LongShotStop.Cancelled => "已停在这里。",
             LongShotStop.Limit => "到长度上限了，后面的没接。",
-            LongShotStop.Diverged => "后面的画面接不上，停在这里。",
+            LongShotStop.Diverged => "页面仍在刷新，已停在最后完整区域。",
             _ => "",
         };
         // 一帧都没接上（这块区域滚不动）也照样弹预览。以前这种情况直接按
@@ -417,7 +417,7 @@ public sealed partial class AppHost
     {
         try
         {
-            Clipboard.SetImage(shot.ToBitmap());
+            SelectionReader.SetImage(shot);
             return true;
         }
         catch (Exception ex)
@@ -433,10 +433,7 @@ public sealed partial class AppHost
     {
         try
         {
-            var data = new DataObject();
-            data.SetImage(shot.ToBitmap());
-            data.SetText(text);
-            Clipboard.SetDataObject(data, copy: true);
+            SelectionReader.SetImageAndText(shot, text);
         }
         catch (Exception ex)
         {

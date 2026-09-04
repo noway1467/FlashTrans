@@ -47,9 +47,9 @@ public sealed record RecordFrames(
 /// </summary>
 public static class RecordService
 {
-    /// <summary>帧率允许的范围。上限压在 30：再高界面自己就成瓶颈了，见 EffectiveFps。</summary>
+    /// <summary>帧率允许的范围。高于 60 对屏幕录制的收益很小，反而会放大临时帧开销。</summary>
     public const int MinFps = 2;
-    public const int MaxFps = 30;
+    public const int MaxFps = 60;
 
     /// <summary>时长上限允许的范围（秒）。</summary>
     public const int MinSeconds = 2;
@@ -69,6 +69,70 @@ public static class RecordService
     /// 低帧率下一帧的间隔可能是 500ms，睡整段的话按了暂停要等半秒才有反应。
     /// </summary>
     static Task NapAsync(double ms) => Task.Delay((int)Math.Clamp(ms, 1, 200));
+
+    sealed record PendingWrite(string Path, double At, Task<bool> Completion);
+
+    sealed class FrameWriter : IDisposable
+    {
+        readonly SemaphoreSlim _slots;
+        readonly List<PendingWrite> _writes = [];
+        Exception? _error;
+
+        public FrameWriter(int concurrency)
+        {
+            _slots = new SemaphoreSlim(Math.Max(1, concurrency));
+        }
+
+        public bool Failed => Volatile.Read(ref _error) is not null;
+
+        public async Task<bool> QueueAsync(string path, double at, CapturedImage image)
+        {
+            while (!await _slots.WaitAsync(50))
+                if (Failed) return false;
+
+            var completion = Task.Run(() =>
+            {
+                try
+                {
+                    image.SavePng(path);
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    Interlocked.CompareExchange(ref _error, ex, null);
+                    Log.Warn("录制存帧失败：" + ex.Message);
+                    return false;
+                }
+                finally
+                {
+                    _slots.Release();
+                }
+            });
+            _writes.Add(new PendingWrite(path, at, completion));
+            return true;
+        }
+
+        public async Task<List<PendingWrite>> CompleteAsync()
+        {
+            var results = await Task.WhenAll(_writes.Select(w => w.Completion));
+            var count = 0;
+            while (count < results.Length && results[count]) count++;
+            return _writes.Take(count).ToList();
+        }
+
+        public void Dispose() => _slots.Dispose();
+    }
+
+    static int SaveConcurrency(RECT region)
+    {
+        var width = Math.Max(0, region.Right - region.Left);
+        var height = Math.Max(0, region.Bottom - region.Top);
+        var pixels = (long)width * height;
+        var cpu = Math.Clamp(Environment.ProcessorCount / 2, 1, 4);
+        if (pixels >= 3840L * 2160) return 1;
+        if (pixels >= 1920L * 1080) return Math.Min(2, cpu);
+        return Math.Min(4, cpu);
+    }
 
     /// <summary>
     /// 把选区的宽高吸到 4 的倍数（各最多少 3 个像素）。
@@ -119,7 +183,11 @@ public static class RecordService
         var dir = Path.Combine(Path.GetTempPath(), "FlashTrans.rec." + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);
 
-        var paths = new List<string>();
+        using var writer = new FrameWriter(SaveConcurrency(region));
+        using var grabber = capture is null ? ScreenCaptureSession.Open(
+            region.Left, region.Top, region.Right - region.Left, region.Bottom - region.Top) : null;
+        CapturedImage? CaptureFrame() => capture is not null ? capture(region) : grabber?.Grab();
+
         var interval = 1000.0 / fps;
         var maxFrames = Math.Max(1, fps * maxSeconds);
         var stop = RecordStop.Limit;
@@ -160,7 +228,8 @@ public static class RecordService
         double pauseAt = -1;   // >= 0 表示正暂停着，值是按下暂停那一刻的墙上时刻
         var pauses = 0;
 
-        while (paths.Count < maxFrames)
+        var capturedCount = 0;
+        while (capturedCount < maxFrames)
         {
             if (cancelled?.Invoke() == true) { stop = RecordStop.Stopped; break; }
 
@@ -202,7 +271,7 @@ public static class RecordService
 
             // 按绝对时刻等，不是「每次睡 interval」——后者会把每帧的处理时间
             // 累加进去，录 30 秒实际只录到 20 秒的内容。
-            var wait = paths.Count * interval - (sw.Elapsed.TotalMilliseconds - pausedMs);
+            var wait = capturedCount * interval - (sw.Elapsed.TotalMilliseconds - pausedMs);
             if (wait > 1)
             {
                 // 分段睡，中间回来看一眼暂停/停止有没有按。
@@ -214,31 +283,31 @@ public static class RecordService
             CapturedImage? img;
             try
             {
-                img = await Task.Run(() => (capture ?? ScreenCapture.Grab)(region));
+                img = await Task.Run(CaptureFrame);
             }
             catch (Exception ex)
             {
                 Log.Warn("录制抓帧失败：" + ex.Message);
+                stop = RecordStop.Failed;
                 break;
             }
-            if (img is null) break;
-
-            var path = Path.Combine(dir, $"f{paths.Count:D5}.png");
-            try
+            if (img is null)
             {
-                await Task.Run(() => img.SavePng(path));
-            }
-            catch (Exception ex)
-            {
-                // 磁盘满或者临时目录没权限。已经录到的帧照样交出去，别整个丢掉。
-                Log.Warn("录制存帧失败：" + ex.Message);
+                stop = RecordStop.Failed;
                 break;
             }
 
-            if (paths.Count == 0) firstAt = at;
+            var index = capturedCount++;
+            var path = Path.Combine(dir, $"f{index:D5}.png");
+            if (!await writer.QueueAsync(path, at, img))
+            {
+                stop = RecordStop.Failed;
+                break;
+            }
+
+            if (capturedCount == 1) firstAt = at;
             lastAt = at;
-            paths.Add(path);
-            onProgress?.Invoke(paths.Count, TimeSpan.FromMilliseconds(at));
+            onProgress?.Invoke(capturedCount, TimeSpan.FromMilliseconds(at));
         }
 
         // 循环可能是在暂停中途跳出来的（用户暂停着直接按 Esc），那一段也得算上。
@@ -266,6 +335,15 @@ public static class RecordService
             {
                 audioCapture.Dispose();
             }
+        }
+
+        var saved = await writer.CompleteAsync();
+        if (writer.Failed) stop = RecordStop.Failed;
+        var paths = saved.Select(w => w.Path).ToList();
+        if (saved.Count > 0)
+        {
+            firstAt = saved[0].At;
+            lastAt = saved[^1].At;
         }
 
         var active = TimeSpan.FromMilliseconds(Math.Max(0, sw.Elapsed.TotalMilliseconds - pausedMs));

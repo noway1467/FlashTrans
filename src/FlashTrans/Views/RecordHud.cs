@@ -44,6 +44,7 @@ public sealed class RecordHud : Window
     bool _encoding;
     int _lastFrames;
     TimeSpan _lastElapsed;
+    double _lastUiReportMs = -1;
 
     /// <summary>用户按过 Esc 或者点了浮条。录制那边每帧问一次。</summary>
     public bool Stopped { get; private set; }
@@ -299,6 +300,9 @@ public sealed class RecordHud : Window
         // 那时候得靠这两个值把秒数和帧数原样留在屏幕上。
         _lastFrames = frames;
         _lastElapsed = elapsed;
+        if (_lastUiReportMs >= 0 && elapsed.TotalMilliseconds - _lastUiReportMs < 100)
+            return;
+        _lastUiReportMs = elapsed.TotalMilliseconds;
         Render();
     }
 

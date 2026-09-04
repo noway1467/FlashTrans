@@ -96,6 +96,10 @@ public sealed class SettingsService
     public void Touch()
     {
         Save();
+        // 代理也得跟着走一遍。以前只有 Apply 会重配，而设置页每一处改动走的都是 Touch，
+        // 于是「代理」那一栏填完关掉窗口，得重启才生效。Configure 在代理没变时直接返回，
+        // 不会把预热好的连接白丢掉。
+        Net.Configure(string.IsNullOrWhiteSpace(Current.Proxy) ? null : Current.Proxy);
         Changed?.Invoke(Current);
     }
 
@@ -130,6 +134,20 @@ public sealed class SettingsService
         {
             s.CaptureFontSize = CaptureLimits.FontSizeForWidth(s.CapturePenWidth);
             s.Version = 3;
+            changed = true;
+        }
+
+        // v3 -> v4：开机自启改成以 settings.json 为准，注册表只是它的投影。
+        // 这个字段以前写进去就没人读过，所以老配置里它可能是 false 而 Run 项已经有了。
+        // 不认这一条的话，升上来第一次启动就会把用户勾过的开机自启当成「没开」删掉。
+        if (s.Version < 4)
+        {
+            if (!s.RunAtStartup && StartupService.IsRegistered())
+            {
+                s.RunAtStartup = true;
+                Log.Warn("配置迁移：注册表里已有开机自启项，记进配置");
+            }
+            s.Version = 4;
             changed = true;
         }
 
@@ -168,7 +186,7 @@ public sealed class SettingsService
         s.PopupMaxHeight = Math.Clamp(s.PopupMaxHeight, 180, 2400);
         s.WinWidth = Math.Clamp(s.WinWidth, 380, 2400);
         s.WinHeight = Math.Clamp(s.WinHeight, 260, 1800);
-        s.TypeDelayMs = Math.Clamp(s.TypeDelayMs, 150, 3000);
+        s.TypeDelayMs = Math.Clamp(s.TypeDelayMs, AppSettings.MinTypeDelayMs, AppSettings.MaxTypeDelayMs);
         s.CacheSize = Math.Clamp(s.CacheSize, 0, 20000);
         s.CacheTtlHours = Math.Clamp(s.CacheTtlHours, 1, 168);
         // 工具条上能调到的范围就是这儿夹的范围，两边必须一致，

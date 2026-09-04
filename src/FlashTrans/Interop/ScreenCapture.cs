@@ -109,6 +109,112 @@ public sealed class CapturedImage(int width, int height, byte[] pixels)
     }
 }
 
+/// <summary>一组可复用的 GDI 抓屏资源。适合连续录制同一块固定区域。</summary>
+public sealed class ScreenCaptureSession : IDisposable
+{
+    readonly int _x;
+    readonly int _y;
+    readonly int _width;
+    readonly int _height;
+    readonly IntPtr _screen;
+    readonly IntPtr _memory;
+    readonly IntPtr _dib;
+    readonly IntPtr _bits;
+    readonly IntPtr _old;
+    bool _disposed;
+
+    ScreenCaptureSession(int x, int y, int width, int height,
+                         IntPtr screen, IntPtr memory, IntPtr dib,
+                         IntPtr bits, IntPtr old)
+    {
+        _x = x;
+        _y = y;
+        _width = width;
+        _height = height;
+        _screen = screen;
+        _memory = memory;
+        _dib = dib;
+        _bits = bits;
+        _old = old;
+    }
+
+    public static ScreenCaptureSession? Open(int x, int y, int width, int height)
+    {
+        if (width <= 0 || height <= 0) return null;
+
+        var screen = Win32.GetDC(IntPtr.Zero);
+        if (screen == IntPtr.Zero) return null;
+
+        var memory = IntPtr.Zero;
+        var dib = IntPtr.Zero;
+        var old = IntPtr.Zero;
+        var opened = false;
+        try
+        {
+            memory = Win32.CreateCompatibleDC(screen);
+            if (memory == IntPtr.Zero) return null;
+
+            var info = new BITMAPINFO
+            {
+                bmiHeader = new BITMAPINFOHEADER
+                {
+                    biSize = Marshal.SizeOf<BITMAPINFOHEADER>(),
+                    biWidth = width,
+                    biHeight = -height,
+                    biPlanes = 1,
+                    biBitCount = 32,
+                    biCompression = Win32.BI_RGB,
+                }
+            };
+            dib = Win32.CreateDIBSection(screen, ref info, Win32.DIB_RGB_COLORS,
+                                         out var bits, IntPtr.Zero, 0);
+            if (dib == IntPtr.Zero || bits == IntPtr.Zero) return null;
+
+            old = Win32.SelectObject(memory, dib);
+            if (old == IntPtr.Zero) return null;
+
+            var session = new ScreenCaptureSession(x, y, width, height,
+                                                   screen, memory, dib, bits, old);
+            opened = true;
+            return session;
+        }
+        finally
+        {
+            if (!opened && memory != IntPtr.Zero)
+            {
+                if (old != IntPtr.Zero) Win32.SelectObject(memory, old);
+                if (dib != IntPtr.Zero) Win32.DeleteObject(dib);
+                Win32.DeleteDC(memory);
+            }
+            if (!opened) Win32.ReleaseDC(IntPtr.Zero, screen);
+        }
+    }
+
+    public CapturedImage? Grab()
+    {
+        if (_disposed) throw new ObjectDisposedException(nameof(ScreenCaptureSession));
+        if (!Win32.BitBlt(_memory, 0, 0, _width, _height, _screen, _x, _y,
+                          Win32.SRCCOPY | Win32.CAPTUREBLT))
+            return null;
+
+        Win32.GdiFlush();
+        var buf = GC.AllocateUninitializedArray<byte>(_width * 4 * _height);
+        Marshal.Copy(_bits, buf, 0, buf.Length);
+        for (var i = 3; i < buf.Length; i += 4) buf[i] = 0xFF;
+        return new CapturedImage(_width, _height, buf);
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        if (_old != IntPtr.Zero) Win32.SelectObject(_memory, _old);
+        if (_dib != IntPtr.Zero) Win32.DeleteObject(_dib);
+        if (_memory != IntPtr.Zero) Win32.DeleteDC(_memory);
+        if (_screen != IntPtr.Zero) Win32.ReleaseDC(IntPtr.Zero, _screen);
+    }
+}
+
 /// <summary>用 GDI 抓屏。坐标是物理像素（本程序声明了 per-monitor v2，不会被系统虚拟化）。</summary>
 public static class ScreenCapture
 {
@@ -129,61 +235,8 @@ public static class ScreenCapture
     /// <summary>抓一块屏幕。失败或宽高为 0 时返回 null。</summary>
     public static CapturedImage? Grab(int x, int y, int width, int height)
     {
-        if (width <= 0 || height <= 0) return null;
-
-        var screen = Win32.GetDC(IntPtr.Zero);
-        if (screen == IntPtr.Zero) return null;
-
-        var mem = IntPtr.Zero;
-        var dib = IntPtr.Zero;
-        var old = IntPtr.Zero;
-        try
-        {
-            mem = Win32.CreateCompatibleDC(screen);
-            if (mem == IntPtr.Zero) return null;
-
-            // 自上而下（负高度）+ 32 位，拿到的就是 BGRA 紧密排列，不用再翻转和补齐
-            var info = new BITMAPINFO
-            {
-                bmiHeader = new BITMAPINFOHEADER
-                {
-                    biSize = Marshal.SizeOf<BITMAPINFOHEADER>(),
-                    biWidth = width,
-                    biHeight = -height,
-                    biPlanes = 1,
-                    biBitCount = 32,
-                    biCompression = Win32.BI_RGB,
-                }
-            };
-            dib = Win32.CreateDIBSection(screen, ref info, Win32.DIB_RGB_COLORS, out var bits,
-                                         IntPtr.Zero, 0);
-            if (dib == IntPtr.Zero || bits == IntPtr.Zero) return null;
-
-            old = Win32.SelectObject(mem, dib);
-            // CAPTUREBLT 会把分层窗口（部分输入法候选框、半透明窗口）也算进去
-            if (!Win32.BitBlt(mem, 0, 0, width, height, screen, x, y,
-                              Win32.SRCCOPY | Win32.CAPTUREBLT))
-                return null;
-
-            // GDI 的绘制可能还在队列里，读像素前先等它落地
-            Win32.GdiFlush();
-
-            var buf = new byte[width * 4 * height];
-            Marshal.Copy(bits, buf, 0, buf.Length);
-
-            // 屏幕内容不透明，但 DIB 的 alpha 通道是 BitBlt 没管的垃圾值。
-            // 不铺成 255，后面按 Bgra8 交给 OCR 会得到一张「全透明」的图，识别结果为空。
-            for (var i = 3; i < buf.Length; i += 4) buf[i] = 0xFF;
-
-            return new CapturedImage(width, height, buf);
-        }
-        finally
-        {
-            if (old != IntPtr.Zero) Win32.SelectObject(mem, old);
-            if (dib != IntPtr.Zero) Win32.DeleteObject(dib);
-            if (mem != IntPtr.Zero) Win32.DeleteDC(mem);
-            Win32.ReleaseDC(IntPtr.Zero, screen);
-        }
+        using var session = ScreenCaptureSession.Open(x, y, width, height);
+        return session?.Grab();
     }
 
     public static CapturedImage? Grab(RECT r) => Grab(r.Left, r.Top, r.Right - r.Left, r.Bottom - r.Top);

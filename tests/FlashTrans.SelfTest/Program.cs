@@ -31,10 +31,17 @@ static class Program
         });
 
         CacheProbe.RunAll(Step);
+        SettingsProbe.RunAll(Step);
         HttpVersionProbe.RunAll(Step);
 
-        var host = new AppHost();
+        if (args.Contains("--only-clipboard"))
+        {
+            UiProbe.RunClipboardProbes(Step);
+            app.Shutdown();
+            return _fail == 0 ? 0 : 1;
+        }
 
+        var host = new AppHost();
         UiProbe.RunAll(host, Step);
         OcrProbe.RunAll(Step);
         LongShotProbe.RunAll(Step);

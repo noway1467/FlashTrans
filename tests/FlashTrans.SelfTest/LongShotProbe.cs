@@ -21,6 +21,7 @@ static class LongShotProbe
         step("长截图：接起来的长图行数和内容都对", StackProbe);
         step("长截图：固定浮层不会被误判成滚到底", FixedOverlayProbe);
         step("长截图：滚动距离超过初始窄带也能对齐", LargeShiftProbe);
+        step("长截图：动态刷新和回弹期间不反向滚、不拼半帧", DynamicRefreshProbe);
     }
 
     // ------------------------------------------------------------- 造图
@@ -191,6 +192,72 @@ static class LongShotProbe
         var got = LongShotService.FindShift(prev, next, bandTop: 80);
         if (got != 150)
             throw new InvalidOperationException($"滚了 150 行、初始窄带在 80 行时应算出 150，实际是 {got}");
+    }
+
+    static void DynamicRefreshProbe()
+    {
+        var page = Page(1200);
+        var scrolls = 0;
+        var samples = 0;
+        var wheelDeltas = new List<int>();
+
+        CapturedImage Capture(RECT _)
+        {
+            if (scrolls == 0) return Frame(page, 0);
+
+            samples++;
+            var previousOffset = (scrolls - 1) * 90;
+            var targetOffset = Math.Min(scrolls * 90, 270);
+
+            if (samples <= 2) return Frame(page, previousOffset);
+            if (scrolls == 1 && samples is >= 3 and <= 8)
+                return PartialFrame(page, targetOffset, 55);
+            if (scrolls == 2 && samples == 3)
+                return Frame(page, previousOffset - 30);
+            if (scrolls >= 4) return Frame(page, 270);
+            return Frame(page, targetOffset);
+        }
+
+        void Scroll(int delta)
+        {
+            wheelDeltas.Add(delta);
+            scrolls++;
+            samples = 0;
+        }
+
+        var result = Task.Run(() => LongShotService.RunForTestAsync(
+                new RECT { Left = 0, Top = 0, Right = W, Bottom = H },
+                Capture, Scroll, delay: _ => Task.CompletedTask))
+            .GetAwaiter().GetResult();
+
+        if (result.Image is null) throw new InvalidOperationException("动态页面没有拼出结果");
+        if (result.Stopped != LongShotStop.Bottom)
+            throw new InvalidOperationException($"动态页面应稳定滚到底，实际 {result.Stopped}");
+        if (result.Frames != 4)
+            throw new InvalidOperationException($"应接到首屏加 3 段，实际 {result.Frames} 屏");
+        if (wheelDeltas.Count != 4 || wheelDeltas.Any(d => d >= 0))
+            throw new InvalidOperationException("动态页面滚动出现了反向滚轮");
+
+        var want = LongShotService.Crop(page, 0, H + 90 * 3)!;
+        if (!result.Image.Pixels.AsSpan().SequenceEqual(want.Pixels))
+            throw new InvalidOperationException("刷新中间帧被拼进结果，页面出现半帧或缺口");
+    }
+
+    static CapturedImage PartialFrame(CapturedImage page, int offset, int loadingRows)
+    {
+        var frame = Frame(page, offset);
+        var pixels = (byte[])frame.Pixels.Clone();
+        var top = Math.Max(0, frame.Height - loadingRows);
+        for (var y = top; y < frame.Height; y++)
+            for (var x = 0; x < frame.Width; x++)
+            {
+                var i = y * frame.Stride + x * 4;
+                pixels[i] = 0xEE;
+                pixels[i + 1] = 0xEE;
+                pixels[i + 2] = 0xEE;
+                pixels[i + 3] = 0xFF;
+            }
+        return new CapturedImage(frame.Width, frame.Height, pixels);
     }
 
     static void FixedBottomProbe()
