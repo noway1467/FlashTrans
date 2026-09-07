@@ -27,6 +27,8 @@ tools\publish.cmd small    # 依赖已安装的 .NET 9 Desktop Runtime，体积�
 ```
 产物在 `dist\`。打包前先退出正在运行的实例（托盘右键最后一项）。
 
+发布包启动烟测可在独立目录放置 `portable.txt` 后运行 `FlashTrans.exe --tray --benchmark`。诊断实例会记录启动日志并退出，不唤醒已有实例、不注册全局热键、不监听选区、不同步开机自启；因此该模式的耗时不等同于正常启动的完整系统集成耗时。
+
 ## 默认快捷键
 
 | 快捷键 | 作用 |
