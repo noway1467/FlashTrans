@@ -67,7 +67,29 @@ AI 源支持流式输出，译文边生成边显示，也可单独设定风格�
 
 OCR 用的是 Windows 自带的 `Windows.Media.Ocr`，**不联网、不上传、不要密钥**。
 
+在「设置 → 截图 → OCR」中可选择识别语言；默认自动比较已安装的 OCR 语言包，不跟随翻译源语言。没有对应语言包时仍会回退，但识别质量会受限制；安装新语言包后需重启程序。
+
+- 识别会比较最近邻放大、灰度/二值化和平滑留白结果，保留列表换行、缩进和已识别到的符号。
+- 中小竖图识别明显不足时，会有限度尝试 90° 方向回退；不是任意旋转、复杂竖排或图标识别器。
+- 默认按截图内的 `Ctrl+D` 会打开可编辑的结果窗口。勾选「按『识别文字』快捷键后直接复制并关闭」后，该快捷键及长截图中的 `Ctrl+D` 改为直接复制；鼠标按钮仍打开编辑窗口，`Ctrl+Shift+D` 仍执行识别并翻译。此开关默认关闭。
+- 数字、短码和很小的文字仍可能漏识别。程序不会凭空补齐缺失括号，也不会把普通代码标识符强行猜成 `Id`。重要内容请在结果窗口核对。
+
 支持长截图，录动图/视频，截图并翻译。长截图会等待滚动和动态内容稳定后再拼接，避免论坛懒加载时把半屏内容接进去。
+
+### OCR 自测
+
+从项目根目录运行（需要 Windows 和 .NET 9 SDK）：
+
+```powershell
+dotnet build .\tests\FlashTrans.SelfTest\FlashTrans.SelfTest.csproj -c Release --nologo
+if ($LASTEXITCODE -ne 0) { throw '构建失败，停止运行旧测试产物。' }
+$selfTest = '.\tests\FlashTrans.SelfTest\bin\Release\net9.0-windows10.0.19041.0\FlashTrans.SelfTest.dll'
+dotnet $selfTest --only-ocr    # 定向离线 OCR 回归
+dotnet $selfTest               # 完整 WPF 功能自测
+dotnet $selfTest --ocr-corpus  # 显式公开样例评测；缺少缓存时联网下载
+```
+
+公开评测使用六张固定哈希的 Tesseract / PaddleOCR 样例，不上传截图、不安装第三方 OCR 引擎。图片缓存及 JSON 结果在 `shots/ocr-corpus-cache/`、`shots/ocr-corpus-results.json`，不会进入 Git。评测执行成功不等于识别全对；详见 [OCR 评测记录](tests/FlashTrans.SelfTest/OCR-VALIDATION.md)。
 
 
 ## 设置与数据

@@ -165,6 +165,9 @@ public sealed class TranslateEngine
         if (impl.ConfigError is { } cfgErr)
             return TranslateResult.Failed(impl, cfgErr);
 
+        // 强制翻译会使同一原文的缓存版本递增；记住请求开始时的版本，
+        // 这样被取消的旧请求即使晚一步返回，也不能把旧译文写回缓存。
+        var textVersion = Cache.TextVersion(text);
         var result = new TranslateResult { ProviderId = impl.Id, ProviderName = impl.Name };
         var missing = new List<string>();
 
@@ -212,6 +215,8 @@ public sealed class TranslateEngine
 
         result.ElapsedMs = sw.ElapsedMilliseconds;
 
+        ct.ThrowIfCancellationRequested();
+
         if (result.Texts.Count == 0)
         {
             result.Error = errors.Count > 0 ? string.Join("；", errors.Distinct()) : "接口未返回译文";
@@ -223,7 +228,7 @@ public sealed class TranslateEngine
             if (errors.Count > 0) result.Error = null;
             if (S.CacheEnabled)
                 foreach (var (lang, value) in result.Texts)
-                    Cache.Set(impl.Id, from, lang, text, value, result.Phonetic, result.Dict, wantDict);
+                    Cache.Set(impl.Id, from, lang, text, value, result.Phonetic, result.Dict, wantDict, textVersion);
         }
         return result;
     }

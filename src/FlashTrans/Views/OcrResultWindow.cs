@@ -122,8 +122,8 @@ public sealed class OcrResultWindow : Window
     void Fire(Action<string> run)
     {
         if (_fired) return;
-        var text = _box.Text.Trim();
-        if (text.Length == 0) return;   // 全删空了就没什么可干的，留着窗口让用户接着改
+        var text = _box.Text.TrimEnd();
+        if (string.IsNullOrWhiteSpace(text)) return;   // 保留代码缩进，但纯空白不触发动作
 
         _fired = true;
         Close();

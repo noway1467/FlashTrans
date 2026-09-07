@@ -4,6 +4,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using FlashTrans.Core;
 using FlashTrans.Interop;
+using FlashTrans.Services;
 
 namespace FlashTrans.Views;
 
@@ -83,7 +84,9 @@ public sealed class LongShotWindow : Window
                 case Key.S when ctrl: e.Handled = true; Fire(CaptureAction.Save); break;
                 case Key.D when ctrl:
                     e.Handled = true;
-                    Fire(shift ? CaptureAction.OcrTranslate : CaptureAction.Ocr);
+                    Fire(shift ? CaptureAction.OcrTranslate
+                               : CaptureOverlay.OcrShortcutAction(
+                                   SettingsService.Instance.Current.OcrCopyAndClose));
                     break;
             }
         };

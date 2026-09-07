@@ -66,6 +66,10 @@ static class OcrProbe
             var big = new CapturedImage(100, 400, new byte[100 * 400 * 4]);
             if (!ReferenceEquals(big.ScaleUpTo(360), big))
                 throw new InvalidOperationException("已经够高了还在放大");
+
+            var ocr = new CapturedImage(300, 40, new byte[300 * 40 * 4]).ScaleUpForOcr();
+            if (ocr.Width != 2400 || ocr.Height != 320)
+                throw new InvalidOperationException($"OCR 最近邻放大倍数不对：{ocr.Width}x{ocr.Height}");
         });
 
         step("抓屏：裁一块出来，位置对且越界能收住", CropProbe);
@@ -94,6 +98,19 @@ static class OcrProbe
         });
 
         step("OCR：认出自己画上去的字", RoundTrip);
+        step("OCR：只在上下文明确时修正 l/1", ConfusableProbe);
+        step("OCR：新开关能存下来", OcrSettingProbe);
+        step("OCR：快捷复制开关只改变快捷键动作", OcrShortcutProbe);
+        step("OCR：按坐标保留列表换行与缩进", OcrLayoutProbe);
+        step("OCR：多通道合并特殊符号但不污染正文", OcrSymbolMergeProbe);
+        step("OCR：按文字脚本选择匹配的语言包", OcrLanguageScoreProbe);
+        step("OCR：Unicode、数字和单位归一化", OcrUnicodeProbe);
+        step("OCR：空白截图不是缺少语言包", OcrBlankProbe);
+        step("OCR：保留合法标点、单位和 Unicode 语义", OcrTextSafetyProbe);
+        step("OCR：符号合并不能串行或篡改数值", OcrSymbolSafetyProbe);
+        step("OCR：图像增强不改原图且不越过尺寸上限", OcrPreprocessingProbe);
+        step("OCR：RTL 混排保留系统返回的逻辑词序", OcrRtlLayoutProbe);
+        step("OCR：横转段落可以回退到可读方向", OcrRotationProbe);
 
         step("马赛克：格子是硬边且取的是块内均值", MosaicProbe);
         step("马赛克：改格子大小会重做那张图", MosaicBlockProbe);
@@ -838,6 +855,196 @@ static class OcrProbe
         // 西文那部分的空格要留着，不能一起吃掉
         if (!text.Contains("OCR 1234", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException($"西文之间的空格丢了：「{text}」");
+    }
+
+    static void ConfusableProbe()
+    {
+        if (OcrService.NormalizeConfusables("wor1d 12l4 a1b 1231") != "world 1214 a1b 1231")
+            throw new InvalidOperationException("l/1 上下文修正不符合预期");
+        if (OcrService.NormalizeConfusables("1 1st lll 101") != "1 1st lll 101")
+            throw new InvalidOperationException("不明确的 l/1 被误改");
+
+        var method = typeof(OcrService).GetMethod("CleanCandidate",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        var code = "BangumiIntro {\n  animeld\n  bangumild\n  rating";
+        var fixedText = (string?)method?.Invoke(null, [code]);
+        if (fixedText != code) throw new InvalidOperationException("缺少像素证据时不应猜改标识符或补齐括号");
+
+        var identifiers = "config {\n  household\n  threshold\n  sha1sum\n}";
+        if ((string?)method?.Invoke(null, [identifiers]) != identifiers)
+            throw new InvalidOperationException("合法代码标识符被纠偏破坏");
+    }
+
+    static void OcrSettingProbe()
+    {
+        var s = AppSettings.CreateDefault();
+        s.OcrCopyAndClose = true;
+        var json = System.Text.Json.JsonSerializer.Serialize(s, SettingsJson.Default.AppSettings);
+        var back = System.Text.Json.JsonSerializer.Deserialize(json, SettingsJson.Default.AppSettings)
+                   ?? throw new InvalidOperationException("设置读回为空");
+        if (!back.OcrCopyAndClose) throw new InvalidOperationException("OCR 快捷复制开关没有保存");
+    }
+
+    static void OcrShortcutProbe()
+    {
+        if (CaptureOverlay.OcrShortcutAction(false) != CaptureAction.Ocr)
+            throw new InvalidOperationException("关闭快捷复制时动作不再是普通 OCR");
+        if (CaptureOverlay.OcrShortcutAction(true) != CaptureAction.OcrCopy)
+            throw new InvalidOperationException("开启快捷复制时没有切到直接复制动作");
+    }
+
+    static void OcrLayoutProbe()
+    {
+        var text = OcrService.LayoutTokensForTest(new[]
+        {
+            ("BangumiIntro", 20d, 20d, 120d, 20d),
+            ("{", 170d, 20d, 8d, 20d),
+            ("animeId", 60d, 55d, 70d, 20d),
+            ("rating", 60d, 85d, 60d, 20d),
+            ("}", 20d, 120d, 8d, 20d),
+        });
+        var lines = text.Split('\n');
+        if (lines.Length != 4 || !lines[0].StartsWith("BangumiIntro", StringComparison.Ordinal)
+            || !lines[0].EndsWith("{", StringComparison.Ordinal)
+            || !lines[1].TrimStart().Equals("animeId", StringComparison.Ordinal)
+            || lines[1].Length == lines[1].TrimStart().Length
+            || !lines[2].TrimStart().Equals("rating", StringComparison.Ordinal)
+            || lines[3] != "}")
+            throw new InvalidOperationException("列表布局没有按坐标恢复：" + text.ReplaceLineEndings(" | "));
+    }
+
+    static void OcrSymbolMergeProbe()
+    {
+        var merged = OcrService.MergeSymbols(
+            "name\ncount",
+            new[] { "name: [...]\ncount >= 10", "nane ???\ncount" });
+        if (merged != "name: [...]\ncount")
+            throw new InvalidOperationException("特殊符号没有安全合并：" + merged.ReplaceLineEndings(" | "));
+    }
+
+    static void OcrLanguageScoreProbe()
+    {
+        Better("Hello world", "en", "zh-CN");
+        Better("你好世界", "zh-CN", "en");
+        Better("こんにちは世界", "ja", "en");
+        Better("한국어 문장", "ko", "en");
+        Better("Привет мир", "ru", "en");
+        Better("مرحبا بالعالم", "ar", "en");
+        Better("γειά σου", "el", "en");
+        Better("שלום עולם", "he", "en");
+        Better("สวัสดี", "th", "en");
+        Better("नमस्ते", "hi", "en");
+
+        static void Better(string text, string expected, string other)
+        {
+            var good = OcrService.LanguageScoreForTest(text, expected);
+            var bad = OcrService.LanguageScoreForTest(text, other);
+            if (good <= bad)
+                throw new InvalidOperationException($"{expected} 对「{text}」没有胜过 {other}：{good} <= {bad}");
+        }
+    }
+
+    static void OcrUnicodeProbe()
+    {
+        var raw = "4 ． 2 ％\n341 ． 35 1'IB ／ 8 ． 22 G B\n文亻牛    文件荚\n分旱\n😀 你好";
+        var normalized = OcrService.NormalizeOcrText(raw);
+        if (normalized != "4.2%\n341.35 MB/8.22 GB\n文件    文件夹\n分享\n😀 你好")
+            throw new InvalidOperationException("Unicode/数字归一化结果不对：" + normalized.ReplaceLineEndings(" | "));
+    }
+
+    static void OcrBlankProbe()
+    {
+        if (!OcrService.IsAvailable) { Console.WriteLine("       （无语言包，跳过真实识别）"); return; }
+        var blank = Render("", 320, 100, 30, "Segoe UI");
+        if (OcrService.RecognizeAsync(blank, null).GetAwaiter().GetResult() != "")
+            throw new InvalidOperationException("纯白截图应返回空串");
+        try
+        {
+            OcrService.RecognizeAsync(blank, null, new CancellationToken(true)).GetAwaiter().GetResult();
+            throw new InvalidOperationException("已取消的 OCR 请求仍然继续执行");
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    static void OcrTextSafetyProbe()
+    {
+        foreach (var text in new[]
+        {
+            "  Hello, world! Next: item; yes? No.",
+            "1 PiB; 2 MB; 8 Mb/s; G B; M B; PIB P1B",
+            "5 cm²; ½; ①; 😀; 𠀀",
+            "foo / bar\n  key: value\n  // comment",
+            "分旱地 文件荚果 文亻牛图",
+        })
+        {
+            if (OcrService.NormalizeOcrText(text) != text)
+                throw new InvalidOperationException("合法文本被误改：" + text);
+        }
+    }
+
+    static void OcrSymbolSafetyProbe()
+    {
+        Check("name\nname", "name:\nname [?]", "name:\nname [?]");
+        Check("value 125", "value 1.25...", "value 125");
+        Check("name?", "name: [...]", "name?");
+        Check("  name", "name: []", "  name: []");
+        Check("a b", "ab: []", "a b");
+        Check("name", "NAME: []", "name");
+
+        static void Check(string primary, string alternative, string expected)
+        {
+            var actual = OcrService.MergeSymbols(primary, [alternative]);
+            if (actual != expected)
+                throw new InvalidOperationException($"合并错误：「{primary}」+「{alternative}」→「{actual}」");
+        }
+    }
+
+    static void OcrPreprocessingProbe()
+    {
+        byte[] pixels = [30, 30, 30, 255, 210, 210, 210, 255];
+        var image = new CapturedImage(2, 1, pixels);
+        var original = pixels.ToArray();
+        var enlarged = image.ScaleUpForOcr(minHeight: 64, maxScale: 8, maxDimension: 8);
+        if (enlarged.Width != 8 || enlarged.Height != 4)
+            throw new InvalidOperationException("OCR 放大越过了最大边长限制");
+        var binary = image.BinarizeForOcr();
+        var enhanced = image.EnhanceForOcr();
+        if (binary.Pixels[0] != 0 || binary.Pixels[4] != 255
+            || enhanced.Pixels[0] != 0 || enhanced.Pixels[4] != 255)
+            throw new InvalidOperationException("灰度拉伸或二值化没有区分前景背景");
+        if (!pixels.SequenceEqual(original)) throw new InvalidOperationException("OCR 增强修改了原始截图");
+        var padded = image.PadForOcr(3, 8);
+        if (padded.Width != 8 || padded.Height != 7
+            || padded.Pixels[(3 * padded.Width + 3) * 4] != pixels[0])
+            throw new InvalidOperationException("OCR 留白改变了内容坐标或超过边长上限");
+        var dark = new CapturedImage(2, 1, new byte[] { 10, 10, 10, 255, 10, 10, 10, 255 }).PadForOcr(1);
+        if (dark.Pixels[0] != 10) throw new InvalidOperationException("深色截图被补成了白边");
+        var rotated = image.RotateForOcr(true);
+        if (rotated.Width != 1 || rotated.Height != 2 || !rotated.Pixels.SequenceEqual(pixels)
+            || !rotated.RotateForOcr(false).Pixels.SequenceEqual(pixels))
+            throw new InvalidOperationException("90 度旋转的尺寸或像素顺序不对");
+    }
+
+    static void OcrRtlLayoutProbe()
+    {
+        var text = OcrService.LayoutTokensForTest(new[]
+        {
+            ("مرحبا", 170d, 20d, 50d, 20d),
+            ("OpenAI", 20d, 20d, 60d, 20d),
+            ("API", 90d, 20d, 30d, 20d),
+        }, rightToLeft: true);
+        if (System.Text.RegularExpressions.Regex.Replace(text, @"\s+", " ") != "مرحبا OpenAI API")
+            throw new InvalidOperationException("RTL 或其中的英文片段被坐标排序倒置：" + text);
+    }
+
+    static void OcrRotationProbe()
+    {
+        if (!OcrService.IsAvailable) { Console.WriteLine("       （无语言包，跳过真实识别）"); return; }
+        var image = Render("This is a long OCR test with numbers 1234", 1000, 140, 36, "Segoe UI");
+        var text = OcrService.RecognizeAsync(image.RotateForOcr(false), null).GetAwaiter().GetResult();
+        var flat = new string(text.Where(c => !char.IsWhiteSpace(c)).ToArray());
+        if (!flat.Contains("OCR", StringComparison.OrdinalIgnoreCase) || !flat.Contains("1234", StringComparison.Ordinal))
+            throw new InvalidOperationException("横转段落未恢复到可读方向：" + text);
     }
 
     /// <summary>白底黑字画一行文本，转成和抓屏一样的 BGRA 像素。</summary>

@@ -882,15 +882,15 @@ static class UiProbe
         if (box.Text != "Hello wor1d")
             throw new InvalidOperationException($"框里装的不是识别结果：{box.Text}");
         if (!box.AcceptsReturn) throw new InvalidOperationException("多行识别结果要能换行");
-        box.Text = "Hello world";
+        box.Text = "  Hello world\r\n    next  \r\n";
 
         var label = copy ? "复制" : "翻译";
         var btn = Descendants<Button>(w).FirstOrDefault(b => (b.Content as string)?.StartsWith(label) == true)
                   ?? throw new InvalidOperationException($"找不到「{label}」按钮");
         btn.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
 
-        if (got != "Hello world")
-            throw new InvalidOperationException($"{label}拿到的是「{got}」，该是改后的「Hello world」");
+        if (got?.ReplaceLineEndings("\n") != "  Hello world\n    next")
+            throw new InvalidOperationException($"{label}没有保留编辑后的多行内容和首行缩进：「{got}」");
         if (w.IsVisible) throw new InvalidOperationException($"按了{label}窗口该关掉");
 
         // 关窗过程中还在派发消息，这中间再按一次不能把动作干第二遍
@@ -1089,13 +1089,9 @@ static class UiProbe
     };
 
     /// <summary>
-    /// 钉住「WDA_EXCLUDEFROMCAPTURE 这条路走不通」这个结论，免得下次又有人去试。
-    /// 真在屏幕上摆一块纯色，设上隐身，再 BitBlt 回来数颜色，量到两件事：
-    ///
-    /// 一、对带 WS_EX_LAYERED 的窗口这个调用直接返回 false，而 WPF 只要
-    /// AllowsTransparency=true 就是层窗口——两条浮条正是那么建的，从来没设上过。
-    /// 二、就算设上了（普通窗口），底下垫的绿色一点都透不出来，那块是<b>纯黑</b>。
-    /// 长截图里就成了一条黑杠，比拍到浮条还难看。所以浮条只能靠摆位置躲开选区。
+    /// 实测当前 Windows 的截屏排除能力，而不是把某一系统版本的表现写死。
+    /// 新系统可能透出背景，旧系统可能以黑色保护；不支持时原窗口应仍可见。
+    /// 成功设置后还要恢复 WDA_NONE 并重拍，确认没有把一次空白抓屏误判为隐身成功。
     /// </summary>
     static void CaptureHidingProbe()
     {
@@ -1106,7 +1102,8 @@ static class UiProbe
         var back = NewChip(new SolidColorBrush(green), transparent: false);
         back.Width = 320;
         back.Height = 160;
-        back.Topmost = false;
+        // 背景也要在置顶层，否则前景被排除后可能拍到用户的其他窗口，而不是绿色对照。
+        back.Topmost = true;
         back.Left = work.Left + 40;
         back.Top = work.Top + 40;
         back.Show();
@@ -1142,19 +1139,22 @@ static class UiProbe
                     Console.WriteLine($"       AllowsTransparency={transparent}：设上={set} "
                                       + $"隐身后还剩 {left:P0}，透出后面的绿 {behind:P0}，中心色={Center(after)}");
 
-                    // 层窗口：压根设不上
-                    if (transparent)
+                    if (!set)
                     {
-                        if (set) throw new InvalidOperationException("层窗口居然设上了，结论要重写");
-                        if (left < 0.9) throw new InvalidOperationException("没设上却拍不到了，说明返回值不能信");
+                        if (left < 0.9) throw new InvalidOperationException("设置失败却拍不到原窗口，捕获结果异常");
+                        Console.WriteLine("       当前窗口不支持截屏排除，继续使用选区外浮条兜底");
                         continue;
                     }
-                    // 普通窗口：设得上，但抓回来是个黑洞，不是后面的绿
-                    if (!set) throw new InvalidOperationException("普通窗口都设不上，系统比预期还老");
                     if (left > 0.02) throw new InvalidOperationException($"说是设上了，却还是拍到 {left:P0}");
-                    if (behind > 0.1)
-                        throw new InvalidOperationException(
-                            $"居然透出了 {behind:P0} 的后景——那这条路能走，浮条的躲法可以重新考虑");
+                    var black = Ratio(after, Colors.Black);
+                    if (behind < 0.9 && black < 0.9)
+                        throw new InvalidOperationException($"隐身后既非背景也非黑色保护：背景 {behind:P0}，黑色 {black:P0}");
+
+                    if (!Win32.SetWindowDisplayAffinity(hwnd, Win32.WDA_NONE))
+                        throw new InvalidOperationException("无法恢复正常截屏状态");
+                    Settle();
+                    if (Ratio(ScreenCapture.Grab(box), magenta) < 0.9)
+                        throw new InvalidOperationException("恢复正常状态后仍拍不到原窗口");
                 }
                 finally { w.Close(); }
             }

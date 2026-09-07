@@ -7,10 +7,11 @@ namespace FlashTrans.Core;
 /// </summary>
 public sealed class TransCache : IDisposable
 {
-    readonly record struct Entry(string Text, string? Phonetic, List<DictEntry>? Dict, DateTime At);
+    readonly record struct Entry(string SourceText, string Text, string? Phonetic, List<DictEntry>? Dict, DateTime At);
 
     readonly Dictionary<string, LinkedListNode<KeyValuePair<string, Entry>>> _map = new(StringComparer.Ordinal);
     readonly LinkedList<KeyValuePair<string, Entry>> _lru = new();
+    long _version;
     readonly object _gate = new();
 
     /// <summary>后台清理间隔。空闲时会自行解除武装，不白唤醒 CPU。</summary>
@@ -29,7 +30,21 @@ public sealed class TransCache : IDisposable
         _ttl = Normalize(ttl ?? TimeSpan.FromHours(12));
     }
 
-    public int Capacity { get; set; }
+    int _capacity;
+
+    public int Capacity
+    {
+        get { lock (_gate) return _capacity; }
+        set
+        {
+            lock (_gate)
+            {
+                _capacity = Math.Max(0, value);
+                Trim();
+                if (_capacity == 0) Disarm();
+            }
+        }
+    }
 
     TimeSpan _ttl;
 
@@ -78,17 +93,22 @@ public sealed class TransCache : IDisposable
     }
 
     public void Set(string providerId, string from, string to, string text,
-                    string value, string? phonetic, List<DictEntry>? dict, bool withDict)
+                    string value, string? phonetic, List<DictEntry>? dict, bool withDict,
+                    long? expectedTextVersion = null)
     {
-        if (Capacity <= 0 || string.IsNullOrEmpty(value)) return;
+        if (string.IsNullOrEmpty(value)) return;
         var key = Key(providerId, from, to, text, withDict);
 
         lock (_gate)
         {
+            // Dispose 后可能仍有翻译任务收尾写缓存。此时应静默忽略，不能重新留下条目。
+            // 容量检查也放在锁内，避免与设置页动态缩容并发时又写入一条。
+            if (_disposed || _capacity <= 0) return;
+            if (expectedTextVersion is { } expected && _version != expected) return;
             if (_map.TryGetValue(key, out var existing)) Drop(existing);
 
             var node = _lru.AddFirst(new KeyValuePair<string, Entry>(key,
-                new Entry(value, phonetic, dict, DateTime.UtcNow)));
+                new Entry(text, value, phonetic, dict, DateTime.UtcNow)));
             _map[key] = node;
 
             // 先清过期的，再按容量淘汰：别让过期条目把还新鲜的挤出去
@@ -106,21 +126,31 @@ public sealed class TransCache : IDisposable
     public int InvalidateText(string text)
     {
         if (string.IsNullOrEmpty(text)) return 0;
-        var suffix = "|" + text;
         var removed = 0;
 
         lock (_gate)
         {
+            _version++;
             var node = _lru.First;
             while (node is not null)
             {
                 var next = node.Next;
-                if (node.Value.Key.EndsWith(suffix, StringComparison.Ordinal)) { Drop(node); removed++; }
+                if (string.Equals(node.Value.Value.SourceText, text, StringComparison.Ordinal))
+                {
+                    Drop(node);
+                    removed++;
+                }
                 node = next;
             }
             if (_map.Count == 0) Disarm();
         }
         return removed;
+    }
+
+    /// <summary>读取当前缓存代次，供异步请求防止旧结果回写。</summary>
+    public long TextVersion(string text)
+    {
+        lock (_gate) return _version;
     }
 
     /// <summary>清掉所有过期条目，返回清掉的条数。</summary>
@@ -169,6 +199,7 @@ public sealed class TransCache : IDisposable
     {
         lock (_gate)
         {
+            _version++;
             _map.Clear();
             _lru.Clear();
             _writes = 0;

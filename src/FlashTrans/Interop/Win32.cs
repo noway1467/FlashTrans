@@ -127,14 +127,9 @@ public static class Win32
     /// <summary>正常参与截屏。</summary>
     public const uint WDA_NONE = 0x00000000;
     /// <summary>
-    /// 号称能让窗口对截屏隐身。<b>本项目不用它</b>，理由记在这儿免得又有人去试：
-    ///
-    /// 设上之后 BitBlt 抓这块屏，拿回来的是一块<b>纯黑</b>，不是窗口后面的东西
-    /// （UiProbe 的「对截屏隐身」那条实测过）。长截图里就是一条黑杠，
-    /// 比拍到浮条本身还难看。浮条只能靠摆到选区外面躲开。
-    ///
-    /// 另外还有个坑：对带 WS_EX_LAYERED 的窗口直接返回 false，
-    /// 而 WPF 只要 AllowsTransparency=true 就是层窗口——两条浮条正是那么建的。
+    /// 排除窗口的截屏内容，但行为受 Windows 版本和合成路径影响。
+    /// 新系统可透出背景，部分旧环境会返回黑块，层窗口也可能设置失败。
+    /// UiProbe 会验证当前机器的实际表现；浮条仍摆到选区外，不依赖该能力兜底。
     /// </summary>
     public const uint WDA_EXCLUDEFROMCAPTURE = 0x00000011;
 

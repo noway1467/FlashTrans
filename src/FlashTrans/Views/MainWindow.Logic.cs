@@ -271,6 +271,10 @@ public partial class MainWindow
         var aggregate = _aggregateSelected;
         var providerId = _activeProviderId ?? S.PrimaryProviderId;
 
+        // 回车、翻译按钮等显式操作传入 force=true，必须真正绕过缓存。
+        // 之前 force 参数只一路传到这里却从未使用，导致“重新翻译”之外的强制翻译仍可能命中旧结果。
+        if (force) Engine.Cache.InvalidateText(text);
+
         try
         {
             if (aggregate)

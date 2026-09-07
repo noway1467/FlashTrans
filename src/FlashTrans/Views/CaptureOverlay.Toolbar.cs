@@ -174,7 +174,9 @@ public sealed partial class CaptureOverlay
         row.Children.Add(ActionBtn("录制", Tip("把这块区域录成动图", S.CkRecord), FinishRecord, IconRecord));
         row.Children.Add(Sep());
 
-        row.Children.Add(ActionBtn("识别文字", Tip("识别出来的字直接复制走", S.CkOcr),
+        row.Children.Add(ActionBtn("识别文字", Tip(S.OcrCopyAndClose
+                ? "点击后编辑识别结果；快捷键直接复制并关闭"
+                : "识别文字，可编辑后复制或翻译", S.CkOcr),
             () => Finish(CaptureAction.Ocr)));
         row.Children.Add(ActionBtn("识别并翻译", Tip("识别成文字直接翻译", S.CkOcrTranslate),
             () => Finish(CaptureAction.OcrTranslate)));
@@ -837,7 +839,7 @@ public sealed partial class CaptureOverlay
         // 而 Matches 要求修饰键完全相等，所以其实不会误判；顺序在这儿只是为了
         // 万一有人把两个都设成同一个键时，行为是确定的。
         yield return (HotkeySpec.Parse(S.CkOcrTranslate), () => Finish(CaptureAction.OcrTranslate));
-        yield return (HotkeySpec.Parse(S.CkOcr), () => Finish(CaptureAction.Ocr));
+        yield return (HotkeySpec.Parse(S.CkOcr), () => Finish(OcrShortcutAction(S.OcrCopyAndClose)));
         yield return (HotkeySpec.Parse(S.CkLongShot), FinishLongShot);
         yield return (HotkeySpec.Parse(S.CkRecord), FinishRecord);
         yield return (HotkeySpec.Parse(S.CkRect), () => ToggleTool(CaptureTool.Rect));
@@ -847,6 +849,9 @@ public sealed partial class CaptureOverlay
         yield return (HotkeySpec.Parse(S.CkMosaic), () => ToggleTool(CaptureTool.Mosaic));
         yield return (HotkeySpec.Parse(S.CkText), () => ToggleTool(CaptureTool.Text));
     }
+
+    internal static CaptureAction OcrShortcutAction(bool copyAndClose) =>
+        copyAndClose ? CaptureAction.OcrCopy : CaptureAction.Ocr;
 
     /// <summary>方向键 → 挪一个像素的方向。不是方向键就返回 null。</summary>
     static Vector? Nudge(Key key) => key switch

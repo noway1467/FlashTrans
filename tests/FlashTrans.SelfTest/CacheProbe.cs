@@ -12,7 +12,10 @@ static class CacheProbe
         step("缓存：淘汰顺序（过期优先，其次最久未用）", EvictionOrder);
         step("缓存：带词典与不带词典分开存", DictKeyed);
         step("缓存：按原文失效只清这一段", InvalidateOne);
+        step("缓存：原文含分隔符时失效不误删", InvalidateDelimiterText);
+        step("缓存：失效版本阻止旧请求回写", StaleWriteAfterInvalidate);
         step("缓存：容量为 0 时不存", Disabled);
+        step("缓存：缩小容量立即淘汰多余条目", ShrinkCapacity);
         step("缓存：改短保留时长立刻生效", ShrinkTtl);
         step("缓存：后台定时器空闲时自行解除", TimerDisarms);
     }
@@ -142,6 +145,47 @@ static class CacheProbe
         using var c2 = New();
         Put(c2, "hello", "");
         if (c2.Count != 0) throw new InvalidOperationException("空译文被存下了");
+    }
+
+    static void InvalidateDelimiterText()
+    {
+        using var c = New(cap: 20);
+        Put(c, "hello|5:world", "长文本");
+        Put(c, "world", "世界");
+
+        if (c.InvalidateText("world") != 1) throw new InvalidOperationException("按原文失效数量不对");
+        if (!Got(c, "hello|5:world")) throw new InvalidOperationException("原文含分隔符的条目被误删");
+        if (Got(c, "world")) throw new InvalidOperationException("目标原文没有被清掉");
+    }
+
+    static void StaleWriteAfterInvalidate()
+    {
+        using var c = New(cap: 20);
+        var version = c.TextVersion("hello");
+        c.InvalidateText("hello");
+        c.Set("p", "en", "zh-CN", "hello", "旧译文", null, null, false, version);
+        if (Got(c, "hello")) throw new InvalidOperationException("失效后的旧版本仍写进了缓存");
+    }
+
+    static void ShrinkCapacity()
+    {
+        using var c = New(cap: 5);
+        Put(c, "a", "甲");
+        Put(c, "b", "乙");
+        Put(c, "c", "丙");
+
+        // 命中 a，使它成为最近使用项。缩到 2 后应淘汰最久未用的 b。
+        if (!Got(c, "a")) throw new InvalidOperationException("准备 LRU 顺序时 a 没命中");
+        c.Capacity = 2;
+
+        if (c.Count != 2) throw new InvalidOperationException($"容量缩到 2 后仍有 {c.Count} 条");
+        if (Got(c, "b")) throw new InvalidOperationException("缩容没有淘汰最久未用的 b");
+        if (!Got(c, "a") || !Got(c, "c"))
+            throw new InvalidOperationException("缩容误删了应保留的最近使用条目");
+
+        // 缩到 0 应立即清空，而不是只让后续读取无法命中。
+        c.Capacity = 0;
+        if (c.Count != 0) throw new InvalidOperationException("容量缩到 0 后没有立即清空");
     }
 
     static void ShrinkTtl()
