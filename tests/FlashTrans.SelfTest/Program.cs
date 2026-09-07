@@ -22,6 +22,13 @@ static class Program
         var s = SettingsService.Instance.Current;
         ThemeService.Apply(s);
 
+        if (args.Contains("--ocr-corpus"))
+        {
+            Step("公开 OCR 样例评测完成（执行成功不代表文字全对）", OcrCorpusProbe.Run);
+            app.Shutdown();
+            return _fail == 0 ? 0 : 1;
+        }
+
         Step("加载深色主题", () => ThemeService.ApplyTheme(AppTheme.Dark));
         Step("加载浅色主题", () => ThemeService.ApplyTheme(AppTheme.Light));
         Step("恢复深色主题", () =>
@@ -44,6 +51,13 @@ static class Program
         if (args.Contains("--only-longshot"))
         {
             LongShotProbe.RunAll(Step);
+            app.Shutdown();
+            return _fail == 0 ? 0 : 1;
+        }
+
+        if (args.Contains("--only-ocr"))
+        {
+            OcrProbe.RunAll(Step);
             app.Shutdown();
             return _fail == 0 ? 0 : 1;
         }

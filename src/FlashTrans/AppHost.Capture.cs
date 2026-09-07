@@ -75,14 +75,17 @@ public sealed partial class AppHost
                 break;
 
             case CaptureAction.Ocr:
+            case CaptureAction.OcrCopy:
             case CaptureAction.OcrTranslate:
-                await OcrAsync(image, translate: action == CaptureAction.OcrTranslate);
+                await OcrAsync(image,
+                    translate: action == CaptureAction.OcrTranslate,
+                    copyDirectly: action == CaptureAction.OcrCopy);
                 break;
         }
     }
 
     /// <summary>识别这块图里的文字，送进主窗口或者直接弹翻译。</summary>
-    async Task OcrAsync(CapturedImage shot, bool translate)
+    async Task OcrAsync(CapturedImage shot, bool translate, bool copyDirectly = false)
     {
         if (!OcrService.IsAvailable)
         {
@@ -109,6 +112,13 @@ public sealed partial class AppHost
         }
         else
         {
+            if (copyDirectly)
+            {
+                if (TrySetClipboard(text)) Toast(CopiedToast(text));
+                else Toast("复制 OCR 结果失败");
+                return;
+            }
+
             // 「识别文字」：把字摆在一个能改的框里。识别难免有错字，
             // 直接进剪贴板的话用户得粘出去才发现错了。
             // 不往主窗口的输入框里塞——要翻译有「识别并翻译」，
@@ -152,7 +162,8 @@ public sealed partial class AppHost
     /// </summary>
     async Task<string?> RecognizeAsync(CapturedImage shot, string? saved)
     {
-        var lang = string.IsNullOrWhiteSpace(S.OcrLang) ? S.SourceLang : S.OcrLang;
+        // OCR 的自动检测独立于翻译源语言；不能被主窗口上次选中的语种锁住。
+        var lang = S.OcrLang;
         var kept = saved is null ? "" : $"（图片已存：{Path.GetFileName(saved)}）";
         string text;
         try
@@ -171,7 +182,7 @@ public sealed partial class AppHost
             Toast($"没识别出文字（{shot.Width}×{shot.Height}）。试试选大一点，或者换个识别语言{kept}");
             return null;
         }
-        return text.Trim();
+        return text.TrimEnd();
     }
 
     /// <summary>存图。返回存到哪儿了，失败返回 null（已经提示过用户）。</summary>
@@ -406,10 +417,18 @@ public sealed partial class AppHost
         catch (Exception ex) { Log.Warn("打开资源管理器失败：" + ex.Message); }
     }
 
-    static void TrySetClipboard(string text)
+    static bool TrySetClipboard(string text)
     {
-        try { SelectionReader.SetText(text); }
-        catch (Exception ex) { Log.Warn("写剪贴板失败：" + ex.Message); }
+        try
+        {
+            SelectionReader.SetText(text);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Log.Warn("写剪贴板失败：" + ex.Message);
+            return false;
+        }
     }
 
     /// <summary>复制图片。成功返回 true——调用方要据此决定提示说什么。</summary>

@@ -77,7 +77,8 @@ public static class StartupService
     {
         // 自测程序的 bin 目录里也有一份 FlashTrans.exe。真让它写进 Run 项，
         // 用户的开机自启就被指到测试输出目录去了，所以不是本程序在跑就不碰注册表。
-        if (!RunningAsApp) return false;
+        // --benchmark 会从临时发布目录启动后立即退出，也必须保持用户自启登记只读。
+        if (!RunningAsApp || Environment.GetCommandLineArgs().Contains("--benchmark")) return false;
 
         var current = CurrentCommand();
         var exe = ExePath;

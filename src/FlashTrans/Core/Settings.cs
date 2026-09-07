@@ -22,6 +22,8 @@ public enum CaptureAction
     Ocr,
     /// <summary>识别文字并翻译。</summary>
     OcrTranslate,
+    /// <summary>识别文字后直接复制。只给截图工具快捷键使用，不出现在默认动作列表。</summary>
+    OcrCopy,
 }
 
 /// <summary>录制出来的动图存成什么格式。</summary>
@@ -211,10 +213,12 @@ public sealed class AppSettings
     public string CkRecord { get; set; } = "Ctrl+R";
 
     // ------- 截图 OCR -------
-    /// <summary>识别语言。空 = 跟着「源语言」，源语言是自动时用系统装的第一个 OCR 包。</summary>
+    /// <summary>识别语言。空 = 自动比较系统已安装的 OCR 语言包。</summary>
     public string OcrLang { get; set; } = "";
     /// <summary>识别出的原文同时复制到剪贴板。</summary>
     public bool OcrCopyText { get; set; }
+    /// <summary>截图工具里按「识别文字」快捷键后，直接复制结果并结束截图流程。</summary>
+    public bool OcrCopyAndClose { get; set; }
 
     // ------- 词典 -------
     public bool EudicEnabled { get; set; } = true;

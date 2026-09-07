@@ -49,6 +49,167 @@ public sealed class CapturedImage(int width, int height, byte[] pixels)
         return new CapturedImage(w, h, buf);
     }
 
+    /// <summary>给 OCR 用的整数倍最近邻放大，避免细笔画被插值抹掉。</summary>
+    public CapturedImage ScaleUpForOcr(int minHeight = 640, int maxScale = 8,
+                                      int maxDimension = 4096)
+    {
+        if (Width <= 0 || Height <= 0) return this;
+        var factor = Math.Min(maxScale, (int)Math.Ceiling((double)minHeight / Height));
+        var longest = Math.Max(Width, Height);
+        if (longest > 0) factor = Math.Min(factor, Math.Max(1, maxDimension / longest));
+        if (factor <= 1) return this;
+
+        var w = checked(Width * factor);
+        var h = checked(Height * factor);
+        var stride = w * 4;
+        var buf = new byte[stride * h];
+        for (var y = 0; y < h; y++)
+        {
+            var srcRow = (y / factor) * Stride;
+            var dstRow = y * stride;
+            for (var x = 0; x < w; x++)
+            {
+                var src = srcRow + (x / factor) * 4;
+                var dst = dstRow + x * 4;
+                buf[dst] = Pixels[src];
+                buf[dst + 1] = Pixels[src + 1];
+                buf[dst + 2] = Pixels[src + 2];
+                buf[dst + 3] = 0xFF;
+            }
+        }
+        return new CapturedImage(w, h, buf);
+    }
+
+    /// <summary>给紧裁切文字加少量同背景留白，避免首尾笔画被当作图像边界丢弃。</summary>
+    internal CapturedImage PadForOcr(int padding = 16, int maxDimension = 4096)
+    {
+        if (Width <= 0 || Height <= 0) return this;
+        padding = Math.Min(padding, (maxDimension - Math.Max(Width, Height)) / 2);
+        if (padding <= 0) return this;
+
+        // 用边缘像素的亮度中位数估计背景，深色截图也不会被强行补成白边。
+        var edges = new List<int>();
+        var step = Math.Max(1, Math.Min(Width, Height) / 16);
+        void Add(int x, int y)
+        {
+            var i = y * Stride + x * 4;
+            edges.Add(Pixels[i] | Pixels[i + 1] << 8 | Pixels[i + 2] << 16);
+        }
+        for (var x = 0; x < Width; x += step) { Add(x, 0); Add(x, Height - 1); }
+        for (var y = 0; y < Height; y += step) { Add(0, y); Add(Width - 1, y); }
+        var color = edges.OrderBy(c => Luma((byte)c, (byte)(c >> 8), (byte)(c >> 16)))
+            .ElementAt(edges.Count / 2);
+        var w = checked(Width + padding * 2);
+        var h = checked(Height + padding * 2);
+        var pixels = new byte[checked(w * h * 4)];
+        for (var i = 0; i < pixels.Length; i += 4)
+        {
+            pixels[i] = (byte)color;
+            pixels[i + 1] = (byte)(color >> 8);
+            pixels[i + 2] = (byte)(color >> 16);
+            pixels[i + 3] = 255;
+        }
+        for (var y = 0; y < Height; y++)
+            Buffer.BlockCopy(Pixels, y * Stride, pixels, ((y + padding) * w + padding) * 4, Stride);
+        return new CapturedImage(w, h, pixels);
+    }
+
+    /// <summary>保留抗锯齿的补充通道；每一步都受 Windows OCR 最大边长约束。</summary>
+    internal CapturedImage SmoothForOcr(int maxDimension = 4096)
+    {
+        if (Width <= 0 || Height <= 0) return this;
+        var scale = Math.Min(4, maxDimension / Math.Max(Width, Height));
+        return ScaleUpTo(320, scale).PadForOcr(16, maxDimension)
+            .ScaleUpForOcr(640, 8, maxDimension);
+    }
+
+    /// <summary>按 90 度转动像素，不做插值，也不改原截图。</summary>
+    internal CapturedImage RotateForOcr(bool clockwise)
+    {
+        var pixels = new byte[Pixels.Length];
+        for (var y = 0; y < Height; y++)
+            for (var x = 0; x < Width; x++)
+            {
+                var source = y * Stride + x * 4;
+                var dx = clockwise ? Height - y - 1 : y;
+                var dy = clockwise ? x : Width - x - 1;
+                var dest = (dy * Height + dx) * 4;
+                pixels[dest] = Pixels[source];
+                pixels[dest + 1] = Pixels[source + 1];
+                pixels[dest + 2] = Pixels[source + 2];
+                pixels[dest + 3] = Pixels[source + 3];
+            }
+        return new CapturedImage(Height, Width, pixels);
+    }
+
+    /// <summary>生成适合 OCR 的灰度高对比版本。</summary>
+    public CapturedImage EnhanceForOcr()
+    {
+        if (Width <= 0 || Height <= 0 || Pixels.Length == 0) return this;
+        byte min = 255, max = 0;
+        for (var i = 0; i + 3 < Pixels.Length; i += 4)
+        {
+            var gray = Luma(Pixels[i], Pixels[i + 1], Pixels[i + 2]);
+            if (gray < min) min = gray;
+            if (gray > max) max = gray;
+        }
+        var range = max - min;
+        var buf = new byte[Pixels.Length];
+        for (var i = 0; i + 3 < Pixels.Length; i += 4)
+        {
+            var gray = Luma(Pixels[i], Pixels[i + 1], Pixels[i + 2]);
+            var v = range >= 32 ? (gray - min) * 255 / range : gray;
+            var b = (byte)Math.Clamp(v, 0, 255);
+            buf[i] = b;
+            buf[i + 1] = b;
+            buf[i + 2] = b;
+            buf[i + 3] = 0xFF;
+        }
+        return new CapturedImage(Width, Height, buf);
+    }
+
+    /// <summary>把图像转成 Otsu 黑白图，补救低对比度的括号、冒号和下划线。</summary>
+    public CapturedImage BinarizeForOcr()
+    {
+        if (Width <= 0 || Height <= 0 || Pixels.Length == 0) return this;
+        var histogram = new int[256];
+        for (var i = 0; i + 3 < Pixels.Length; i += 4)
+            histogram[Luma(Pixels[i], Pixels[i + 1], Pixels[i + 2])]++;
+
+        var total = Width * Height;
+        long weighted = 0;
+        for (var i = 0; i < histogram.Length; i++) weighted += (long)i * histogram[i];
+        long weight = 0, sum = 0;
+        var best = -1.0;
+        var threshold = 127;
+        for (var i = 0; i < histogram.Length; i++)
+        {
+            weight += histogram[i];
+            if (weight == 0) continue;
+            var other = total - weight;
+            if (other == 0) break;
+            sum += (long)i * histogram[i];
+            var meanA = (double)sum / weight;
+            var meanB = (double)(weighted - sum) / other;
+            var variance = (double)weight * other * (meanA - meanB) * (meanA - meanB);
+            if (variance > best) { best = variance; threshold = i; }
+        }
+
+        var buf = new byte[Pixels.Length];
+        for (var i = 0; i + 3 < Pixels.Length; i += 4)
+        {
+            var value = Luma(Pixels[i], Pixels[i + 1], Pixels[i + 2]) <= threshold ? (byte)0 : (byte)255;
+            buf[i] = value;
+            buf[i + 1] = value;
+            buf[i + 2] = value;
+            buf[i + 3] = 0xFF;
+        }
+        return new CapturedImage(Width, Height, buf);
+    }
+
+    static byte Luma(byte b, byte g, byte r) =>
+        (byte)((19 * b + 183 * g + 54 * r + 128) >> 8);
+
     /// <summary>
     /// 打上马赛克：每 block×block 个像素取平均，整块涂成那个平均色。
     ///

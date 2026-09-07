@@ -139,8 +139,7 @@ public partial class MainWindow : Window
         }, 12));
         InputTools.Children.Add(UiKit.IconButton(UiKit.IconRefresh, "重新翻译（忽略缓存）", (_, _) =>
         {
-            // 只清当前这段，别把别人的缓存一起端掉
-            Engine.Cache.InvalidateText(Input.Text.Trim());
+            // Translate(force: true) 会统一清掉当前文本的缓存，避免在这里重复扫描缓存。
             Translate(force: true);
         }, 12));
     }

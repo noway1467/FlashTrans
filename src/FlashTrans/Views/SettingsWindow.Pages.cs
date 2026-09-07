@@ -71,7 +71,7 @@ public sealed partial class SettingsWindow
 
         Section(page, "缓存与网络",
             Check("启用翻译缓存", S.CacheEnabled, on => S.CacheEnabled = on),
-            Field("缓存条数", Number(S.CacheSize, 100, 20000, v => S.CacheSize = v, "条")),
+            Field("缓存条数", Number(S.CacheSize, 0, 20000, v => S.CacheSize = v, "条")),
             Field("保留时长", Number(S.CacheTtlHours, 1, 168, v => S.CacheTtlHours = v, "小时")),
             Field("代理", Input(S.Proxy, v => S.Proxy = v, "http://127.0.0.1:7890"),
                 "留空用系统代理"),
@@ -185,14 +185,15 @@ public sealed partial class SettingsWindow
                 Hint("识别文字要用系统的语言包，现在没装。" + OcrService.NoEngineHint()),
             ];
 
-        var langs = new List<(string, string)> { ("跟随源语言", "") };
+        var langs = new List<(string, string)> { ("自动检测（尝试已安装语言）", "") };
         langs.AddRange(OcrService.AvailableLanguages.Select(t => (OcrService.DisplayName(t), t)));
 
         return
         [
-            Hint("认出来的字会弹个框，改完再复制或翻译。"),
+            Hint("自动模式会比较系统已安装的 OCR 语言包；括号、箭头等必须是字体字符，纯图标无法可靠还原。"),
             Field("识别语言", Combo(langs, S.OcrLang, v => S.OcrLang = v, width: 230)),
             Check("「识别并翻译」时把原文也复制到剪贴板", S.OcrCopyText, on => S.OcrCopyText = on),
+            Check("按「识别文字」快捷键后直接复制并关闭", S.OcrCopyAndClose, on => S.OcrCopyAndClose = on),
         ];
     }
 
