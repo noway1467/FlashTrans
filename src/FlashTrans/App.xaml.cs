@@ -17,8 +17,9 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
-        // 单实例：已有进程在跑就叫它显示窗口，自己立刻退出
-        _mutex = new Mutex(initiallyOwned: true, MutexName, out var isFirst);
+        var benchmark = e.Args.Contains("--benchmark");
+        // 诊断用匿名互斥量，不唤醒用户正在使用的实例，也不与它争抢唤醒事件。
+        _mutex = new Mutex(initiallyOwned: true, benchmark ? null : MutexName, out var isFirst);
         if (!isFirst)
         {
             try
@@ -50,14 +51,14 @@ public partial class App : Application
         Core.Net.Configure(string.IsNullOrWhiteSpace(s.Proxy) ? null : s.Proxy);
 
         _host = new AppHost();
-        _host.Start(startHidden: s.StartMinimized || e.Args.Contains("--tray"));
+        _host.Start(startHidden: s.StartMinimized || e.Args.Contains("--tray"), diagnostic: benchmark);
 
-        ListenForWake();
+        if (!benchmark) ListenForWake();
 
-        if (e.Args.Contains("--benchmark")) ReportStartup();
+        if (benchmark) ReportStartup();
     }
 
-    /// <summary>诊断用：把「进程启动 → 可响应热键」的耗时写到日志，然后退出。</summary>
+    /// <summary>隔离诊断：记录基础启动耗时，不注册系统热键、不监听选区、不写自启，然后退出。</summary>
     void ReportStartup()
     {
         var proc = System.Diagnostics.Process.GetCurrentProcess();
@@ -65,6 +66,7 @@ public partial class App : Application
 
         Dispatcher.BeginInvoke(() =>
         {
+            Log.Warn("[benchmark] 隔离诊断：未注册系统热键、未监听选区、未同步自启");
             var idle = (DateTime.Now - proc.StartTime).TotalMilliseconds;
             proc.Refresh();
             Log.Warn($"[benchmark] 就绪 {ready:F0}ms · 空闲 {idle:F0}ms · " +

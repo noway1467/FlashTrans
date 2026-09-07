@@ -24,12 +24,14 @@ public sealed partial class AppHost : IDisposable
 
     uint _lastClipSeq;
     bool _clipboardHooked;
+    bool _diagnosticMode;
     CancellationTokenSource? _selectionCts;
 
     static AppSettings S => SettingsService.Instance.Current;
 
-    public void Start(bool startHidden)
+    public void Start(bool startHidden, bool diagnostic = false)
     {
+        _diagnosticMode = diagnostic;
         _msg = new MessageWindow("FlashTrans.Messages");
         _msg.Message += OnMessage;
 
@@ -40,15 +42,21 @@ public sealed partial class AppHost : IDisposable
 
         _hotkeys = new HotkeyManager(_msg.Handle);
         _hotkeys.Triggered += OnHotkey;
-        _hotkeys.Rebind(S);
-        ReportHotkeyFailures();
+        if (!diagnostic)
+        {
+            _hotkeys.Rebind(S);
+            ReportHotkeyFailures();
+        }
 
         SettingsService.Instance.Changed += OnSettingsChanged;
-        ApplyInputHooks(S);
+        if (!diagnostic) ApplyInputHooks(S);
 
         if (!startHidden) ShowMainWindow(focusInput: true);
-        WarmupWhenIdle();
-        SyncStartupWhenIdle();
+        if (!diagnostic)
+        {
+            WarmupWhenIdle();
+            SyncStartupWhenIdle();
+        }
         if (startHidden) PreloadWhenIdle();
     }
 
@@ -255,14 +263,17 @@ public sealed partial class AppHost : IDisposable
     void OnSettingsChanged(AppSettings s)
     {
         ThemeService.Apply(s);
-        _hotkeys.Rebind(s);
-        ReportHotkeyFailures();
-        ApplyInputHooks(s);
+        if (!_diagnosticMode)
+        {
+            _hotkeys.Rebind(s);
+            ReportHotkeyFailures();
+            ApplyInputHooks(s);
+        }
         _tray.UpdateTip(TrayTip());
         _main?.OnSettingsChanged();
         _popup?.OnSettingsChanged();
         // 「重置为默认设置」这类不经过那个复选框的改动也要跟着落地
-        StartupService.Sync(s.RunAtStartup);
+        if (!_diagnosticMode) StartupService.Sync(s.RunAtStartup);
     }
 
     /// <summary>
