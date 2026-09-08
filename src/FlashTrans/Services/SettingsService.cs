@@ -186,6 +186,8 @@ public sealed class SettingsService
         s.PopupMaxHeight = Math.Clamp(s.PopupMaxHeight, 180, 2400);
         s.WinWidth = Math.Clamp(s.WinWidth, 380, 2400);
         s.WinHeight = Math.Clamp(s.WinHeight, 260, 1800);
+        s.OcrResultWidth = Math.Clamp(s.OcrResultWidth, 360, 2400);
+        s.OcrResultHeight = Math.Clamp(s.OcrResultHeight, 220, 1800);
         s.TypeDelayMs = Math.Clamp(s.TypeDelayMs, AppSettings.MinTypeDelayMs, AppSettings.MaxTypeDelayMs);
         s.CacheSize = Math.Clamp(s.CacheSize, 0, 20000);
         s.CacheTtlHours = Math.Clamp(s.CacheTtlHours, 1, 168);
