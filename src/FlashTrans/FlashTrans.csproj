@@ -75,4 +75,11 @@
     <None Include="models\v6\*.txt" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!-- RapidOcrNet 的包级 targets 会在 Build 和 Publish 后复制自带的 v5 模型。
+       本项目显式使用 v6 模型，因此在包复制目标执行前清空 Models，避免发布包重复携带 v5。 -->
+  <Target Name="ExcludeRapidOcrNetV5Models" BeforeTargets="CopyModelsBuild;CopyModelsPublish">
+    <ItemGroup>
+      <Models Remove="@(Models)" />
+    </ItemGroup>
+  </Target>
 </Project>
