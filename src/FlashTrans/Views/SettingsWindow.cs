@@ -83,9 +83,13 @@ public sealed partial class SettingsWindow : Window
         _pageHost.Content = page.Build();
         _selectedPageKey = page.Key;
 
-        // 新页面完成布局后再恢复自己的滚动位置，避免沿用上一页的范围。
-        Dispatcher.BeginInvoke(() =>
-            _pageScroll.ScrollToVerticalOffset(_pageScrollOffsets.GetValueOrDefault(page.Key)));
+        // Render 之后新页面的 ScrollableHeight 才可靠。默认优先级会在布局前运行，
+        // 把上一页的滚动范围带过来，正是切页仍停在半截的原因。
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, () =>
+        {
+            if (_selectedPageKey == page.Key)
+                _pageScroll.ScrollToVerticalOffset(_pageScrollOffsets.GetValueOrDefault(page.Key));
+        });
     }
 
     // ------------------------------------------------------------- 外壳

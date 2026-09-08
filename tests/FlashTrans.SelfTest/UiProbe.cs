@@ -105,6 +105,8 @@ static class UiProbe
         step("识别结果：改完再复制，拿到的是改后的字", () => OcrResultProbe(copy: true));
         step("识别结果：翻译按钮走的也是框里的字", () => OcrResultProbe(copy: false));
         step("识别结果：清空后按复制不关窗", OcrResultEmptyProbe);
+        step("识别结果：调整尺寸后下次按原尺寸打开", OcrResultSizeProbe);
+        step("设置窗口：切页不串滚动位置，各页各自记住", SettingsScrollProbe);
     }
 
     public static void RunClipboardProbes(Action<string, Action> step)
@@ -915,6 +917,85 @@ static class UiProbe
         if (fired) throw new InvalidOperationException("空内容不该复制出去");
         if (!w.IsVisible) throw new InvalidOperationException("空内容时窗口要留着让人接着改");
         Close(w);
+    }
+
+    static void OcrResultSizeProbe()
+    {
+        var s = SettingsService.Instance.Current;
+        var oldWidth = s.OcrResultWidth;
+        var oldHeight = s.OcrResultHeight;
+        try
+        {
+            s.OcrResultWidth = 640;
+            s.OcrResultHeight = 420;
+            var first = new OcrResultWindow("size probe");
+            Probe(first, close: false);
+            if (Math.Abs(first.Width - 640) > 1 || Math.Abs(first.Height - 420) > 1)
+                throw new InvalidOperationException($"首次窗口尺寸为 {first.Width:F0}x{first.Height:F0}，应为 640x420");
+
+            first.Width = 760;
+            first.Height = 500;
+            Pump();
+            Close(first);
+
+            var next = new OcrResultWindow("size probe");
+            if (Math.Abs(next.Width - 760) > 1 || Math.Abs(next.Height - 500) > 1)
+                throw new InvalidOperationException($"调整后窗口尺寸为 {next.Width:F0}x{next.Height:F0}，应为 760x500");
+            Probe(next);
+        }
+        finally
+        {
+            s.OcrResultWidth = oldWidth;
+            s.OcrResultHeight = oldHeight;
+            SettingsService.Instance.Save();
+        }
+    }
+
+    static void SettingsScrollProbe()
+    {
+        var w = new SettingsWindow(new AppHost());
+        Probe(w, close: false);
+        Pump();
+
+        var page = Descendants<ScrollViewer>(w)
+            .OrderByDescending(v => v.ActualWidth)
+            .FirstOrDefault()
+            ?? throw new InvalidOperationException("设置窗口没有内容滚动区");
+
+        try
+        {
+            w.SelectTab("languages");
+            Pump();
+            var languageOffset = ScrollToProbeOffset(page, "语言");
+
+            w.SelectTab("capture");
+            Pump();
+            if (page.VerticalOffset > 1)
+                throw new InvalidOperationException($"截图页沿用了语言页的滚动位置：{page.VerticalOffset:F0}");
+            ScrollToProbeOffset(page, "截图");
+
+            w.SelectTab("languages");
+            Pump();
+            if (Math.Abs(page.VerticalOffset - languageOffset) > 1)
+                throw new InvalidOperationException(
+                    $"回到语言页的位置为 {page.VerticalOffset:F0}，应恢复为 {languageOffset:F0}");
+        }
+        finally
+        {
+            Close(w);
+        }
+    }
+
+    static double ScrollToProbeOffset(ScrollViewer page, string name)
+    {
+        if (page.ScrollableHeight < 2)
+            throw new InvalidOperationException($"{name}页内容不足以验证滚动位置");
+
+        page.ScrollToVerticalOffset(Math.Min(120, page.ScrollableHeight));
+        Pump();
+        if (page.VerticalOffset < 1)
+            throw new InvalidOperationException($"{name}页未能滚动");
+        return page.VerticalOffset;
     }
 
     static Window OffscreenOwner()
