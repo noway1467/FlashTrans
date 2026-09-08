@@ -12,7 +12,7 @@ namespace FlashTrans.Services;
 /// 文字识别，走系统自带的 Windows.Media.Ocr——不需要联网，也不用额外装东西。
 /// 能识别哪些语言取决于系统装了哪些「语言 → 可选功能 → 光学字符识别」包。
 /// </summary>
-public static class OcrService
+public static partial class OcrService
 {
     readonly record struct RecognitionCandidate(string Text, string Language);
     static readonly object Gate = new();
@@ -82,9 +82,21 @@ public static class OcrService
 
     /// <summary>识别一块像素里的文字。识别不出来返回空串。</summary>
     public static async Task<string> RecognizeAsync(CapturedImage image, string? preferred,
-                                                     CancellationToken ct = default)
+                                                     CancellationToken ct = default,
+                                                     string? engine = null)
     {
         ct.ThrowIfCancellationRequested();
+        // RapidOCR 有本地模型时优先（auto），或用户点名要 rapid；显式 system 或
+        // Rapid 模型缺失时走系统 Windows OCR。auto 是默认值，老调用不传也成立。
+        var useRapid = engine switch
+        {
+            not null when string.Equals(engine, "system", StringComparison.OrdinalIgnoreCase) => false,
+            not null when string.Equals(engine, "rapid", StringComparison.OrdinalIgnoreCase) => true,
+            _ => RapidEngine() is not null,
+        };
+        if (useRapid)
+            return await RecognizeRapidAsync(image, ct).ConfigureAwait(false);
+
         var engines = RecognitionLanguages(preferred)
             .Select(tag => (Tag: tag, Engine: EngineFor(tag)))
             .Where(candidate => candidate.Engine is not null).ToList();
@@ -100,10 +112,10 @@ public static class OcrService
         ct.ThrowIfCancellationRequested();
 
         var candidates = new List<RecognitionCandidate>();
-        foreach (var (tag, engine) in engines)
+        foreach (var (tag, ocr) in engines)
         {
             ct.ThrowIfCancellationRequested();
-            var text = await RecognizeBitmapAsync(engine!, img, tag, ct).ConfigureAwait(false);
+            var text = await RecognizeBitmapAsync(ocr!, img, tag, ct).ConfigureAwait(false);
             text = CleanCandidate(text);
             if (!string.IsNullOrWhiteSpace(text)) candidates.Add(new RecognitionCandidate(text, tag));
         }

@@ -98,6 +98,7 @@ static class OcrProbe
         });
 
         step("OCR：认出自己画上去的字", RoundTrip);
+        step("OCR：RapidOCR 模型就位且认出画出的字", RapidRoundTrip);
         step("OCR：只在上下文明确时修正 l/1", ConfusableProbe);
         step("OCR：新开关能存下来", OcrSettingProbe);
         step("OCR：快捷复制开关只改变快捷键动作", OcrShortcutProbe);
@@ -857,6 +858,26 @@ static class OcrProbe
             throw new InvalidOperationException($"西文之间的空格丢了：「{text}」");
     }
 
+    static void RapidRoundTrip()
+    {
+        if (!OcrService.RapidModelsPresent)
+            throw new InvalidOperationException("RapidOCR 模型没随自测输出拷贝："
+                + (OcrService.RapidModelsHint() ?? "？") + "。检查 FlashTrans.SelfTest.csproj 的 models\\v6 拷贝项");
+
+        // 与系统 OCR 相同的样本：中英混排、小字、数字和字母别混
+        var text = OcrService.RecognizeAsync(Render("闪译 OCR 1234", 640, 120, 44, "Microsoft YaHei"),
+                                             null, engine: "rapid")
+                             .GetAwaiter().GetResult();
+        Console.WriteLine($"       RapidOCR 样本「闪译 OCR 1234」→ 识别「{text}」");
+
+        var flat = new string(text.Where(c => !char.IsWhiteSpace(c)).ToArray());
+        foreach (var piece in new[] { "闪译", "OCR", "1234" })
+            if (!flat.Contains(piece, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException($"RapidOCR 没认出「{piece}」，实际是「{text}」");
+        if (!text.Contains("OCR 1234", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"RapidOCR 西文之间的空格丢了：「{text}」");
+    }
+
     static void ConfusableProbe()
     {
         if (OcrService.NormalizeConfusables("wor1d 12l4 a1b 1231") != "world 1214 a1b 1231")
@@ -879,10 +900,12 @@ static class OcrProbe
     {
         var s = AppSettings.CreateDefault();
         s.OcrCopyAndClose = true;
+        s.OcrEngine = "rapid";
         var json = System.Text.Json.JsonSerializer.Serialize(s, SettingsJson.Default.AppSettings);
         var back = System.Text.Json.JsonSerializer.Deserialize(json, SettingsJson.Default.AppSettings)
                    ?? throw new InvalidOperationException("设置读回为空");
         if (!back.OcrCopyAndClose) throw new InvalidOperationException("OCR 快捷复制开关没有保存");
+        if (back.OcrEngine != "rapid") throw new InvalidOperationException("OCR 识别引擎选择没有保存");
     }
 
     static void OcrShortcutProbe()

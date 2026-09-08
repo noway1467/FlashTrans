@@ -23,6 +23,9 @@
   <ItemGroup>
     <!-- 让设置写到自己目录，不碰用户的 %AppData%\FlashTrans -->
     <None Include="portable.txt" CopyToOutputDirectory="PreserveNewest" />
+
+    <!-- RapidOCR 模型：自测输出目录也要有一份，only-ocr 参数 才能验本地引擎 -->
+    <None Include="..\..\src\FlashTrans\models\v6\*.*" Link="models\v6\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>
