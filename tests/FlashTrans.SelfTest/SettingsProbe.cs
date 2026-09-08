@@ -119,6 +119,13 @@ static class SettingsProbe
         Check("录制时长", RecordService.MinSeconds, RecordService.MaxSeconds,
             (s, v) => s.RecordMaxSeconds = v, s => s.RecordMaxSeconds);
 
+        var brokenOcrSize = AppSettings.CreateDefault();
+        brokenOcrSize.OcrResultWidth = double.NaN;
+        brokenOcrSize.OcrResultHeight = double.PositiveInfinity;
+        SettingsService.Normalize(brokenOcrSize);
+        if (brokenOcrSize.OcrResultWidth != 520 || brokenOcrSize.OcrResultHeight != 360)
+            throw new InvalidOperationException("损坏的 OCR 结果窗口尺寸没有回退到默认值");
+
         static void Check(string what, int min, int max, Action<AppSettings, int> set, Func<AppSettings, int> get)
         {
             foreach (var v in new[] { min, max })

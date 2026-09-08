@@ -19,14 +19,18 @@ public sealed class OcrResultWindow : Window
     public event Action<string>? Translate;
 
     readonly TextBox _box;
+    double _lastNormalWidth;
+    double _lastNormalHeight;
 
     public OcrResultWindow(string text)
     {
         Title = "识别结果";
-        Width = SettingsService.Instance.Current.OcrResultWidth;
-        Height = SettingsService.Instance.Current.OcrResultHeight;
         MinWidth = 360;
         MinHeight = 220;
+        Width = SettingsService.Instance.Current.OcrResultWidth;
+        Height = SettingsService.Instance.Current.OcrResultHeight;
+        _lastNormalWidth = Width;
+        _lastNormalHeight = Height;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         TextOptions.SetTextFormattingMode(this, TextFormattingMode.Display);
         SetResourceReference(BackgroundProperty, "Bg");
@@ -73,7 +77,8 @@ public sealed class OcrResultWindow : Window
         Content = grid;
 
         PreviewKeyDown += OnKey;
-        Closed += (_, _) => SaveSize();
+        SizeChanged += (_, _) => RememberNormalSize();
+        Closing += (_, _) => SaveSize();
 
         // 一打开就选中全部：多数时候识别得对，直接 Ctrl+C 走人；
         // 要改的话按一下方向键就取消选中了，不挡事。
@@ -84,14 +89,21 @@ public sealed class OcrResultWindow : Window
         };
     }
 
+    void RememberNormalSize()
+    {
+        if (WindowState != WindowState.Normal) return;
+        if (!double.IsFinite(ActualWidth) || !double.IsFinite(ActualHeight)) return;
+        if (ActualWidth < MinWidth || ActualHeight < MinHeight) return;
+
+        _lastNormalWidth = ActualWidth;
+        _lastNormalHeight = ActualHeight;
+    }
+
     void SaveSize()
     {
-        if (WindowState == WindowState.Minimized) return;
-
-        var bounds = RestoreBounds;
         var settings = SettingsService.Instance.Current;
-        settings.OcrResultWidth = Math.Max(MinWidth, bounds.Width);
-        settings.OcrResultHeight = Math.Max(MinHeight, bounds.Height);
+        settings.OcrResultWidth = _lastNormalWidth;
+        settings.OcrResultHeight = _lastNormalHeight;
         SettingsService.Instance.Save();
     }
 
