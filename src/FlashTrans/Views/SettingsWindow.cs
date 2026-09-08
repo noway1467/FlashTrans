@@ -14,9 +14,12 @@ public sealed partial class SettingsWindow : Window
 {
     readonly AppHost _host;
     readonly ContentControl _pageHost = new();
+    readonly ScrollViewer _pageScroll = new();
     readonly StackPanel _navPanel = new();
     readonly List<(string Key, ToggleButton Btn, Func<UIElement> Build)> _pages = [];
+    readonly Dictionary<string, double> _pageScrollOffsets = [];
     readonly TextBlock _footer = new();
+    string? _selectedPageKey;
 
     static AppSettings S => SettingsService.Instance.Current;
     static TranslateEngine Engine => TranslateEngine.Instance;
@@ -70,11 +73,19 @@ public sealed partial class SettingsWindow : Window
     /// <summary>切换到指定分类（"general" / "sources" / "languages" / "capture" / "hotkeys" / "appearance"）。</summary>
     public void SelectTab(string key)
     {
+        if (_selectedPageKey is not null)
+            _pageScrollOffsets[_selectedPageKey] = _pageScroll.VerticalOffset;
+
         var page = _pages.FirstOrDefault(p => p.Key == key);
         if (page.Btn is null) page = _pages[0];
 
         foreach (var (_, btn, _) in _pages) btn.IsChecked = ReferenceEquals(btn, page.Btn);
         _pageHost.Content = page.Build();
+        _selectedPageKey = page.Key;
+
+        // 新页面完成布局后再恢复自己的滚动位置，避免沿用上一页的范围。
+        Dispatcher.BeginInvoke(() =>
+            _pageScroll.ScrollToVerticalOffset(_pageScrollOffsets.GetValueOrDefault(page.Key)));
     }
 
     // ------------------------------------------------------------- 外壳
@@ -110,16 +121,13 @@ public sealed partial class SettingsWindow : Window
         UiKit.SetGrid(nav, col: 0);
         body.Children.Add(nav);
 
-        var scroll = new ScrollViewer
-        {
-            Content = _pageHost,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            Padding = new Thickness(16, 14, 14, 16),
-        };
-        scroll.SetResourceReference(StyleProperty, "PlainScrollViewer");
-        UiKit.SetGrid(scroll, col: 1);
-        body.Children.Add(scroll);
+        _pageScroll.Content = _pageHost;
+        _pageScroll.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
+        _pageScroll.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
+        _pageScroll.Padding = new Thickness(16, 14, 14, 16);
+        _pageScroll.SetResourceReference(StyleProperty, "PlainScrollViewer");
+        UiKit.SetGrid(_pageScroll, col: 1);
+        body.Children.Add(_pageScroll);
 
         UiKit.SetGrid(body, row: 1);
         grid.Children.Add(body);

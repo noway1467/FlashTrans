@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using FlashTrans.Services;
 
 namespace FlashTrans.Views;
 
@@ -22,8 +23,8 @@ public sealed class OcrResultWindow : Window
     public OcrResultWindow(string text)
     {
         Title = "识别结果";
-        Width = 520;
-        Height = 360;
+        Width = SettingsService.Instance.Current.OcrResultWidth;
+        Height = SettingsService.Instance.Current.OcrResultHeight;
         MinWidth = 360;
         MinHeight = 220;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
@@ -72,6 +73,7 @@ public sealed class OcrResultWindow : Window
         Content = grid;
 
         PreviewKeyDown += OnKey;
+        Closed += (_, _) => SaveSize();
 
         // 一打开就选中全部：多数时候识别得对，直接 Ctrl+C 走人；
         // 要改的话按一下方向键就取消选中了，不挡事。
@@ -80,6 +82,17 @@ public sealed class OcrResultWindow : Window
             _box.Focus();
             _box.SelectAll();
         };
+    }
+
+    void SaveSize()
+    {
+        if (WindowState == WindowState.Minimized) return;
+
+        var bounds = RestoreBounds;
+        var settings = SettingsService.Instance.Current;
+        settings.OcrResultWidth = Math.Max(MinWidth, bounds.Width);
+        settings.OcrResultHeight = Math.Max(MinHeight, bounds.Height);
+        SettingsService.Instance.Save();
     }
 
     void OnKey(object sender, KeyEventArgs e)

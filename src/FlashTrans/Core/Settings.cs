@@ -217,6 +217,9 @@ public sealed class AppSettings
     public string OcrLang { get; set; } = "";
     /// <summary>截图 OCR 用的识别引擎：auto = 有本地模型用 RapidOCR，否则系统 OCR；system = 系统 OCR；rapid = RapidOCR。</summary>
     public string OcrEngine { get; set; } = "auto";
+    /// <summary>识别结果窗口上次关闭时的宽高。</summary>
+    public double OcrResultWidth { get; set; } = 520;
+    public double OcrResultHeight { get; set; } = 360;
     /// <summary>识别出的原文同时复制到剪贴板。</summary>
     public bool OcrCopyText { get; set; }
     /// <summary>截图工具里按「识别文字」快捷键后，直接复制结果并结束截图流程。</summary>
