@@ -12,7 +12,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>FlashTrans</AssemblyName>
     <RootNamespace>FlashTrans</RootNamespace>
-    <Version>1.7.9</Version>
+    <Version>1.8.0</Version>
     <Product>闪译 FlashTrans</Product>
     <Company>FlashTrans</Company>
     <ApplicationManifest>app.manifest</ApplicationManifest>
@@ -36,6 +36,9 @@
   <ItemGroup>
     <!-- 自测要摸几个 internal（裁图、蒙层截图），不为了测试把它们变成 public。 -->
     <InternalsVisibleTo Include="FlashTrans.SelfTest" />
+    <!-- 截图 OCR 的本地托管引擎（RapidOCR 移植）。包自带 PP-OCRv5 latin 模型，
+         其中文/日韩等识别需要 PP-OCRv6 模型，见下方 models\v6 拷贝项。 -->
+    <PackageReference Include="RapidOcrNet" Version="4.1.0" />
   </ItemGroup>
 
   <ItemGroup>
@@ -65,6 +68,11 @@
          许可证跟着一起拷：BSD-3-Clause 要求二次分发时带上。 -->
     <None Include="Assets\tools\*.exe" CopyToOutputDirectory="PreserveNewest" />
     <None Include="Assets\tools\libwebp-COPYING.txt" CopyToOutputDirectory="PreserveNewest" />
+
+    <!-- PP-OCRv6 tiny 模型（检测/方向/识别 + 词表），RapidOCR 中文等多语言识别用，
+         约 7MB，Apache-2.0，来源与校验见 models\v6\README.txt。 -->
+    <None Include="models\v6\*.onnx" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="models\v6\*.txt" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

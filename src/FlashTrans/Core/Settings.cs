@@ -215,6 +215,8 @@ public sealed class AppSettings
     // ------- 截图 OCR -------
     /// <summary>识别语言。空 = 自动比较系统已安装的 OCR 语言包。</summary>
     public string OcrLang { get; set; } = "";
+    /// <summary>截图 OCR 用的识别引擎：auto = 有本地模型用 RapidOCR，否则系统 OCR；system = 系统 OCR；rapid = RapidOCR。</summary>
+    public string OcrEngine { get; set; } = "auto";
     /// <summary>识别出的原文同时复制到剪贴板。</summary>
     public bool OcrCopyText { get; set; }
     /// <summary>截图工具里按「识别文字」快捷键后，直接复制结果并结束截图流程。</summary>

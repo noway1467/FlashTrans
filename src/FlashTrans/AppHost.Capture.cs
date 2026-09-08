@@ -87,14 +87,18 @@ public sealed partial class AppHost
     /// <summary>识别这块图里的文字，送进主窗口或者直接弹翻译。</summary>
     async Task OcrAsync(CapturedImage shot, bool translate, bool copyDirectly = false)
     {
-        if (!OcrService.IsAvailable)
+        if (!OcrService.IsAvailable && !OcrService.RapidModelsPresent)
         {
             // 图还在手上，别让用户白截一次——先塞进剪贴板再报错
             var copied = TrySetClipboardImage(shot);
-            AppDialog.Info(_main is { IsVisible: true } ? _main : null, "缺少文字识别语言包",
-                "系统里没装可用的 OCR 语言包，暂时不能识别截图里的文字。",
+            var detail = OcrService.IsAvailable
+                ? OcrService.RapidModelsHint() + "。可以参考 models\\v6\\README.txt 补上模型文件。"
+                : OcrService.NoEngineHint()
+                  + (OcrService.RapidModelsHint() is { } hint ? "\n\n" + hint + "。到「设置 → 文字识别」里可以选引擎。" : "");
+            AppDialog.Info(_main is { IsVisible: true } ? _main : null, "缺少文字识别引擎",
+                "系统 OCR 语言包和 RapidOCR 本地模型都没就位，暂时不能识别截图里的文字。",
                 tone: DialogTone.Warning,
-                detail: OcrService.NoEngineHint()
+                detail: detail
                         + (copied ? "\n刚才那张图已经复制到剪贴板了，可以先粘出去。" : ""));
             return;
         }
@@ -169,7 +173,7 @@ public sealed partial class AppHost
         try
         {
             // 识别是 CPU 活儿，别占着界面线程
-            text = await Task.Run(() => OcrService.RecognizeAsync(shot, lang));
+            text = await Task.Run(() => OcrService.RecognizeAsync(shot, lang, engine: S.OcrEngine));
         }
         catch (InvalidOperationException ex)
         {

@@ -179,22 +179,40 @@ public sealed partial class SettingsWindow
 
     UIElement[] BuildOcrRows()
     {
-        if (!OcrService.IsAvailable)
-            return
-            [
-                Hint("识别文字要用系统的语言包，现在没装。" + OcrService.NoEngineHint()),
-            ];
+        var engineItems = new List<(string, string)>
+        {
+            ("自动（优先用 RapidOCR，缺模型时退回系统 OCR）", "auto"),
+            ("系统 OCR（Windows 语言包）", "system"),
+            ("RapidOCR（本地模型，中英日韩）", "rapid"),
+        };
+        var rows = new List<UIElement>
+        {
+            Field("识别引擎", Combo(engineItems, S.OcrEngine, v => S.OcrEngine = v, width: 260)),
+        };
 
-        var langs = new List<(string, string)> { ("自动检测（尝试已安装语言）", "") };
-        langs.AddRange(OcrService.AvailableLanguages.Select(t => (OcrService.DisplayName(t), t)));
+        // 两个引擎都没有时，直接告诉缺什么、去哪补
+        if (!OcrService.IsAvailable && !OcrService.RapidModelsPresent)
+        {
+            rows.Add(Hint("识别文字需要系统 OCR 语言包或 RapidOCR 模型，现在都没有。" + OcrService.NoEngineHint()
+                          + (OcrService.RapidModelsHint() is { } hint ? "\n" + hint : "")));
+            return rows.ToArray();
+        }
 
-        return
-        [
-            Hint("自动模式会比较系统已安装的 OCR 语言包；括号、箭头等必须是字体字符，纯图标无法可靠还原。"),
-            Field("识别语言", Combo(langs, S.OcrLang, v => S.OcrLang = v, width: 230)),
-            Check("「识别并翻译」时把原文也复制到剪贴板", S.OcrCopyText, on => S.OcrCopyText = on),
-            Check("按「识别文字」快捷键后直接复制并关闭", S.OcrCopyAndClose, on => S.OcrCopyAndClose = on),
-        ];
+        if (OcrService.IsAvailable)
+        {
+            var langs = new List<(string, string)> { ("自动检测（尝试已安装语言）", "") };
+            langs.AddRange(OcrService.AvailableLanguages.Select(t => (OcrService.DisplayName(t), t)));
+            rows.Add(Field("识别语言", Combo(langs, S.OcrLang, v => S.OcrLang = v, width: 230)));
+        }
+        else
+        {
+            rows.Add(Hint("没有系统 OCR 语言包；语言选择只对系统 OCR 生效，RapidOCR 自动识别中英日韩。"));
+        }
+
+        rows.Add(Hint("自动模式会比较系统已安装的 OCR 语言包；RapidOCR 用随程序分发的本地模型，不联网、中英日韩一次识别；括号、箭头等必须是字体字符，纯图标无法可靠还原。"));
+        rows.Add(Check("「识别并翻译」时把原文也复制到剪贴板", S.OcrCopyText, on => S.OcrCopyText = on));
+        rows.Add(Check("按「识别文字」快捷键后直接复制并关闭", S.OcrCopyAndClose, on => S.OcrCopyAndClose = on));
+        return rows.ToArray();
     }
 
     /// <summary>
