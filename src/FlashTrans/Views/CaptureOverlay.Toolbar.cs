@@ -687,7 +687,8 @@ public sealed partial class CaptureOverlay
         };
         box.KeyDown += (_, e) =>
         {
-            if (e.Key is Key.Enter or Key.Escape)
+            var rk = RealKey(e);
+            if (rk is Key.Enter or Key.Escape)
             {
                 e.Handled = true;
                 CommitTextInput();
@@ -697,8 +698,8 @@ public sealed partial class CaptureOverlay
             // 打字时焦点在输入框里，OnKey 直接放行，所以这两个键得在这儿再接一次——
             // 正在写的时候才最想加粗，写完再回头改反而绕。
             if ((Keyboard.Modifiers & ModifierKeys.Control) == 0) return;
-            if (e.Key == Key.B) { e.Handled = true; ToggleBold(); }
-            else if (e.Key == Key.I) { e.Handled = true; ToggleItalic(); }
+            if (rk == Key.B) { e.Handled = true; ToggleBold(); }
+            else if (rk == Key.I) { e.Handled = true; ToggleItalic(); }
         };
 
         Canvas.SetLeft(box, at.X);
@@ -748,6 +749,20 @@ public sealed partial class CaptureOverlay
 
     // ------------------------------------------------------------- 键盘
 
+    /// <summary>
+    /// 穿透 IME / System 包装，拿到物理键。
+    /// 输入法开启时 WPF 把 e.Key 设成 Key.ImeProcessed，真实按键藏在
+    /// e.ImeProcessedKey 里；Alt 组合时变 Key.System，藏在 e.SystemKey 里。
+    /// 截图蒙层不是输入场景，快捷键必须用物理键来匹配，否则开着输入法按
+    /// Shift+C 不会触发 OCR，反而往候选框里输了一个 C。
+    /// </summary>
+    static Key RealKey(KeyEventArgs e) => e.Key switch
+    {
+        Key.ImeProcessed => e.ImeProcessedKey,
+        Key.System => e.SystemKey,
+        _ => e.Key,
+    };
+
     void OnKey(object sender, KeyEventArgs e)
     {
         // 焦点在输入框里时只让它自己处理，不然打个 R 就切成矩形工具了
@@ -755,7 +770,7 @@ public sealed partial class CaptureOverlay
 
         // 先看固定的那几个。这些不给改：Esc 退出、回车确认、空格选窗口是
         // 到处都一样的约定，让它们可配置只会带来「把 Esc 设成别的键然后关不掉蒙层」这种麻烦。
-        switch (e.Key)
+        switch (RealKey(e))
         {
             case Key.Escape:
                 e.Handled = true;
@@ -798,20 +813,21 @@ public sealed partial class CaptureOverlay
         // 只在第二行摆着字号时才认，其它工具下留给可配置的键。
         if (_styleCtx == StyleCtx.Font && (Keyboard.Modifiers & ModifierKeys.Control) != 0)
         {
-            if (e.Key == Key.B) { e.Handled = true; ToggleBold(); return; }
-            if (e.Key == Key.I) { e.Handled = true; ToggleItalic(); return; }
+            var rk = RealKey(e);
+            if (rk == Key.B) { e.Handled = true; ToggleBold(); return; }
+            if (rk == Key.I) { e.Handled = true; ToggleItalic(); return; }
         }
 
         // 方向键微调选中那一笔的位置。鼠标拖是粗调，差一两个像素时用键。
         // 按住 Shift 走 10 个像素。没选中东西时不拦，留给别的键。
-        if (Nudge(e.Key) is { } step)
+        if (Nudge(RealKey(e)) is { } step)
         {
             var far = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
             if (_layer.Nudge(step * (far ? 10 : 1))) { e.Handled = true; return; }
         }
 
         // Delete 删掉选中那一笔。撤销砍的是最后画的，这个砍的是点中的。
-        if (e.Key is Key.Delete or Key.Back && Keyboard.Modifiers == ModifierKeys.None)
+        if (RealKey(e) is Key.Delete or Key.Back && Keyboard.Modifiers == ModifierKeys.None)
         {
             if (_layer.DeleteActive()) { e.Handled = true; SyncToolbar(); return; }
         }
@@ -866,9 +882,11 @@ public sealed partial class CaptureOverlay
     /// <summary>
     /// 这一下按键是不是那个组合。修饰键要求完全相等，不是「包含」——
     /// 否则 Ctrl+Shift+D 会先被 Ctrl+D 吃掉。
+    /// 用 RealKey 穿透 IME 包装：输入法开着时 e.Key 是 ImeProcessed，
+    /// 直接比会漏掉所有字母和数字键。
     /// </summary>
     static bool Matches(KeyEventArgs e, ModifierKeys mods, Key key)
-        => key != Key.None && e.Key == key && Keyboard.Modifiers == mods;
+        => key != Key.None && RealKey(e) == key && Keyboard.Modifiers == mods;
 
     protected override void OnPreviewMouseWheel(MouseWheelEventArgs e)
     {
