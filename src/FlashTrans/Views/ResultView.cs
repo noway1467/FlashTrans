@@ -168,7 +168,7 @@ public sealed class ResultView : ScrollViewer
     {
         Clear();
         var panel = new StackPanel();
-        if (S.Bilingual) panel.Children.Add(SourceBlock(sourceText));
+        if (S.Bilingual && !S.HideBilingualSource) panel.Children.Add(SourceBlock(sourceText));
 
         _streamTarget = UiKit.SelectableText("", S.FontSize + 1);
         panel.Children.Add(_streamTarget);
@@ -303,27 +303,29 @@ public sealed class ResultView : ScrollViewer
             if (S.Bilingual)
             {
                 var sourceCopy = UiKit.IconButton(UiKit.IconCopy, "复制原文",
-                    (_, _) => CopyRequested?.Invoke(batch.SourceText), 12, "SourceCopyBtn");
-                sourceCopy.Width = 22;
-                sourceCopy.Height = 20;
+                    (_, _) => CopyRequested?.Invoke(batch.SourceText), 14, "SourceCopyBtn");
+                sourceCopy.Width = 30;
+                sourceCopy.Height = 27;
                 sourceCopy.Margin = new Thickness(4, 0, 0, 0);
                 right.Children.Add(sourceCopy);
             }
 
+            if (S.Bilingual) right.Children.Add(CopySeparator());
+
             if (batch.Targets.Count == 1)
             {
                 var copy = UiKit.IconButton(UiKit.IconCopy, "复制译文",
-                    (_, _) => CopyRequested?.Invoke(ProviderText(r, batch)), 12, "TranslationCopyBtn");
-                copy.Width = 22; copy.Height = 20;
+                    (_, _) => CopyRequested?.Invoke(ProviderText(r, batch)), 14, "TranslationCopyBtn");
+                copy.Width = 30; copy.Height = 27;
                 copy.Margin = new Thickness(4, 0, 0, 0);
                 right.Children.Add(copy);
             }
             else
             {
                 var copy = UiKit.IconButton(UiKit.IconCopy, "复制此源全部译文",
-                    (_, _) => CopyRequested?.Invoke(ProviderText(r, batch)), 12, "ProviderCopyBtn");
-                copy.Width = 22;
-                copy.Height = 20;
+                    (_, _) => CopyRequested?.Invoke(ProviderText(r, batch)), 14, "ProviderCopyBtn");
+                copy.Width = 30;
+                copy.Height = 27;
                 copy.Margin = new Thickness(4, 0, 0, 0);
                 right.Children.Add(copy);
             }
@@ -353,7 +355,7 @@ public sealed class ResultView : ScrollViewer
 
     UIElement Body(string source, string translated, double fontSize)
     {
-        if (!S.Bilingual) return UiKit.SelectableText(translated, fontSize);
+        if (!S.Bilingual || S.HideBilingualSource) return UiKit.SelectableText(translated, fontSize);
 
         var panel = new StackPanel();
         var srcLines = TranslateEngine.SplitLines(source);
@@ -413,11 +415,12 @@ public sealed class ResultView : ScrollViewer
         border.SetResourceReference(Border.BackgroundProperty, "BgAlt");
         row.Children.Add(border);
 
+        row.Children.Add(CopySeparator());
         var copy = UiKit.IconButton(UiKit.IconCopy, $"复制{Languages.NameOf(lang)}译文",
-            (_, _) => CopyRequested?.Invoke(text), 11, "TranslationCopyBtn");
-        copy.Width = 22;
-        copy.Height = 20;
-        copy.Margin = new Thickness(4, 0, 0, 0);
+            (_, _) => CopyRequested?.Invoke(text), 13, "TranslationCopyBtn");
+        copy.Width = 30;
+        copy.Height = 27;
+        copy.Margin = new Thickness(5, 0, 0, 0);
         copy.VerticalAlignment = VerticalAlignment.Center;
         row.Children.Add(copy);
         return row;
@@ -472,12 +475,17 @@ public sealed class ResultView : ScrollViewer
             if (S.Bilingual)
             {
                 var sourceCopy = UiKit.IconButton(UiKit.IconCopy, "复制原文",
-                    (_, _) => CopyRequested?.Invoke(batch.SourceText), 13, "SourceCopyBtn");
+                    (_, _) => CopyRequested?.Invoke(batch.SourceText), 14, "SourceCopyBtn");
+                sourceCopy.Width = 30;
+                sourceCopy.Height = 27;
                 row.Children.Add(sourceCopy);
+                row.Children.Add(CopySeparator());
             }
 
             var copy = UiKit.IconButton(UiKit.IconCopy, "复制译文",
-                (_, _) => CopyRequested?.Invoke(ProviderText(r, batch)), 13, "TranslationCopyBtn");
+                (_, _) => CopyRequested?.Invoke(ProviderText(r, batch)), 14, "TranslationCopyBtn");
+            copy.Width = 30;
+            copy.Height = 27;
             row.Children.Add(copy);
         }
 
@@ -520,15 +528,26 @@ public sealed class ResultView : ScrollViewer
         return r.Texts.Values.FirstOrDefault() ?? "";
     }
 
-    /// <summary>复制当前翻译源的全部目标语言结果，避免多语言时只拿到第一种语言。</summary>
+    static Border CopySeparator()
+    {
+        var line = new Border
+        {
+            Width = 1,
+            Height = 18,
+            Margin = new Thickness(6, 0, 2, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        line.SetResourceReference(Border.BackgroundProperty, "BorderStrong");
+        return line;
+    }
+
+    /// <summary>复制当前翻译源的全部目标语言结果，不附带语言名称。</summary>
     static string ProviderText(TranslateResult r, TranslateBatch batch)
     {
         var sb = new StringBuilder();
         foreach (var lang in batch.Targets)
         {
             if (r.Get(lang) is not { } text) continue;
-            if (batch.Targets.Count > 1)
-                sb.Append('[').Append(Languages.NameOf(lang)).Append("] ");
             sb.AppendLine(text);
         }
         return sb.Length > 0 ? sb.ToString().TrimEnd() : FirstText(r, batch);
@@ -545,7 +564,6 @@ public sealed class ResultView : ScrollViewer
                 if (r.Get(lang) is not { } t) continue;
                 if (batch.Results.Count(x => x.Ok) > 1 || batch.Targets.Count > 1)
                     sb.Append('[').Append(r.ProviderName);
-                if (batch.Targets.Count > 1) sb.Append(' ').Append(Languages.NameOf(lang));
                 if (batch.Results.Count(x => x.Ok) > 1 || batch.Targets.Count > 1) sb.Append("] ");
                 sb.AppendLine(t);
             }

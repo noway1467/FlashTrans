@@ -101,16 +101,22 @@
     <Style x:Key="TranslationCopyBtn" TargetType="Button" BasedOn="{StaticResource IconBtn}">
         <Setter Property="Background" Value="{DynamicResource AccentSoft}" />
         <Setter Property="Foreground" Value="{DynamicResource Accent}" />
+        <Setter Property="Width" Value="30" />
+        <Setter Property="Height" Value="27" />
     </Style>
 
     <Style x:Key="SourceCopyBtn" TargetType="Button" BasedOn="{StaticResource IconBtn}">
         <Setter Property="Background" Value="{DynamicResource BgAlt}" />
         <Setter Property="Foreground" Value="{DynamicResource Text}" />
+        <Setter Property="Width" Value="30" />
+        <Setter Property="Height" Value="27" />
     </Style>
 
     <Style x:Key="ProviderCopyBtn" TargetType="Button" BasedOn="{StaticResource IconBtn}">
         <Setter Property="Background" Value="{DynamicResource Accent}" />
         <Setter Property="Foreground" Value="White" />
+        <Setter Property="Width" Value="30" />
+        <Setter Property="Height" Value="27" />
     </Style>
 
     <Style x:Key="GhostBtn" TargetType="Button" BasedOn="{StaticResource IconBtn}">

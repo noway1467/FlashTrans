@@ -151,6 +151,14 @@ public sealed class SettingsService
             changed = true;
         }
 
+        // v4 -> v5：新增双语对照的原文显示开关，老配置保持原来的显示行为。
+        if (s.Version < 5)
+        {
+            s.HideBilingualSource = false;
+            s.Version = 5;
+            changed = true;
+        }
+
         return changed;
     }
 
