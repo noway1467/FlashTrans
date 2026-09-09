@@ -300,23 +300,32 @@ public sealed class ResultView : ScrollViewer
         }
         if (r.Ok)
         {
-            if (batch.Targets.Count == 1)
-            {
-                var copy = UiKit.IconButton(UiKit.IconCopy, "复制译文",
-                    (_, _) => CopyRequested?.Invoke(FirstText(r, batch)), 12);
-                copy.Width = 22; copy.Height = 20;
-                copy.Margin = new Thickness(4, 0, 0, 0);
-                right.Children.Add(copy);
-            }
-
             if (S.Bilingual)
             {
                 var sourceCopy = UiKit.IconButton(UiKit.IconCopy, "复制原文",
-                    (_, _) => CopyRequested?.Invoke(batch.SourceText), 12);
+                    (_, _) => CopyRequested?.Invoke(batch.SourceText), 12, "SourceCopyBtn");
                 sourceCopy.Width = 22;
                 sourceCopy.Height = 20;
                 sourceCopy.Margin = new Thickness(4, 0, 0, 0);
                 right.Children.Add(sourceCopy);
+            }
+
+            if (batch.Targets.Count == 1)
+            {
+                var copy = UiKit.IconButton(UiKit.IconCopy, "复制译文",
+                    (_, _) => CopyRequested?.Invoke(ProviderText(r, batch)), 12, "TranslationCopyBtn");
+                copy.Width = 22; copy.Height = 20;
+                copy.Margin = new Thickness(4, 0, 0, 0);
+                right.Children.Add(copy);
+            }
+            else
+            {
+                var copy = UiKit.IconButton(UiKit.IconCopy, "复制此源全部译文",
+                    (_, _) => CopyRequested?.Invoke(ProviderText(r, batch)), 12, "ProviderCopyBtn");
+                copy.Width = 22;
+                copy.Height = 20;
+                copy.Margin = new Thickness(4, 0, 0, 0);
+                right.Children.Add(copy);
             }
         }
         UiKit.SetGrid(right, col: 2);
@@ -405,7 +414,7 @@ public sealed class ResultView : ScrollViewer
         row.Children.Add(border);
 
         var copy = UiKit.IconButton(UiKit.IconCopy, $"复制{Languages.NameOf(lang)}译文",
-            (_, _) => CopyRequested?.Invoke(text), 11);
+            (_, _) => CopyRequested?.Invoke(text), 11, "TranslationCopyBtn");
         copy.Width = 22;
         copy.Height = 20;
         copy.Margin = new Thickness(4, 0, 0, 0);
@@ -460,17 +469,16 @@ public sealed class ResultView : ScrollViewer
 
         if (batch.Targets.Count == 1)
         {
-            var copy = UiKit.IconButton(UiKit.IconCopy, "复制译文",
-                (_, _) => CopyRequested?.Invoke(FirstText(r, batch)), 13);
-            row.Children.Add(copy);
-        }
+            if (S.Bilingual)
+            {
+                var sourceCopy = UiKit.IconButton(UiKit.IconCopy, "复制原文",
+                    (_, _) => CopyRequested?.Invoke(batch.SourceText), 13, "SourceCopyBtn");
+                row.Children.Add(sourceCopy);
+            }
 
-        if (S.Bilingual)
-        {
-            var sourceCopy = UiKit.IconButton(UiKit.IconCopy, "复制原文",
-                (_, _) => CopyRequested?.Invoke(batch.SourceText), 13);
-            sourceCopy.Margin = new Thickness(4, 0, 0, 0);
-            row.Children.Add(sourceCopy);
+            var copy = UiKit.IconButton(UiKit.IconCopy, "复制译文",
+                (_, _) => CopyRequested?.Invoke(ProviderText(r, batch)), 13, "TranslationCopyBtn");
+            row.Children.Add(copy);
         }
 
         if (S.EudicEnabled && LangDetect.LooksLikeWord(batch.SourceText))
@@ -510,6 +518,20 @@ public sealed class ResultView : ScrollViewer
         foreach (var lang in batch.Targets)
             if (r.Get(lang) is { } t) return t;
         return r.Texts.Values.FirstOrDefault() ?? "";
+    }
+
+    /// <summary>复制当前翻译源的全部目标语言结果，避免多语言时只拿到第一种语言。</summary>
+    static string ProviderText(TranslateResult r, TranslateBatch batch)
+    {
+        var sb = new StringBuilder();
+        foreach (var lang in batch.Targets)
+        {
+            if (r.Get(lang) is not { } text) continue;
+            if (batch.Targets.Count > 1)
+                sb.Append('[').Append(Languages.NameOf(lang)).Append("] ");
+            sb.AppendLine(text);
+        }
+        return sb.Length > 0 ? sb.ToString().TrimEnd() : FirstText(r, batch);
     }
 
     /// <summary>当前显示的全部译文（用于「复制全部」）。</summary>

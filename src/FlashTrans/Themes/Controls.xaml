@@ -97,6 +97,22 @@
         </Setter>
     </Style>
 
+    <!-- 复制按钮要和普通工具按钮拉开层次：译文用强调色，原文用亮色底。 -->
+    <Style x:Key="TranslationCopyBtn" TargetType="Button" BasedOn="{StaticResource IconBtn}">
+        <Setter Property="Background" Value="{DynamicResource AccentSoft}" />
+        <Setter Property="Foreground" Value="{DynamicResource Accent}" />
+    </Style>
+
+    <Style x:Key="SourceCopyBtn" TargetType="Button" BasedOn="{StaticResource IconBtn}">
+        <Setter Property="Background" Value="{DynamicResource BgAlt}" />
+        <Setter Property="Foreground" Value="{DynamicResource Text}" />
+    </Style>
+
+    <Style x:Key="ProviderCopyBtn" TargetType="Button" BasedOn="{StaticResource IconBtn}">
+        <Setter Property="Background" Value="{DynamicResource Accent}" />
+        <Setter Property="Foreground" Value="White" />
+    </Style>
+
     <Style x:Key="GhostBtn" TargetType="Button" BasedOn="{StaticResource IconBtn}">
         <Setter Property="Width" Value="Auto" />
         <Setter Property="Height" Value="26" />
