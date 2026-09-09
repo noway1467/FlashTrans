@@ -235,7 +235,7 @@ public sealed class ResultView : ScrollViewer
         {
             var text = r.Get(lang);
             if (text is null) continue;
-            if (batch.Targets.Count > 1) panel.Children.Add(LangLabel(lang));
+            if (batch.Targets.Count > 1) panel.Children.Add(LangLabel(lang, text));
             panel.Children.Add(Body(batch.SourceText, text, S.FontSize + 1));
         }
 
@@ -300,11 +300,24 @@ public sealed class ResultView : ScrollViewer
         }
         if (r.Ok)
         {
-            var copy = UiKit.IconButton(UiKit.IconCopy, "复制译文",
-                (_, _) => CopyRequested?.Invoke(FirstText(r, batch)), 12);
-            copy.Width = 22; copy.Height = 20;
-            copy.Margin = new Thickness(4, 0, 0, 0);
-            right.Children.Add(copy);
+            if (batch.Targets.Count == 1)
+            {
+                var copy = UiKit.IconButton(UiKit.IconCopy, "复制译文",
+                    (_, _) => CopyRequested?.Invoke(FirstText(r, batch)), 12);
+                copy.Width = 22; copy.Height = 20;
+                copy.Margin = new Thickness(4, 0, 0, 0);
+                right.Children.Add(copy);
+            }
+
+            if (S.Bilingual)
+            {
+                var sourceCopy = UiKit.IconButton(UiKit.IconCopy, "复制原文",
+                    (_, _) => CopyRequested?.Invoke(batch.SourceText), 12);
+                sourceCopy.Width = 22;
+                sourceCopy.Height = 20;
+                sourceCopy.Margin = new Thickness(4, 0, 0, 0);
+                right.Children.Add(sourceCopy);
+            }
         }
         UiKit.SetGrid(right, col: 2);
         head.Children.Add(right);
@@ -316,7 +329,7 @@ public sealed class ResultView : ScrollViewer
             {
                 var text = r.Get(lang);
                 if (text is null) continue;
-                if (batch.Targets.Count > 1) body.Children.Add(LangLabel(lang));
+                if (batch.Targets.Count > 1) body.Children.Add(LangLabel(lang, text));
                 body.Children.Add(Body(batch.SourceText, text, S.FontSize));
             }
             if (S.ShowDictionary) AppendDictionary(body, r);
@@ -373,18 +386,32 @@ public sealed class ResultView : ScrollViewer
         return tb;
     }
 
-    static UIElement LangLabel(string lang)
+    UIElement LangLabel(string lang, string text)
     {
+        var row = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Margin = new Thickness(0, 6, 0, 3),
+        };
+
         var border = new Border
         {
             CornerRadius = new CornerRadius(4),
             Padding = new Thickness(5, 1, 5, 1),
-            Margin = new Thickness(0, 6, 0, 3),
             HorizontalAlignment = HorizontalAlignment.Left,
             Child = UiKit.Text(Languages.NameOf(lang), S.FontSize - 4, "TextDim", FontWeights.SemiBold),
         };
         border.SetResourceReference(Border.BackgroundProperty, "BgAlt");
-        return border;
+        row.Children.Add(border);
+
+        var copy = UiKit.IconButton(UiKit.IconCopy, $"复制{Languages.NameOf(lang)}译文",
+            (_, _) => CopyRequested?.Invoke(text), 11);
+        copy.Width = 22;
+        copy.Height = 20;
+        copy.Margin = new Thickness(4, 0, 0, 0);
+        copy.VerticalAlignment = VerticalAlignment.Center;
+        row.Children.Add(copy);
+        return row;
     }
 
     UIElement ErrorRow(TranslateResult r)
@@ -431,9 +458,20 @@ public sealed class ResultView : ScrollViewer
             Margin = new Thickness(0, 9, 0, 0),
         };
 
-        var copy = UiKit.IconButton(UiKit.IconCopy, "复制译文",
-            (_, _) => CopyRequested?.Invoke(FirstText(r, batch)), 13);
-        row.Children.Add(copy);
+        if (batch.Targets.Count == 1)
+        {
+            var copy = UiKit.IconButton(UiKit.IconCopy, "复制译文",
+                (_, _) => CopyRequested?.Invoke(FirstText(r, batch)), 13);
+            row.Children.Add(copy);
+        }
+
+        if (S.Bilingual)
+        {
+            var sourceCopy = UiKit.IconButton(UiKit.IconCopy, "复制原文",
+                (_, _) => CopyRequested?.Invoke(batch.SourceText), 13);
+            sourceCopy.Margin = new Thickness(4, 0, 0, 0);
+            row.Children.Add(sourceCopy);
+        }
 
         if (S.EudicEnabled && LangDetect.LooksLikeWord(batch.SourceText))
         {
