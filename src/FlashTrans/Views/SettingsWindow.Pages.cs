@@ -632,6 +632,8 @@ public sealed partial class SettingsWindow
 
         Section(page, "结果显示",
             Check("双语对照", S.Bilingual, on => S.Bilingual = on),
+            Check("双语对照时不显示原文", S.HideBilingualSource, on => S.HideBilingualSource = on,
+                "只隐藏显示，不影响“复制原文”按钮"),
             Check("逐段对齐", S.BilingualByParagraph, on => S.BilingualByParagraph = on,
                 "逐段翻译后再配对，排版更整齐，请求略多"),
             Check("显示聚合标签", S.AggregateTab, on => S.AggregateTab = on,

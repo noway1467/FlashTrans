@@ -179,7 +179,8 @@ public partial class MainWindow
         return string.Join("|",
             s.AggregateTab, s.PrimaryProviderId, s.SourceLang, s.TargetLang, s.SecondaryTarget,
             s.AutoSwapSameLang, s.MultiTargetEnabled, string.Join(",", s.MultiTargets),
-            s.Bilingual, s.BilingualByParagraph, s.FontSize, s.FontFamily, s.Compact, s.Opacity,
+            s.Bilingual, s.HideBilingualSource, s.BilingualByParagraph,
+            s.FontSize, s.FontFamily, s.Compact, s.Opacity,
             s.AlwaysOnTop,
             // 词典开关也进签名：结果区的「欧路词典」按钮是渲染时按它决定的，
             // 漏掉的话关掉开关后那个按钮要等下一次翻译才消失。

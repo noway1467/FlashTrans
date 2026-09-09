@@ -572,10 +572,12 @@ static class UiProbe
     {
         var s = SettingsService.Instance.Current;
         var oldBilingual = s.Bilingual;
+        var oldHideBilingualSource = s.HideBilingualSource;
         Window? holder = null;
         try
         {
             s.Bilingual = true;
+            s.HideBilingualSource = false;
 
             var view = new ResultView();
             holder = new Window
@@ -616,7 +618,7 @@ static class UiProbe
             holder.UpdateLayout();
             ClickCopy("复制日语译文", result.Texts["ja"]);
             ClickCopy("复制此源全部译文",
-                $"[简体中文] {result.Texts["zh-CN"]}{Environment.NewLine}[日语] {result.Texts["ja"]}");
+                $"{result.Texts["zh-CN"]}{Environment.NewLine}{result.Texts["ja"]}");
             ClickCopy("复制原文", batch.SourceText);
 
             var translationCopy = Descendants<Button>(holder)
@@ -633,8 +635,20 @@ static class UiProbe
             holder.UpdateLayout();
             ClickCopy("复制日语译文", result.Texts["ja"]);
             ClickCopy("复制此源全部译文",
-                $"[简体中文] {result.Texts["zh-CN"]}{Environment.NewLine}[日语] {result.Texts["ja"]}");
+                $"{result.Texts["zh-CN"]}{Environment.NewLine}{result.Texts["ja"]}");
             ClickCopy("复制原文", batch.SourceText);
+
+            var all = ResultView.AllText(batch);
+            if (all.Contains("简体中文", StringComparison.Ordinal) ||
+                all.Contains("日语", StringComparison.Ordinal))
+                throw new InvalidOperationException("复制全部译文仍混入了语言名称");
+
+            s.HideBilingualSource = true;
+            view.ShowBatch(batch, aggregate: true);
+            holder.UpdateLayout();
+            if (Descendants<TextBox>(holder).Any(t => t.Text == batch.SourceText))
+                throw new InvalidOperationException("隐藏原文设置没有生效");
+            s.HideBilingualSource = false;
 
             // 单语言退回紧凑布局时，页脚的右侧复制仍是译文，而不是原文。
             batch.Targets = ["ja"];
@@ -647,6 +661,7 @@ static class UiProbe
         {
             if (holder is not null) Close(holder);
             s.Bilingual = oldBilingual;
+            s.HideBilingualSource = oldHideBilingualSource;
         }
     }
     /// <summary>

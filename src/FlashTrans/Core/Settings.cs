@@ -54,7 +54,7 @@ public sealed class AppSettings
     public int Version { get; set; } = CurrentVersion;
 
     /// <summary>加新的默认源/字段时 +1，并在 Migrate 里补一段。</summary>
-    public const int CurrentVersion = 4;
+    public const int CurrentVersion = 5;
 
     // ------- 翻译源 -------
     public List<ProviderConfig> Providers { get; set; } = [];
@@ -82,6 +82,8 @@ public sealed class AppSettings
     public bool Bilingual { get; set; }
     /// <summary>逐段对齐翻译（双语对照更整齐，请求略慢）。</summary>
     public bool BilingualByParagraph { get; set; } = true;
+    /// <summary>双语对照时隐藏原文，只显示译文和复制原文按钮。</summary>
+    public bool HideBilingualSource { get; set; }
     public AppTheme Theme { get; set; } = AppTheme.Dark;
     public string AccentColor { get; set; } = "#4C8DFF";
     public double FontSize { get; set; } = 14;
