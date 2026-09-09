@@ -611,17 +611,37 @@ static class UiProbe
                         $"{tooltip} 复制内容不对：{copied ?? "<null>"}");
             }
 
-            // 单源多语言走 SingleBlock，两个目标语言都必须各自有复制入口，双语还要能复制原文。
+            // 单源多语言走 ProviderCard，两个目标语言都必须各自有复制入口，双语还要能复制原文。
             view.ShowBatch(batch, aggregate: false);
             holder.UpdateLayout();
             ClickCopy("复制日语译文", result.Texts["ja"]);
+            ClickCopy("复制此源全部译文",
+                $"[简体中文] {result.Texts["zh-CN"]}{Environment.NewLine}[日语] {result.Texts["ja"]}");
             ClickCopy("复制原文", batch.SourceText);
+
+            var translationCopy = Descendants<Button>(holder)
+                .First(b => (b.ToolTip as string) == "复制此源全部译文");
+            var sourceCopy = Descendants<Button>(holder)
+                .First(b => (b.ToolTip as string) == "复制原文");
+            if (translationCopy.Foreground is not SolidColorBrush translationBrush ||
+                sourceCopy.Foreground is not SolidColorBrush sourceBrush ||
+                translationBrush.Color == sourceBrush.Color)
+                throw new InvalidOperationException("原文与译文复制按钮没有明显颜色区分");
 
             // 聚合卡片也要覆盖同一组入口，避免只修到单源排版。
             view.ShowBatch(batch, aggregate: true);
             holder.UpdateLayout();
             ClickCopy("复制日语译文", result.Texts["ja"]);
+            ClickCopy("复制此源全部译文",
+                $"[简体中文] {result.Texts["zh-CN"]}{Environment.NewLine}[日语] {result.Texts["ja"]}");
             ClickCopy("复制原文", batch.SourceText);
+
+            // 单语言退回紧凑布局时，页脚的右侧复制仍是译文，而不是原文。
+            batch.Targets = ["ja"];
+            view.ShowBatch(batch, aggregate: false);
+            holder.UpdateLayout();
+            ClickCopy("复制原文", batch.SourceText);
+            ClickCopy("复制译文", result.Texts["ja"]);
         }
         finally
         {
