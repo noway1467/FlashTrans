@@ -52,6 +52,7 @@ public partial class MainWindow : Window
 
         ResultHost.Content = _result;
         _result.CopyRequested += CopyToClipboard;
+        _result.SpeakRequested += SpeakText;
         _result.LookupRequested += LookupInEudic;
 
         BuildHeader();

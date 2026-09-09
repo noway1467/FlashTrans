@@ -80,6 +80,12 @@ public partial class MainWindow
         Flash("已复制");
     }
 
+    async void SpeakText(string text, string language)
+    {
+        var error = await SpeechService.SpeakAsync(text, language);
+        Flash(error ?? "正在播放译文");
+    }
+
     void LookupInEudic(string word)
     {
         if (EudicService.Lookup(word)) Flash("已发送到欧路词典");
