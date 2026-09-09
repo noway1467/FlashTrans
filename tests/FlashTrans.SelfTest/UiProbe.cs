@@ -68,6 +68,7 @@ static class UiProbe
         });
 
         step("结果区：渲染批次（聚合 + 双语 + 词典）", ResultRender);
+        step("结果区：按语言和原文复制", ResultCopyButtons);
         step("结果区：聚合边到边（占位 → 乱序填充 → 收尾）", ProgressiveRender);
 
         // 设置窗口的每个分类都单独展开一次
@@ -567,6 +568,67 @@ static class UiProbe
         Close(holder);
     }
 
+    static void ResultCopyButtons()
+    {
+        var s = SettingsService.Instance.Current;
+        var oldBilingual = s.Bilingual;
+        Window? holder = null;
+        try
+        {
+            s.Bilingual = true;
+
+            var view = new ResultView();
+            holder = new Window
+            {
+                Content = view, Width = 500, Height = 400,
+                Left = -4000, Top = -4000, ShowInTaskbar = false, ShowActivated = false,
+            };
+            holder.Show();
+
+            var batch = new TranslateBatch
+            {
+                SourceText = "Hello world\nSecond line",
+                From = "en",
+                Targets = ["zh-CN", "ja"],
+            };
+            var result = new TranslateResult { ProviderId = "copy", ProviderName = "测试源" };
+            result.Texts["zh-CN"] = "你好世界\n第二行";
+            result.Texts["ja"] = "こんにちは世界\n二行目";
+            batch.Results.Add(result);
+
+            string? copied = null;
+            view.CopyRequested += text => copied = text;
+
+            void ClickCopy(string tooltip, string expected)
+            {
+                copied = null;
+                var button = Descendants<Button>(holder)
+                    .FirstOrDefault(b => string.Equals(b.ToolTip as string, tooltip, StringComparison.Ordinal))
+                    ?? throw new InvalidOperationException($"没有找到复制按钮：{tooltip}");
+                button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                if (!string.Equals(copied, expected, StringComparison.Ordinal))
+                    throw new InvalidOperationException(
+                        $"{tooltip} 复制内容不对：{copied ?? "<null>"}");
+            }
+
+            // 单源多语言走 SingleBlock，两个目标语言都必须各自有复制入口，双语还要能复制原文。
+            view.ShowBatch(batch, aggregate: false);
+            holder.UpdateLayout();
+            ClickCopy("复制日语译文", result.Texts["ja"]);
+            ClickCopy("复制原文", batch.SourceText);
+
+            // 聚合卡片也要覆盖同一组入口，避免只修到单源排版。
+            view.ShowBatch(batch, aggregate: true);
+            holder.UpdateLayout();
+            ClickCopy("复制日语译文", result.Texts["ja"]);
+            ClickCopy("复制原文", batch.SourceText);
+        }
+        finally
+        {
+            if (holder is not null) Close(holder);
+            s.Bilingual = oldBilingual;
+        }
+    }
     /// <summary>
     /// 聚合边到边显示：占位卡 → 逐个换成真结果 → 收尾。
     /// 换卡按 Id 找槽位，所以要盯住越界和找不到 Id 这两种情况——
