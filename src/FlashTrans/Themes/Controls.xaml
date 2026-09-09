@@ -117,6 +117,65 @@
         <Setter Property="Foreground" Value="White" />
         <Setter Property="Width" Value="30" />
         <Setter Property="Height" Value="27" />
+        <!-- 普通 IconBtn 的按下触发器会把背景刷成 BgActive，源右侧按钮因此会丢掉蓝色。 -->
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="B" Background="{TemplateBinding Background}" CornerRadius="5"
+                            Padding="{TemplateBinding Padding}">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="B" Property="Background" Value="{DynamicResource AccentDim}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="B" Property="Background" Value="{DynamicResource AccentDim}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.4" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="SpeechBtn" TargetType="Button" BasedOn="{StaticResource IconBtn}">
+        <Setter Property="Background" Value="{DynamicResource BgAlt}" />
+        <Setter Property="Foreground" Value="{DynamicResource Success}" />
+        <Setter Property="Width" Value="30" />
+        <Setter Property="Height" Value="27" />
+    </Style>
+
+    <Style x:Key="IconToggleBtn" TargetType="ToggleButton">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource TextDim}" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Width" Value="28" />
+        <Setter Property="Height" Value="26" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ToggleButton">
+                    <Border x:Name="B" Background="{TemplateBinding Background}" CornerRadius="5"
+                            Padding="{TemplateBinding Padding}">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="B" Property="Background" Value="{DynamicResource BgHover}" />
+                            <Setter Property="Foreground" Value="{DynamicResource Text}" />
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="B" Property="Background" Value="{DynamicResource AccentSoft}" />
+                            <Setter Property="Foreground" Value="{DynamicResource Accent}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
     </Style>
 
     <Style x:Key="GhostBtn" TargetType="Button" BasedOn="{StaticResource IconBtn}">

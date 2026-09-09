@@ -22,6 +22,7 @@ public sealed class ResultView : ScrollViewer
     TranslateBatch? _liveBatch;
 
     public event Action<string>? CopyRequested;
+    public event Action<string, string>? SpeakRequested;
     public event Action<string>? LookupRequested;
 
     static AppSettings S => SettingsService.Instance.Current;
@@ -314,6 +315,7 @@ public sealed class ResultView : ScrollViewer
 
             if (batch.Targets.Count == 1)
             {
+                AddSpeechButton(right, FirstText(r, batch), batch.Targets[0]);
                 var copy = UiKit.IconButton(UiKit.IconCopy, "复制译文",
                     (_, _) => CopyRequested?.Invoke(ProviderText(r, batch)), 14, "TranslationCopyBtn");
                 copy.Width = 30; copy.Height = 27;
@@ -416,6 +418,7 @@ public sealed class ResultView : ScrollViewer
         row.Children.Add(border);
 
         row.Children.Add(CopySeparator());
+        AddSpeechButton(row, text, lang);
         var copy = UiKit.IconButton(UiKit.IconCopy, $"复制{Languages.NameOf(lang)}译文",
             (_, _) => CopyRequested?.Invoke(text), 13, "TranslationCopyBtn");
         copy.Width = 30;
@@ -482,6 +485,7 @@ public sealed class ResultView : ScrollViewer
                 row.Children.Add(CopySeparator());
             }
 
+            AddSpeechButton(row, FirstText(r, batch), batch.Targets[0]);
             var copy = UiKit.IconButton(UiKit.IconCopy, "复制译文",
                 (_, _) => CopyRequested?.Invoke(ProviderText(r, batch)), 14, "TranslationCopyBtn");
             copy.Width = 30;
@@ -526,6 +530,17 @@ public sealed class ResultView : ScrollViewer
         foreach (var lang in batch.Targets)
             if (r.Get(lang) is { } t) return t;
         return r.Texts.Values.FirstOrDefault() ?? "";
+    }
+
+    void AddSpeechButton(Panel panel, string text, string language)
+    {
+        if (!SpeechService.HasVoice(language)) return;
+        var speak = UiKit.IconButton(UiKit.IconVolume, $"播放{Languages.NameOf(language)}译文",
+            (_, _) => SpeakRequested?.Invoke(text, language), 13, "SpeechBtn");
+        speak.Width = 30;
+        speak.Height = 27;
+        speak.Margin = new Thickness(4, 0, 0, 0);
+        panel.Children.Add(speak);
     }
 
     static Border CopySeparator()

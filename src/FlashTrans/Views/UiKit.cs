@@ -13,6 +13,8 @@ public static class UiKit
         "M5.5,2 H12 A1.5,1.5 0 0 1 13.5,3.5 V10 A1.5,1.5 0 0 1 12,11.5 H5.5 A1.5,1.5 0 0 1 4,10 V3.5 " +
         "A1.5,1.5 0 0 1 5.5,2 Z M4,5 H3.2 A1.2,1.2 0 0 0 2,6.2 V12.8 A1.2,1.2 0 0 0 3.2,14 H9.8 " +
         "A1.2,1.2 0 0 0 11,12.8 V11.5");
+    public static readonly Geometry IconVolume = Geometry.Parse(
+        "M2,6 H4 L7,3 V13 L4,10 H2 Z M10,5 A4,4 0 0 1 10,11 M12,3 A7,7 0 0 1 12,13");
     public static readonly Geometry IconSwap = Geometry.Parse(
         "M2,5.5 H12 M9.5,3 L12,5.5 L9.5,8 M14,10.5 H4 M6.5,8 L4,10.5 L6.5,13");
     public static readonly Geometry IconSettings = Geometry.Parse(

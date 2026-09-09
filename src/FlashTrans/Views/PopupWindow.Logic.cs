@@ -28,6 +28,8 @@ public sealed partial class PopupWindow
         _text = text;
         _result.CopyRequested -= CopyText;
         _result.CopyRequested += CopyText;
+        _result.SpeakRequested -= SpeakText;
+        _result.SpeakRequested += SpeakText;
         _result.LookupRequested -= Lookup;
         _result.LookupRequested += Lookup;
 
@@ -167,6 +169,7 @@ public sealed partial class PopupWindow
             catch { /* 字体名无效就用默认 */ }
         }
         _tabsHost.Visibility = S.PopupShowTabs ? Visibility.Visible : Visibility.Collapsed;
+        if (_pinBtn is not null) _pinBtn.IsChecked = S.PopupTopmost;
     }
 
     // ------------------------------------------------------------- 定位
@@ -372,6 +375,12 @@ public sealed partial class PopupWindow
         if (tab.Btn is null) return;
         foreach (var (b, _) in _tabs) b.IsChecked = ReferenceEquals(b, tab.Btn);
         _activeProviderId = winner.ProviderId;
+    }
+
+    async void SpeakText(string text, string language)
+    {
+        var error = await SpeechService.SpeakAsync(text, language);
+        _status.Text = error ?? "正在播放译文";
     }
 
     void UpdateStatus(TranslateBatch batch)

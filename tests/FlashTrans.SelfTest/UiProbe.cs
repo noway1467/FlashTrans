@@ -1,5 +1,6 @@
-﻿using System.Windows;
+using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -55,6 +56,20 @@ static class UiProbe
             var p = new PopupWindow(host);
             Probe(p, close: false);
             p.OnSettingsChanged();
+            if (Descendants<Button>(p).Any(b => (b.ToolTip as string) == "复制译文"))
+                throw new InvalidOperationException("结果弹窗顶部不应再放复制译文按钮");
+            if (!Descendants<ToggleButton>(p).Any(b => (b.ToolTip as string) == "置顶此窗口"))
+                throw new InvalidOperationException("结果弹窗顶部没有置顶按钮");
+            var pinned = s.PopupTopmost;
+            try
+            {
+                var pin = Descendants<ToggleButton>(p).First(b => (b.ToolTip as string) == "置顶此窗口");
+                pin.IsChecked = true;
+                if (!p.Topmost || !s.PopupTopmost) throw new InvalidOperationException("点击钉住未置顶");
+                pin.IsChecked = false;
+                if (p.Topmost || s.PopupTopmost) throw new InvalidOperationException("取消钉住未立即撤销置顶");
+            }
+            finally { s.PopupTopmost = pinned; }
             Close(p);
         });
 
@@ -69,6 +84,8 @@ static class UiProbe
 
         step("结果区：渲染批次（聚合 + 双语 + 词典）", ResultRender);
         step("结果区：按语言和原文复制", ResultCopyButtons);
+        step("语音：语言标签匹配和中文别名", SpeechLanguageProbe);
+        step("语音：本机合成播放与连续替换", SpeechPlaybackProbe);
         step("结果区：聚合边到边（占位 → 乱序填充 → 收尾）", ProgressiveRender);
 
         // 设置窗口的每个分类都单独展开一次
@@ -599,7 +616,9 @@ static class UiProbe
             batch.Results.Add(result);
 
             string? copied = null;
+            (string Text, string Language)? spoken = null;
             view.CopyRequested += text => copied = text;
+            view.SpeakRequested += (text, language) => spoken = (text, language);
 
             void ClickCopy(string tooltip, string expected)
             {
@@ -617,6 +636,18 @@ static class UiProbe
             view.ShowBatch(batch, aggregate: false);
             holder.UpdateLayout();
             ClickCopy("复制日语译文", result.Texts["ja"]);
+            var speechLanguage = batch.Targets.FirstOrDefault(SpeechService.HasVoice);
+            if (speechLanguage is not null)
+            {
+                var speechButton = Descendants<Button>(holder)
+                    .FirstOrDefault(b => (b.ToolTip as string) == $"播放{Languages.NameOf(speechLanguage)}译文")
+                    ?? throw new InvalidOperationException("检测到系统语音却没有播放按钮");
+                speechButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                var expectedSpeech = result.Texts[speechLanguage];
+                if (spoken is not { } actualSpeech || actualSpeech.Text != expectedSpeech ||
+                    !string.Equals(actualSpeech.Language, speechLanguage, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("播放按钮没有传出对应语言的译文");
+            }
             ClickCopy("复制此源全部译文",
                 $"{result.Texts["zh-CN"]}{Environment.NewLine}{result.Texts["ja"]}");
             ClickCopy("复制原文", batch.SourceText);
@@ -663,6 +694,55 @@ static class UiProbe
             s.Bilingual = oldBilingual;
             s.HideBilingualSource = oldHideBilingualSource;
         }
+    }
+
+    static void SpeechLanguageProbe()
+    {
+        var voices = new[] { "en-US", "zh-CN", "ja-JP" };
+        if (SpeechService.SelectVoiceIndex("zh-CN", voices) != 1)
+            throw new InvalidOperationException("没有优先匹配 Windows 的 zh-CN 语音");
+        if (SpeechService.SelectVoiceIndex("zh-TW", new[] { "zh-Hant-TW" }) != 0)
+            throw new InvalidOperationException("没有匹配 zh-TW / zh-Hant-TW");
+        if (SpeechService.SelectVoiceIndex("en", voices) != 0)
+            throw new InvalidOperationException("没有按语言前缀匹配 en-US");
+        if (SpeechService.SelectVoiceIndex("ko", voices) >= 0)
+            throw new InvalidOperationException("错误匹配了不存在的韩语语音");
+        if (SpeechService.SelectVoiceIndex("zh-CN", new[] { "zh-Hans-CN" }) != 0 ||
+            SpeechService.SelectVoiceIndex("zh-Hans-CN", new[] { "zh-CN" }) != 0 ||
+            SpeechService.SelectVoiceIndex("zh-CN", new[] { "zh-TW" }) >= 0 ||
+            SpeechService.SelectVoiceIndex("nb", new[] { "nb-NO" }) != 0)
+            throw new InvalidOperationException("中文双向别名、简繁隔离或挪威语匹配失败");
+    }
+
+    static void SpeechPlaybackProbe()
+    {
+        var voices = Windows.Media.SpeechSynthesis.SpeechSynthesizer.AllVoices;
+        Console.WriteLine("       已安装系统语音：" + string.Join(", ", voices.Select(v => v.Language)));
+        if (voices.Count == 0)
+        {
+            Console.WriteLine("       SKIP：没有系统语音，未验证实际播放");
+            return;
+        }
+        try
+        {
+            var test = Task.Run(async () =>
+            {
+                var language = voices[0].Language;
+                var error = await SpeechService.SpeakAsync("FlashTrans 123", language);
+                if (error is not null) throw new InvalidOperationException(error);
+                await Task.Delay(500);
+                // 并发请求会取消尚未完成的合成，覆盖 CTS 生命周期及播放器替换。
+                var results = await Task.WhenAll(Enumerable.Range(0, 16).Select(i =>
+                    SpeechService.SpeakAsync("FlashTrans " + i, language)));
+                if (results.Any(e => e is not null))
+                    throw new InvalidOperationException(string.Join("; ", results.Where(e => e is not null)));
+                error = await SpeechService.SpeakAsync("test", "missing-language");
+                if (error is null) throw new InvalidOperationException("缺失语音没有返回错误提示");
+            });
+            if (!test.Wait(TimeSpan.FromSeconds(30))) throw new TimeoutException("语音播放测试超时");
+            test.GetAwaiter().GetResult();
+        }
+        finally { SpeechService.Stop(); }
     }
     /// <summary>
     /// 聚合边到边显示：占位卡 → 逐个换成真结果 → 收尾。

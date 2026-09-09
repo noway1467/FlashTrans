@@ -19,6 +19,7 @@ public sealed partial class PopupWindow : Window
     readonly List<(ToggleButton Btn, string? ProviderId)> _tabs = [];
     readonly TextBlock _status = new();
     readonly TextBlock _langLabel = new();
+    ToggleButton _pinBtn = null!;
 
     string _text = "";
     string? _activeProviderId;
@@ -119,13 +120,19 @@ public sealed partial class PopupWindow : Window
         grid.Children.Add(BuildHeader());
         grid.Children.Add(BuildTabs());
 
-        var resultBox = new Border { Margin = new Thickness(8, 6, 8, 0), Child = _result };
+        var resultBox = new Border { Margin = new Thickness(10, 8, 10, 0), Child = _result };
         UiKit.SetGrid(resultBox, row: 2);
         grid.Children.Add(resultBox);
 
         grid.Children.Add(BuildStatusBar());
 
-        var shell = new Border { BorderThickness = new Thickness(1), Child = grid };
+        var shell = new Border
+        {
+            CornerRadius = new CornerRadius(8),
+            BorderThickness = new Thickness(1),
+            Child = grid,
+            SnapsToDevicePixels = true,
+        };
         shell.SetResourceReference(Border.BorderBrushProperty, "Border");
         return shell;
     }
@@ -152,7 +159,6 @@ public sealed partial class PopupWindow : Window
         bar.Children.Add(left);
 
         var tools = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
-        tools.Children.Add(UiKit.IconButton(UiKit.IconCopy, "复制译文", (_, _) => CopyResult(), 12));
         tools.Children.Add(UiKit.IconButton(UiKit.IconRefresh, "重新翻译", (_, _) =>
         {
             // 只清当前这段，别把别人的缓存一起端掉
@@ -160,6 +166,8 @@ public sealed partial class PopupWindow : Window
             Run();
         }, 12));
         tools.Children.Add(UiKit.IconButton(UiKit.IconExpand, "在主窗口中打开", (_, _) => _host.ExpandToMain(_text), 12));
+        _pinBtn = PinButton();
+        tools.Children.Add(_pinBtn);
         _stashBtn = UiKit.IconButton(UiKit.IconMinimize, "临时收起", (_, _) => StashPopup(), 12);
         tools.Children.Add(_stashBtn);
         tools.Children.Add(UiKit.IconButton(UiKit.IconClose, "关闭（Esc）", (_, _) => ClosePopup(), 12));
@@ -176,6 +184,38 @@ public sealed partial class PopupWindow : Window
         header.MouseLeftButtonDown += (_, _) => { try { DragMove(); } catch { /* 忽略 */ } };
         UiKit.SetGrid(header, row: 0);
         return header;
+    }
+
+    ToggleButton PinButton()
+    {
+        var btn = new ToggleButton
+        {
+            Content = UiKit.Icon(UiKit.IconPin, 14),
+            ToolTip = "置顶此窗口",
+            IsChecked = S.PopupTopmost,
+            Focusable = false,
+        };
+        btn.SetResourceReference(StyleProperty, "IconToggleBtn");
+        if (btn.Content is System.Windows.Shapes.Path path)
+            path.SetBinding(System.Windows.Shapes.Shape.StrokeProperty,
+                new System.Windows.Data.Binding("Foreground")
+                {
+                    RelativeSource = new System.Windows.Data.RelativeSource(
+                        System.Windows.Data.RelativeSourceMode.FindAncestor) { AncestorType = typeof(ToggleButton) }
+                });
+        btn.Checked += (_, _) => SetPinned(true);
+        btn.Unchecked += (_, _) => SetPinned(false);
+        return btn;
+    }
+
+    void SetPinned(bool pinned)
+    {
+        var changed = S.PopupTopmost != pinned;
+        S.PopupTopmost = pinned;
+        Topmost = pinned;
+        if (!pinned) LowerBelowForeground(force: true);
+        // 设置广播同步按钮时不再发起第二轮保存和广播。
+        if (changed) SettingsService.Instance.Touch();
     }
 
     UIElement BuildTabs()
