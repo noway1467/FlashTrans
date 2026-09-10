@@ -138,6 +138,92 @@ static class UiProbe
     {
         step("结果区：单列 / 多列视图按宽度重排且不重建控件", ResultLayout);
         step("结果区：视图菜单能切换并同步主窗口与弹窗", ResultViewMenu);
+        step("弹窗：单源新翻译回到顶部，收起恢复保留滚动位置", () => PopupScrollProbe(aggregate: false));
+        step("弹窗：聚合新翻译回到顶部，收起恢复保留滚动位置", () => PopupScrollProbe(aggregate: true));
+    }
+
+    static void PopupScrollProbe(bool aggregate)
+    {
+        var settings = SettingsService.Instance;
+        var original = settings.Current;
+        var configs = Enumerable.Range(0, aggregate ? 2 : 1)
+            .Select(_ => ProviderConfig.Create(ProviderKind.DeepLX, "滚动回归测试源")).ToList();
+        foreach (var cfg in configs) cfg.Options["endpoint"] = "http://127.0.0.1:1/translate";
+        var sources = Enumerable.Range(1, 4)
+            .Select(i => $"OCR popup scroll probe {i}").ToArray();
+        var translations = sources.Select((_, i) => string.Join("\n",
+            Enumerable.Range(1, 60).Select(line => $"第 {i + 1} 次 OCR 翻译，第 {line} 行长文本。"))).ToArray();
+        PopupWindow? popup = null;
+        try
+        {
+            settings.Apply(new AppSettings
+            {
+                Providers = configs, PrimaryProviderId = configs[0].Id, AggregateTab = aggregate,
+                SourceLang = "en", TargetLang = "zh-CN", AutoSwapSameLang = false,
+                AutoFallback = false, ShowDictionary = false, PopupMaxHeight = 300,
+            });
+            var cache = TranslateEngine.Instance.Cache;
+            // 缓存同步返回，加载占位来不及单独布局，才能稳定复现长内容继承旧偏移。
+            // 测试源只指向回环地址，即使缓存路径回归也不会请求外部翻译服务。
+            for (var i = 0; i < sources.Length; i++)
+                foreach (var cfg in configs)
+                    cache.Set(cfg.Id, "en", "zh-CN", sources[i], translations[i], null, null, withDict: false);
+
+            popup = new PopupWindow(new AppHost()) { ShowActivated = false };
+            ShowAtTop(0, "首次翻译");
+            var view = Descendants<ResultView>(popup).Single();
+            var offset = ScrollToProbeOffset(view, "翻译结果");
+
+            popup.StashPopup();
+            Pump();
+            if (!popup.RestorePopup()) throw new InvalidOperationException("收起的翻译无法恢复");
+            Pump();
+            if (Math.Abs(view.VerticalOffset - offset) > 1)
+                throw new InvalidOperationException($"收起恢复丢失阅读位置：{offset:F0} → {view.VerticalOffset:F0}");
+
+            popup.ClosePopup();
+            Pump();
+            if (popup.IsVisible) throw new InvalidOperationException("关闭翻译弹窗后仍然可见");
+            ShowAtTop(1, "关闭后打开新翻译");
+
+            ScrollToProbeOffset(view, "翻译结果");
+            ShowAtTop(2, "可见窗口直接替换新翻译");
+
+            ScrollToProbeOffset(view, "翻译结果");
+            popup.StashPopup();
+            Pump();
+            ShowAtTop(3, "收起期间打开新翻译");
+            if (popup.CanRestore) throw new InvalidOperationException("新翻译仍保留旧的收起状态");
+
+            ScrollToProbeOffset(view, "翻译结果");
+            popup.ClosePopup();
+            Pump();
+            ShowAtTop(3, "关闭后重新翻译相同文本");
+
+            void ShowAtTop(int index, string scenario)
+            {
+                popup.ShowFor(sources[index], new Point(-4000, -4000));
+                Pump();
+                popup.UpdateLayout();
+                var result = Descendants<ResultView>(popup).Single();
+                if (!Descendants<TextBox>(result).Any(t => t.Text == translations[index]))
+                    throw new InvalidOperationException($"{scenario}：未显示预填的离线长译文");
+                if (result.ScrollableHeight < 120)
+                    throw new InvalidOperationException($"{scenario}：测试内容不足以产生滚动");
+                if (result.VerticalOffset > 1)
+                    throw new InvalidOperationException($"{scenario}：沿用了上一条的滚动位置 {result.VerticalOffset:F0}");
+            }
+        }
+        finally
+        {
+            if (popup is not null)
+            {
+                popup.ClosePopup();
+                Close(popup);
+            }
+            foreach (var source in sources) TranslateEngine.Instance.Cache.InvalidateText(source);
+            settings.Apply(original);
+        }
     }
 
     static void ResultLayout()
