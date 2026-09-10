@@ -26,6 +26,8 @@ public sealed partial class PopupWindow
         Topmost = true;
         _everActive = false;
         _text = text;
+        // 关闭只会隐藏并复用窗口；新翻译要回到顶部，收起后原样叫回则不重置。
+        _result.ScrollToTop();
         _result.CopyRequested -= CopyText;
         _result.CopyRequested += CopyText;
         _result.SpeakRequested -= SpeakText;
