@@ -62,6 +62,13 @@ public sealed partial class AppHost
         ShowMainWindow(focusInput: false, text: text);
     }
 
+    /// <summary>视图切换只同步布局，保留两个窗口的翻译进度、文本选区和手动尺寸。</summary>
+    internal void RefreshResultViews()
+    {
+        _main?.ApplyResultViewSettings();
+        _popup?.ApplyResultViewSettings();
+    }
+
     // ------------------------------------------------------------- 弹窗
 
     PopupWindow EnsurePopup() => _popup ??= new PopupWindow(this);

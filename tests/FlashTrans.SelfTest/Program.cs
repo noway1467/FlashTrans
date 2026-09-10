@@ -62,6 +62,14 @@ static class Program
             return _fail == 0 ? 0 : 1;
         }
 
+        if (args.Contains("--only-results"))
+        {
+            UiProbe.RunResultLayoutProbes(Step);
+            if (args.Contains("--shot")) Step("结果视图：深浅主题离线渲染", () => ShotProbe.RunResults("shots"));
+            app.Shutdown();
+            return _fail == 0 ? 0 : 1;
+        }
+
         var host = new AppHost();
         UiProbe.RunAll(host, Step);
         OcrProbe.RunAll(Step);

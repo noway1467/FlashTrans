@@ -40,6 +40,8 @@ public static class UiKit
         "M3,4.5 H13 M6.5,4.5 V2.8 H9.5 V4.5 M4.3,4.5 L5,13.2 H11 L11.7,4.5 M6.7,7 V11 M9.3,7 V11");
     public static readonly Geometry IconUp = Geometry.Parse("M4,10 L8,5.5 L12,10");
     public static readonly Geometry IconDown = Geometry.Parse("M4,6 L8,10.5 L12,6");
+    public static readonly Geometry IconList = Geometry.Parse("M2,3 H14 V6 H2 Z M2,10 H14 V13 H2 Z");
+    public static readonly Geometry IconColumns = Geometry.Parse("M2,2 H6 V14 H2 Z M10,2 H14 V14 H10 Z");
     public static readonly Geometry IconCheck = Geometry.Parse("M3,8.5 L6.5,12 L13,4.5");
     public static readonly Geometry IconWarn = Geometry.Parse(
         "M8,1.8 L15,13.8 H1 Z M8,6 V9.9 M8,11.6 V11.9");

@@ -153,8 +153,11 @@ public partial class MainWindow
         Input.MaxHeight = S.Compact ? 132 : 180;
     }
 
+    internal void ApplyResultViewSettings() => _result.ApplyViewSettings();
+
     public void OnSettingsChanged()
     {
+        ApplyResultViewSettings();
         var signature = SettingsSignature();
         if (signature == _settingsSignature) return;
         _settingsSignature = signature;
