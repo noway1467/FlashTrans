@@ -220,21 +220,28 @@ public sealed partial class PopupWindow : Window
 
     UIElement BuildTabs()
     {
+        var row = new Grid { Margin = new Thickness(8, 7, 8, 0) };
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         var sv = new ScrollViewer
         {
             Content = _tabStrip,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Hidden,
             VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            Margin = new Thickness(8, 7, 8, 0),
+            Margin = new Thickness(0, 0, 7, 0),
         };
         sv.PreviewMouseWheel += (s, e) =>
         {
             if (s is ScrollViewer v) v.ScrollToHorizontalOffset(v.HorizontalOffset - e.Delta);
             e.Handled = true;
         };
-        UiKit.SetGrid(sv, row: 1);
         _tabsHost = sv;
-        return sv;
+        row.Children.Add(sv);
+        var viewButton = _result.CreateViewButton(_host.RefreshResultViews);
+        UiKit.SetGrid(viewButton, col: 1);
+        row.Children.Add(viewButton);
+        UiKit.SetGrid(row, row: 1);
+        return row;
     }
 
     ScrollViewer _tabsHost = null!;

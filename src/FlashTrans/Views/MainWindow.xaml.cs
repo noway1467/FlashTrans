@@ -56,6 +56,7 @@ public partial class MainWindow : Window
         _result.LookupRequested += LookupInEudic;
 
         BuildHeader();
+        ResultViewButtonHost.Content = _result.CreateViewButton(_host.RefreshResultViews);
         RestoreGeometry();
         ApplySettings();
         RebuildTabs();

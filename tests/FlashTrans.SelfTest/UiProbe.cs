@@ -83,6 +83,7 @@ static class UiProbe
         });
 
         step("结果区：渲染批次（聚合 + 双语 + 词典）", ResultRender);
+        RunResultLayoutProbes(step);
         step("结果区：按语言和原文复制", ResultCopyButtons);
         step("语音：语言标签匹配和中文别名", SpeechLanguageProbe);
         step("语音：本机合成播放与连续替换", SpeechPlaybackProbe);
@@ -131,6 +132,219 @@ static class UiProbe
     {
         step("剪贴板：原生读写往返", ClipboardProbe);
         step("剪贴板：图片和文字能被其他程序读回", ClipboardImageProbe);
+    }
+
+    public static void RunResultLayoutProbes(Action<string, Action> step)
+    {
+        step("结果区：单列 / 多列视图按宽度重排且不重建控件", ResultLayout);
+        step("结果区：视图菜单能切换并同步主窗口与弹窗", ResultViewMenu);
+    }
+
+    static void ResultLayout()
+    {
+        var s = SettingsService.Instance.Current;
+        var oldMulti = s.MultiColumnResults;
+        var oldBilingual = s.Bilingual;
+        var oldDictionary = s.ShowDictionary;
+        var oldFontSize = s.FontSize;
+        Window? holder = null;
+        try
+        {
+            s.MultiColumnResults = false;
+            s.Bilingual = false;
+            s.ShowDictionary = false;
+            s.FontSize = 14;
+
+            var view = new ResultView();
+            holder = new Window
+            {
+                Content = view, Width = 1200, Height = 300,
+                Left = -4000, Top = -4000, ShowInTaskbar = false, ShowActivated = false,
+            };
+            holder.Show();
+
+            var batch = new TranslateBatch
+            {
+                SourceText = "This is a long source sentence used to make sure each result card has real wrapping.",
+                From = "en", Targets = ["zh-CN"],
+            };
+            for (var i = 0; i < 7; i++)
+            {
+                var result = new TranslateResult { ProviderId = "layout-" + i, ProviderName = "测试源 " + i };
+                result.Texts["zh-CN"] = i == 0
+                    ? string.Join("\n", Enumerable.Repeat("这是第一张卡片里的较长译文，用来验证换列时不会把文本控件重建。", 8))
+                    : "这是第 " + i + " 个翻译源的结果。";
+                batch.Results.Add(result);
+            }
+
+            view.ShowBatch(batch, aggregate: true);
+            holder.UpdateLayout();
+            if (view.Content is not Panel panel) throw new InvalidOperationException("结果区没有使用可测量的布局面板");
+            var cards = panel.Children.OfType<Border>().ToArray();
+            if (cards.Length != 7) throw new InvalidOperationException($"单列结果卡片数不对：{cards.Length}");
+            var selected = Descendants<TextBox>(cards[0]).First(t => t.Text.Contains("这是第一张"));
+            selected.Select(0, 2);
+            var firstCard = cards[0];
+            var initialHeight = panel.DesiredSize.Height;
+            if (cards.Select(c => Math.Round(c.TranslatePoint(new Point(), panel).X, 1)).Distinct().Count() != 1)
+                throw new InvalidOperationException("默认列表不是单列");
+
+            s.MultiColumnResults = true;
+            view.ApplyViewSettings();
+            holder.UpdateLayout();
+            var multiXs = cards.Select(c => Math.Round(c.TranslatePoint(new Point(), panel).X, 1)).Distinct().Count();
+            if (multiXs < 3) throw new InvalidOperationException($"宽窗口没有排成 3 列，实际列数：{multiXs}");
+            if (!ReferenceEquals(firstCard, panel.Children[0]) || selected.SelectedText != "这是")
+                throw new InvalidOperationException("切换列数重建了结果控件，文本选择丢失");
+            if (cards.Any(c => c.TranslatePoint(new Point(), panel).X + c.ActualWidth > panel.ActualWidth + 1))
+                throw new InvalidOperationException("多列卡片越过结果区右边界");
+            Console.WriteLine($"       视口 {view.ViewportWidth:F1}，面板 {panel.ActualWidth:F1}，{multiXs} 列；单列高度 {initialHeight:F1}，多列高度 {panel.DesiredSize.Height:F1}");
+            // 第二行短卡不能被第一行的长译文强制拉成同样高度。
+            if (cards[3].ActualHeight >= cards[0].ActualHeight)
+                throw new InvalidOperationException("不同行被拉成了相同高度");
+
+            holder.Width = 500;
+            holder.UpdateLayout();
+            var narrowXs = cards.Select(c => Math.Round(c.TranslatePoint(new Point(), panel).X, 1)).Distinct().Count();
+            if (narrowXs != 1) throw new InvalidOperationException($"窄窗口没有收回单列，实际列数：{narrowXs}");
+            if (!ReferenceEquals(firstCard, panel.Children[0]) || selected.SelectedText != "这是")
+                throw new InvalidOperationException("窗口变窄后重建了结果控件，文本选择丢失");
+
+            holder.Width = 800;
+            holder.UpdateLayout();
+            Pump();
+            holder.UpdateLayout();
+            if (cards.Select(c => Math.Round(c.TranslatePoint(new Point(), panel).X, 1)).Distinct().Count() != 2)
+                throw new InvalidOperationException("中等宽度没有分成两列");
+            string? copied = null;
+            view.CopyRequested += value => copied = value;
+            Descendants<Button>(cards[1]).Single(b => (b.ToolTip as string) == "复制译文")
+                .RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            if (copied != batch.Results[1].Texts["zh-CN"])
+                throw new InvalidOperationException("多列复制译文取错了源");
+
+            s.ShowDictionary = true;
+            var terms = string.Concat(Enumerable.Repeat("这是一个需要在多列卡片内换行的词典释义。", 10));
+            batch.Results[0].Dict = [new DictEntry { Pos = "n.", Terms = [terms] }];
+            view.ShowBatch(batch, true);
+            holder.UpdateLayout();
+            var definition = Descendants<TextBlock>(panel.Children[0]).Single(t => t.Text == terms);
+            if (definition.ActualHeight < 30 || definition.ActualWidth > ((FrameworkElement)panel.Children[0]).ActualWidth)
+                throw new InvalidOperationException("词典释义越过多列卡片边界");
+            s.ShowDictionary = false;
+
+            // 同一个面板换成加载占位，再乱序填充；中途切视图不能清空槽位。
+            var configs = batch.Results.Select(r => new ProviderConfig
+                { Id = r.ProviderId, Name = r.ProviderName, Kind = ProviderKind.GoogleFree }).ToList();
+            view.BeginAggregate(batch, configs);
+            view.UpdateOne(batch.Results[2]);
+            s.MultiColumnResults = false;
+            view.ApplyViewSettings();
+            s.MultiColumnResults = true;
+            view.ApplyViewSettings();
+            for (var i = 0; i < batch.Results.Count; i++)
+                if (i != 2) view.UpdateOne(batch.Results[i]);
+            var failed = new TranslateResult
+            {
+                ProviderId = configs[1].Id, ProviderName = configs[1].DisplayName,
+                Error = string.Concat(Enumerable.Repeat("请求失败，请检查网络连接和服务地址。", 12)),
+            };
+            view.UpdateOne(failed);
+            batch.Notes.Add("部分源未完成，这是一条独占整行的说明。");
+            view.EndAggregate(batch);
+            holder.UpdateLayout();
+            var note = (FrameworkElement)panel.Children[7];
+            if (Math.Abs(note.TranslatePoint(new Point(), panel).X - 2) > 1 || note.ActualWidth < panel.ActualWidth - 6)
+                throw new InvalidOperationException("收尾说明没有独占整行");
+            var errorText = Descendants<TextBlock>(panel.Children[1]).Single(t => t.Text == failed.Error);
+            if (errorText.ActualHeight < 30 || errorText.ActualWidth > ((FrameworkElement)panel.Children[1]).ActualWidth)
+                throw new InvalidOperationException("长错误提示没有在卡片内换行");
+            if (!Descendants<TextBox>(panel.Children[2]).Any(t => t.Text == batch.Results[2].Texts["zh-CN"]))
+                throw new InvalidOperationException("翻译中切换视图丢失或错置了源结果");
+
+            view.ShowBatch(new TranslateBatch { SourceText = "hello", Targets = ["zh-CN"], Results = [batch.Results[0]] }, false);
+            holder.UpdateLayout();
+            if (((FrameworkElement)panel.Children[0]).ActualWidth < panel.ActualWidth - 1)
+                throw new InvalidOperationException("单源结果没有占满宽度");
+            view.BeginStream("hello", "AI");
+            view.AppendStream("第一段");
+            s.MultiColumnResults = false;
+            view.ApplyViewSettings();
+            view.AppendStream("第二段");
+            // 定时刷新仍须保留同一文本控件和缓冲区。
+            typeof(ResultView).GetMethod("FlushStream", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .Invoke(view, null);
+            if (!Descendants<TextBox>(view).Any(t => t.Text == "第一段第二段"))
+                throw new InvalidOperationException("视图切换丢失了流式缓冲区");
+        }
+        finally
+        {
+            if (holder is not null) Close(holder);
+            s.MultiColumnResults = oldMulti;
+            s.Bilingual = oldBilingual;
+            s.ShowDictionary = oldDictionary;
+            s.FontSize = oldFontSize;
+            SettingsService.Instance.Save();
+        }
+    }
+
+    static void ResultViewMenu()
+    {
+        var s = SettingsService.Instance.Current;
+        var oldMulti = s.MultiColumnResults;
+        var oldCloseToTray = s.CloseToTray;
+        var oldWidth = s.WinWidth;
+        var oldHeight = s.WinHeight;
+        var oldLeft = s.WinLeft;
+        var oldTop = s.WinTop;
+        var host = new AppHost();
+        MainWindow? main = null;
+        PopupWindow? popup = null;
+        try
+        {
+            s.CloseToTray = false;
+            // 不启动热键和剪贴板钩子，只用真实窗口对象验证按钮与跨窗口同步。
+            var ensureMain = typeof(AppHost).GetMethod("EnsureMain",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+            var ensurePopup = typeof(AppHost).GetMethod("EnsurePopup",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+            main = (MainWindow)ensureMain.Invoke(host, null)!;
+            popup = (PopupWindow)ensurePopup.Invoke(host, null)!;
+            Probe(main, close: false);
+            Probe(popup, close: false);
+
+            s.MultiColumnResults = false;
+            var button = Descendants<Button>(main).Single(b => b.Name == "ResultViewButton");
+            button.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            if (button.ContextMenu is null || button.ContextMenu.Items.Count != 2)
+                throw new InvalidOperationException("视图按钮没有打开两个布局选项");
+            ((MenuItem)button.ContextMenu.Items[1]).RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            Pump();
+
+            var popupButton = Descendants<Button>(popup).Single(b => b.Name == "ResultViewButton");
+            if (!s.MultiColumnResults || !(button.ToolTip as string ?? "").Contains("多列") ||
+                !(popupButton.ToolTip as string ?? "").Contains("多列"))
+                throw new InvalidOperationException("多列选择没有同步到两个窗口");
+            button.ContextMenu.IsOpen = false;
+            popupButton.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            var popupMenu = popupButton.ContextMenu!;
+            if (!((MenuItem)popupMenu.Items[1]).IsChecked || ((MenuItem)popupMenu.Items[0]).IsChecked)
+                throw new InvalidOperationException("菜单当前视图勾选错误");
+            ((MenuItem)popupMenu.Items[0]).RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            popupMenu.IsOpen = false;
+            if (s.MultiColumnResults || !(button.ToolTip as string ?? "").Contains("单列"))
+                throw new InvalidOperationException("从弹窗切回单列没有同步主窗口");
+        }
+        finally
+        {
+            if (main is not null) Close(main);
+            if (popup is not null) Close(popup);
+            s.MultiColumnResults = oldMulti;
+            s.CloseToTray = oldCloseToTray;
+            s.WinWidth = oldWidth; s.WinHeight = oldHeight;
+            s.WinLeft = oldLeft; s.WinTop = oldTop;
+            SettingsService.Instance.Save();
+        }
     }
 
     // ------------------------------------------------------------- 具体探测

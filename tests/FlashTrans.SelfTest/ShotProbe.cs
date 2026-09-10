@@ -16,6 +16,70 @@ namespace FlashTrans.SelfTest;
 /// </summary>
 static class ShotProbe
 {
+    /// <summary>只注入离线示例结果，不发送翻译请求，也不读取桌面内容。</summary>
+    public static void RunResults(string outDir)
+    {
+        Directory.CreateDirectory(outDir);
+        var s = SettingsService.Instance.Current;
+        var multi = s.MultiColumnResults;
+        var font = s.FontSize;
+        var bilingual = s.Bilingual;
+        var batch = new TranslateBatch { SourceText = "Read translations side by side.", From = "en", Targets = ["zh-CN"] };
+        foreach (var (name, text) in new[] {
+            ("谷歌翻译", "并排阅读多个翻译源的结果。\n拉宽窗口即可自动增加列数，更充分地利用横向空间。"),
+            ("微软翻译", "并排查看翻译结果。\n窗口宽度变化时，卡片会自动调整排列；窄窗口仍然保持单列。"),
+            ("腾讯交互翻译", "同时对照不同来源的译文。\n切换视图无需重新翻译，原有的文本选择和翻译进度都会保留。"),
+            ("有道翻译", "横向比较多源译文，减少上下滚动。"),
+            ("AI 翻译 · 自定义源", "将译文以多列方式并排呈现。\n每一张卡片都可以独立复制。") })
+        {
+            var result = new TranslateResult { ProviderId = name, ProviderName = name, ElapsedMs = 128 };
+            result.Texts["zh-CN"] = text;
+            batch.Results.Add(result);
+        }
+        batch.Results.Add(new TranslateResult { ProviderId = "offline", ProviderName = "DeepL", Error = "请求失败，请检查网络连接或翻译源设置。" });
+        try
+        {
+            s.FontSize = 14;
+            s.Bilingual = false;
+            foreach (var theme in new[] { AppTheme.Dark, AppTheme.Light })
+            {
+                ThemeService.ApplyTheme(theme);
+                var tag = theme == AppTheme.Dark ? "dark" : "light";
+                foreach (var isPopup in new[] { false, true })
+                {
+                    Window w = isPopup ? new PopupWindow(new AppHost()) : new MainWindow(new AppHost());
+                    try
+                    {
+                        w.ShowInTaskbar = false; w.ShowActivated = false;
+                        w.WindowStartupLocation = WindowStartupLocation.Manual;
+                        w.Left = -4000; w.Top = -4000;
+                        w.SizeToContent = SizeToContent.Manual;
+                        w.Width = 1120; w.Height = 600;
+                        w.Show();
+                        var view = Descendants<ResultView>(w).Single();
+                        s.MultiColumnResults = true;
+                        view.ApplyViewSettings();
+                        view.ShowBatch(batch, true);
+                        w.UpdateLayout(); Pump();
+                        Save(w, Path.Combine(outDir, $"results-{(isPopup ? "popup" : "main")}-{tag}.png"));
+                        if (!isPopup)
+                        {
+                            w.Width = 500;
+                            w.UpdateLayout(); Pump();
+                            Save(w, Path.Combine(outDir, $"results-narrow-{tag}.png"));
+                        }
+                    }
+                    finally { w.Close(); }
+                }
+            }
+        }
+        finally
+        {
+            s.MultiColumnResults = multi; s.FontSize = font; s.Bilingual = bilingual;
+            ThemeService.Apply(s);
+        }
+    }
+
     public static void Run(string outDir, AppHost host)
     {
         Directory.CreateDirectory(outDir);

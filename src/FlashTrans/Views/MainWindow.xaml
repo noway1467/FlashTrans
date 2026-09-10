@@ -72,11 +72,18 @@
             </Grid>
 
             <!-- ============ 翻译源标签 ============ -->
-            <ScrollViewer Grid.Row="2" HorizontalScrollBarVisibility="Hidden"
-                          VerticalScrollBarVisibility="Disabled" Margin="9,9,9,0"
-                          PreviewMouseWheel="OnTabsWheel">
-                <StackPanel x:Name="TabStrip" Orientation="Horizontal" />
-            </ScrollViewer>
+            <Grid Grid.Row="2" Margin="9,9,9,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <ScrollViewer HorizontalScrollBarVisibility="Hidden"
+                              VerticalScrollBarVisibility="Disabled" Margin="0,0,7,0"
+                              PreviewMouseWheel="OnTabsWheel">
+                    <StackPanel x:Name="TabStrip" Orientation="Horizontal" />
+                </ScrollViewer>
+                <ContentControl x:Name="ResultViewButtonHost" Grid.Column="1" />
+            </Grid>
 
             <!-- ============ 结果区 ============ -->
             <Border Grid.Row="3" Margin="9,8,9,0" Padding="1,0,0,0">

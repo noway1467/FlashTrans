@@ -142,6 +142,8 @@ public sealed partial class PopupWindow
         return true;
     }
 
+    internal void ApplyResultViewSettings() => _result.ApplyViewSettings();
+
     public void OnSettingsChanged()
     {
         ApplyLayoutSettings();
@@ -152,6 +154,7 @@ public sealed partial class PopupWindow
 
     void ApplyLayoutSettings()
     {
+        ApplyResultViewSettings();
         // 程序自己套用宽度，不能算成"用户拖过"
         _applyingWidth = true;
         Width = S.PopupWidth;

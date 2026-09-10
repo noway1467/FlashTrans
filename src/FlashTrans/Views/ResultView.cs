@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Threading;
 using System.Text;
@@ -11,7 +12,8 @@ namespace FlashTrans.Views;
 /// <summary>译文渲染区。主窗口和划词弹窗共用。</summary>
 public sealed class ResultView : ScrollViewer
 {
-    readonly StackPanel _list = new();
+    readonly ResultPanel _list = new();
+    Button? _viewButton;
     TextBox? _streamTarget;
     readonly DispatcherTimer _streamFlush = new() { Interval = TimeSpan.FromMilliseconds(50) };
     readonly StringBuilder _streamBuffer = new();
@@ -34,6 +36,136 @@ public sealed class ResultView : ScrollViewer
         Content = _list;
         _list.Margin = new Thickness(0, 0, 2, 0);
         _streamFlush.Tick += (_, _) => FlushStream();
+        ApplyViewSettings();
+    }
+
+    /// <summary>两种翻译窗口共用同一入口，避免菜单文案和当前状态不一致。</summary>
+    public Button CreateViewButton(Action onChanged)
+    {
+        _viewButton = new Button
+        {
+            Name = "ResultViewButton",
+            FontSize = 11.5,
+            Height = 26,
+            Padding = new Thickness(7, 0, 7, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        _viewButton.SetResourceReference(StyleProperty, "GhostBtn");
+        System.Windows.Automation.AutomationProperties.SetName(_viewButton, "翻译结果视图");
+        _viewButton.Click += (_, _) =>
+        {
+            var menu = new ContextMenu
+            {
+                PlacementTarget = _viewButton,
+                Placement = PlacementMode.Bottom,
+            };
+            AddView("单列列表", false, "SingleColumnView");
+            AddView("多列自适应", true, "MultiColumnView");
+            _viewButton.ContextMenu = menu;
+            menu.IsOpen = true;
+
+            void AddView(string label, bool multiColumn, string name)
+            {
+                var item = new MenuItem
+                {
+                    Name = name, Header = label,
+                    IsCheckable = true, IsChecked = S.MultiColumnResults == multiColumn,
+                    ToolTip = multiColumn ? "按窗口宽度自动分列；拉宽显示更多列，变窄回到单列" : "所有翻译源从上到下排列",
+                };
+                item.Click += (_, _) =>
+                {
+                    if (S.MultiColumnResults == multiColumn) return;
+                    S.MultiColumnResults = multiColumn;
+                    // 只保存并同步结果布局，不走 Touch 的全局设置广播：后者会重画结果、
+                    // 重绑热键，甚至在翻译途中重新发起请求，丢掉当前选区和流式状态。
+                    SettingsService.Instance.Save();
+                    ApplyViewSettings();
+                    onChanged();
+                };
+                menu.Items.Add(item);
+            }
+        };
+        ApplyViewSettings();
+        return _viewButton;
+    }
+
+    /// <summary>只改变卡片的测量和排列，不重建文本控件或清空进行中的翻译。</summary>
+    public void ApplyViewSettings() => RunOnUi(() =>
+    {
+        _list.MultiColumn = S.MultiColumnResults;
+        _list.MinimumColumnWidth = Math.Max(320, S.FontSize * 22);
+        _list.InvalidateMeasure();
+        if (_viewButton is null) return;
+        _viewButton.Content = UiKit.Row(5,
+            UiKit.Icon(S.MultiColumnResults ? UiKit.IconColumns : UiKit.IconList, 13),
+            UiKit.Text("视图", 11.5, "TextDim"), UiKit.Icon(UiKit.IconDown, 9));
+        _viewButton.ToolTip = S.MultiColumnResults
+            ? "结果视图：多列自适应（拉宽窗口可显示更多列）" : "结果视图：单列列表";
+    });
+
+    // 普通 WrapPanel 不会平分剩余宽度，UniformGrid 又会把所有行拉成最长卡片的高度。
+    // 在测量阶段按实际视口分列，每行只取本行最大高度；源顺序不变，说明文字独占整行。
+    sealed class ResultPanel : Panel
+    {
+        const double ColumnGap = 8;
+        int _columns = 1;
+        public bool MultiColumn { get; set; }
+        public double MinimumColumnWidth { get; set; } = 320;
+        public int CardCount { get; set; }
+
+        protected override Size MeasureOverride(Size availableSize)
+        {
+            var count = Math.Min(CardCount, InternalChildren.Count);
+            _columns = MultiColumn && count > 1 && double.IsFinite(availableSize.Width)
+                ? Math.Min(count, Math.Max(1, (int)((availableSize.Width + ColumnGap) / (MinimumColumnWidth + ColumnGap))))
+                : 1;
+            var columnWidth = Math.Max(0, (availableSize.Width - (_columns - 1) * ColumnGap) / _columns);
+            double height = 0, desiredWidth = 0;
+            for (var start = 0; start < count; start += _columns)
+            {
+                double rowHeight = 0;
+                for (var i = start; i < Math.Min(start + _columns, count); i++)
+                {
+                    var child = InternalChildren[i];
+                    child.Measure(new Size(columnWidth, double.PositiveInfinity));
+                    rowHeight = Math.Max(rowHeight, child.DesiredSize.Height);
+                    desiredWidth = Math.Max(desiredWidth, child.DesiredSize.Width);
+                }
+                height += rowHeight;
+            }
+            for (var i = count; i < InternalChildren.Count; i++)
+            {
+                var child = InternalChildren[i];
+                child.Measure(new Size(availableSize.Width, double.PositiveInfinity));
+                height += child.DesiredSize.Height;
+                desiredWidth = Math.Max(desiredWidth, child.DesiredSize.Width);
+            }
+            return new Size(double.IsFinite(availableSize.Width) ? availableSize.Width : desiredWidth, height);
+        }
+
+        protected override Size ArrangeOverride(Size finalSize)
+        {
+            var count = Math.Min(CardCount, InternalChildren.Count);
+            var columnWidth = Math.Max(0, (finalSize.Width - (_columns - 1) * ColumnGap) / _columns);
+            double top = 0;
+            for (var start = 0; start < count; start += _columns)
+            {
+                var end = Math.Min(start + _columns, count);
+                double rowHeight = 0;
+                for (var i = start; i < end; i++)
+                    rowHeight = Math.Max(rowHeight, InternalChildren[i].DesiredSize.Height);
+                for (var i = start; i < end; i++)
+                    InternalChildren[i].Arrange(new Rect((i - start) * (columnWidth + ColumnGap), top, columnWidth, rowHeight));
+                top += rowHeight;
+            }
+            for (var i = count; i < InternalChildren.Count; i++)
+            {
+                var child = InternalChildren[i];
+                child.Arrange(new Rect(0, top, finalSize.Width, child.DesiredSize.Height));
+                top += child.DesiredSize.Height;
+            }
+            return finalSize;
+        }
     }
 
     void ClearCore()
@@ -42,6 +174,7 @@ public sealed class ResultView : ScrollViewer
         _streamFlushQueued = false;
         _streamBuffer.Clear();
         _list.Children.Clear();
+        _list.CardCount = 0;
         _streamTarget = null;
         _liveSlots.Clear();
         _liveBatch = null;
@@ -88,6 +221,7 @@ public sealed class ResultView : ScrollViewer
                 card.Margin = new Thickness(0, 0, 0, 7);
                 _list.Children.Add(card);
             }
+            _list.CardCount = configs.Count;
         });
 
     /// <summary>某个源回来了：换掉它那张占位卡。</summary>
@@ -212,6 +346,7 @@ public sealed class ResultView : ScrollViewer
             card.Margin = new Thickness(0, 0, 0, 7);
             _list.Children.Add(card);
         }
+        _list.CardCount = results.Count;
     }
 
     // ------------------------------------------------------------- 组件
@@ -259,6 +394,8 @@ public sealed class ResultView : ScrollViewer
         head.Children.Add(badge);
 
         var name = UiKit.Text(cfg.DisplayName, S.FontSize - 2, "TextDim", FontWeights.SemiBold);
+        name.TextTrimming = TextTrimming.CharacterEllipsis;
+        name.ToolTip = cfg.DisplayName;
         name.Margin = new Thickness(7, 0, 0, 0);
         UiKit.SetGrid(name, col: 1);
         head.Children.Add(name);
@@ -289,6 +426,8 @@ public sealed class ResultView : ScrollViewer
         head.Children.Add(badge);
 
         var name = UiKit.Text(r.ProviderName, S.FontSize - 2, "TextDim", FontWeights.SemiBold);
+        name.TextTrimming = TextTrimming.CharacterEllipsis;
+        name.ToolTip = r.ProviderName;
         name.Margin = new Thickness(7, 0, 0, 0);
         UiKit.SetGrid(name, col: 1);
         head.Children.Add(name);
@@ -431,9 +570,15 @@ public sealed class ResultView : ScrollViewer
 
     UIElement ErrorRow(TranslateResult r)
     {
-        var row = UiKit.Row(6,
-            UiKit.StatusDot(false),
-            UiKit.Text(r.Error ?? "翻译失败", S.FontSize - 2, "Danger", wrap: true));
+        // 横向 StackPanel 会给错误文字无限宽，分列后长错误会越过卡片边界。
+        var row = new Grid();
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        row.Children.Add(UiKit.StatusDot(false));
+        var text = UiKit.Text(r.Error ?? "翻译失败", S.FontSize - 2, "Danger", wrap: true);
+        text.Margin = new Thickness(6, 0, 0, 0);
+        UiKit.SetGrid(text, col: 1);
+        row.Children.Add(text);
         row.VerticalAlignment = VerticalAlignment.Center;
         return row;
     }
@@ -451,7 +596,10 @@ public sealed class ResultView : ScrollViewer
         var box = new StackPanel { Margin = new Thickness(0, 6, 0, 0) };
         foreach (var d in r.Dict.Take(4))
         {
-            var line = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 0) };
+            // 释义也必须在列宽内换行，不能被横向 StackPanel 按无限宽测量。
+            var line = new Grid { Margin = new Thickness(0, 2, 0, 0) };
+            line.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            line.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             if (!string.IsNullOrWhiteSpace(d.Pos))
             {
                 var pos = UiKit.Text(d.Pos, S.FontSize - 3, "Accent", FontWeights.SemiBold);
@@ -459,7 +607,9 @@ public sealed class ResultView : ScrollViewer
                 pos.MinWidth = 26;
                 line.Children.Add(pos);
             }
-            line.Children.Add(UiKit.Text(string.Join("；", d.Terms), S.FontSize - 2, "TextDim", wrap: true));
+            var terms = UiKit.Text(string.Join("；", d.Terms), S.FontSize - 2, "TextDim", wrap: true);
+            UiKit.SetGrid(terms, col: 1);
+            line.Children.Add(terms);
             box.Children.Add(line);
         }
         panel.Children.Add(box);

@@ -16,6 +16,15 @@ static class SettingsProbe
     public static void RunAll(Action<string, Action> step)
     {
         step("设置：每个字段都能存下来再读回来", RoundTrip);
+        step("设置：旧配置默认单列，新视图选择可以保存", () =>
+        {
+            var old = JsonSerializer.Deserialize("{}", SettingsJson.Default.AppSettings)!;
+            if (old.MultiColumnResults) throw new InvalidOperationException("旧配置意外启用了多列");
+            old.MultiColumnResults = true;
+            var json = JsonSerializer.Serialize(old, SettingsJson.Default.AppSettings);
+            if (!JsonSerializer.Deserialize(json, SettingsJson.Default.AppSettings)!.MultiColumnResults)
+                throw new InvalidOperationException("多列设置没有往返保留");
+        });
         step("设置：算出来的字段不落盘", NoComputedFields);
         step("设置：Normalize 不动设置页里能填到的边界值", BoundsMatchUi);
         step("设置：Normalize 反复跑结果不变", NormalizeIsStable);

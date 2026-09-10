@@ -79,6 +79,8 @@ public sealed class AppSettings
     public List<string> FavoriteLangs { get; set; } = ["zh-CN", "en", "ja", "ko", "fr", "de", "ru", "es"];
 
     // ------- 显示 -------
+    /// <summary>多源结果按窗口宽度自动分列；旧配置缺少此字段时仍使用单列列表。</summary>
+    public bool MultiColumnResults { get; set; } = false;
     public bool Bilingual { get; set; }
     /// <summary>逐段对齐翻译（双语对照更整齐，请求略慢）。</summary>
     public bool BilingualByParagraph { get; set; } = true;
