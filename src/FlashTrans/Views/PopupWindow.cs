@@ -159,6 +159,7 @@ public sealed partial class PopupWindow : Window
         bar.Children.Add(left);
 
         var tools = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+        tools.Children.Add(UiKit.IconButton(UiKit.IconSettings, "设置", (_, _) => _host.ShowSettings(), 12));
         tools.Children.Add(UiKit.IconButton(UiKit.IconRefresh, "重新翻译", (_, _) =>
         {
             // 只清当前这段，别把别人的缓存一起端掉

@@ -149,9 +149,6 @@ public sealed partial class AppHost
         };
         win.OpenSettings += () => ShowSettings();
         win.Show();
-        // 截图遮罩关闭后原来的前台应用会恢复，短暂置顶确保识别结果不被压住
-        win.Topmost = true;
-        win.Topmost = false;
         win.Activate();
     }
 

@@ -73,6 +73,25 @@ static class UiProbe
             Close(p);
         });
 
+        step("弹窗：顶部设置入口能打开设置", () =>
+        {
+            var p = new PopupWindow(host);
+            Probe(p, close: false);
+            var before = Application.Current.Windows.OfType<SettingsWindow>().Count(w => w.IsVisible);
+            var btn = Descendants<Button>(p).FirstOrDefault(b => (b.ToolTip as string) == "设置")
+                      ?? throw new InvalidOperationException("结果弹窗顶部没有设置入口");
+
+            btn.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            Pump();
+            var opened = Application.Current.Windows.OfType<SettingsWindow>().Where(w => w.IsVisible).ToList();
+            if (opened.Count != before + 1)
+                throw new InvalidOperationException($"点击设置入口应新增 1 个设置窗，实际新增 {opened.Count - before}");
+            if (!p.IsVisible) throw new InvalidOperationException("打开设置时不应关闭结果弹窗");
+
+            Close(p);
+            foreach (var settings in opened) Close(settings);
+        });
+
         step("划词图标：构造 + 定位", () =>
         {
             var icon = new SelectionIcon();
@@ -125,7 +144,6 @@ static class UiProbe
         step("识别结果：改完再复制，拿到的是改后的字", () => OcrResultProbe(copy: true));
         step("识别结果：翻译按钮走的也是框里的字", () => OcrResultProbe(copy: false));
         step("识别结果：清空后按复制不关窗", OcrResultEmptyProbe);
-        step("识别结果：顶部设置入口能触发打开设置", OcrResultSettingsProbe);
         step("识别结果：调整尺寸后下次按原尺寸打开", OcrResultSizeProbe);
         step("设置窗口：切页不串滚动位置，各页各自记住", SettingsScrollProbe);
     }
@@ -1395,27 +1413,6 @@ static class UiProbe
 
         if (fired) throw new InvalidOperationException("空内容不该复制出去");
         if (!w.IsVisible) throw new InvalidOperationException("空内容时窗口要留着让人接着改");
-        Close(w);
-    }
-
-    /// <summary>设置入口在字数那一行右侧，错放到底部栏会挤占收工按钮的可用宽度。</summary>
-    static void OcrResultSettingsProbe()
-    {
-        var w = new OcrResultWindow("settings probe");
-        var opened = 0;
-        w.OpenSettings += () => opened++;
-        Probe(w, close: false);
-
-        var btn = Descendants<Button>(w)
-                  .Where(b => (b.ToolTip as string) == "设置")
-                  .ToList();
-        if (btn.Count != 1)
-            throw new InvalidOperationException($"识别结果窗应有 1 个设置入口，实际 {btn.Count}");
-        if (btn[0].Parent is not Grid head || Grid.GetRow(head) != 0)
-            throw new InvalidOperationException("设置入口没有放在窗口顶部行");
-
-        btn[0].RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
-        if (opened != 1) throw new InvalidOperationException("点击设置入口没有发出 OpenSettings 事件");
         Close(w);
     }
 
