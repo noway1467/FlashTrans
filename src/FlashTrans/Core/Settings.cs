@@ -18,6 +18,8 @@ public enum CaptureAction
     None,
     Copy,
     Save,
+    /// <summary>把这块图钉到屏幕上继续看。</summary>
+    Pin,
     /// <summary>识别文字，送进主窗口。</summary>
     Ocr,
     /// <summary>识别文字并翻译。</summary>
@@ -54,7 +56,7 @@ public sealed class AppSettings
     public int Version { get; set; } = CurrentVersion;
 
     /// <summary>加新的默认源/字段时 +1，并在 Migrate 里补一段。</summary>
-    public const int CurrentVersion = 5;
+    public const int CurrentVersion = 6;
 
     // ------- 翻译源 -------
     public List<ProviderConfig> Providers { get; set; } = [];
@@ -149,7 +151,7 @@ public sealed class AppSettings
     public string HkTranslateClipboard { get; set; } = "Ctrl+Alt+E";
     public string HkToggleSelection { get; set; } = "Ctrl+Alt+S";
     public string HkNextProvider { get; set; } = "";
-    public string HkCaptureOcr { get; set; } = "Ctrl+Alt+A";
+    public string HkCaptureOcr { get; set; } = "F1";
     /// <summary>把翻译弹窗临时收起 / 再叫回来（内容留着，不重译）。</summary>
     public string HkTogglePopup { get; set; } = "Ctrl+Alt+H";
 
@@ -212,6 +214,8 @@ public sealed class AppSettings
     public string CkSave { get; set; } = "Ctrl+S";
     public string CkOcr { get; set; } = "Ctrl+D";
     public string CkOcrTranslate { get; set; } = "Ctrl+Shift+D";
+    /// <summary>把截图钉到屏幕上。</summary>
+    public string CkPin { get; set; } = "Ctrl+P";
     public string CkLongShot { get; set; } = "Ctrl+L";
     /// <summary>开始录制动图。</summary>
     public string CkRecord { get; set; } = "Ctrl+R";

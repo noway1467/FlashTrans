@@ -45,7 +45,7 @@ public sealed partial class AppHost
                 await RecordAsync(picked.Region);
                 return;
             }
-            await HandleAsync(picked.Action, picked.Image);
+            await HandleAsync(picked.Action, picked.Image, picked.Region);
         }
         catch (Exception ex)
         {
@@ -59,7 +59,7 @@ public sealed partial class AppHost
     }
 
     /// <summary>把截好的图交给用户挑的那个动作。image 为 null（取消）就什么都不做。</summary>
-    async Task HandleAsync(CaptureAction action, CapturedImage? image)
+    async Task HandleAsync(CaptureAction action, CapturedImage? image, RECT? region = null)
     {
         if (image is null || action == CaptureAction.None) return;
 
@@ -72,6 +72,10 @@ public sealed partial class AppHost
             case CaptureAction.Save:
                 var path = S.CaptureSaveAsk ? SaveShotAs(image) : SaveShot(image);
                 if (path is not null) ToastSaved(path);
+                break;
+
+            case CaptureAction.Pin:
+                ShowPinnedShot(image, region);
                 break;
 
             case CaptureAction.Ocr:
@@ -148,6 +152,31 @@ public sealed partial class AppHost
             ShowPopupFor(t, anchor);
         };
         win.OpenSettings += () => ShowSettings();
+        win.Show();
+        win.Activate();
+    }
+
+    /// <summary>钉住截图。复制和保存继续走主程序的既有路径，销毁只关钉住窗。</summary>
+    void ShowPinnedShot(CapturedImage image, RECT? region)
+    {
+        var win = new PinnedShotWindow(image, region);
+        win.CopyRequested += () =>
+        {
+            if (TrySetClipboardImage(image))
+                Toast($"截图 {image.Width}×{image.Height} 已复制");
+        };
+        win.SaveRequested += () =>
+        {
+            // 另存为对话框不是这个置顶贴图的拥有者，不先撤顶会被挡在后面。
+            var wasTopmost = win.Topmost;
+            try
+            {
+                win.Topmost = false;
+                var path = S.CaptureSaveAsk ? SaveShotAs(image) : SaveShot(image);
+                if (path is not null) ToastSaved(path);
+            }
+            finally { win.Topmost = wasTopmost; }
+        };
         win.Show();
         win.Activate();
     }

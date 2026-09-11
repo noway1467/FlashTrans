@@ -180,6 +180,8 @@ public sealed partial class CaptureOverlay
             () => Finish(CaptureAction.Ocr)));
         row.Children.Add(ActionBtn("识别并翻译", Tip("识别成文字直接翻译", S.CkOcrTranslate),
             () => Finish(CaptureAction.OcrTranslate)));
+        row.Children.Add(ActionBtn("钉住", Tip("把截图钉在屏幕上", S.CkPin),
+            () => Finish(CaptureAction.Pin)));
         row.Children.Add(ActionBtn("保存", Tip("保存图片", S.CkSave), () => Finish(CaptureAction.Save)));
         row.Children.Add(ActionBtn("复制", Tip("复制到剪贴板", S.CkCopy) + " / 回车",
             () => Finish(CaptureAction.Copy)));
@@ -855,6 +857,7 @@ public sealed partial class CaptureOverlay
         // 而 Matches 要求修饰键完全相等，所以其实不会误判；顺序在这儿只是为了
         // 万一有人把两个都设成同一个键时，行为是确定的。
         yield return (HotkeySpec.Parse(S.CkOcrTranslate), () => Finish(CaptureAction.OcrTranslate));
+        yield return (HotkeySpec.Parse(S.CkPin), () => Finish(CaptureAction.Pin));
         yield return (HotkeySpec.Parse(S.CkOcr), () => Finish(OcrShortcutAction(S.OcrCopyAndClose)));
         yield return (HotkeySpec.Parse(S.CkLongShot), FinishLongShot);
         yield return (HotkeySpec.Parse(S.CkRecord), FinishRecord);
