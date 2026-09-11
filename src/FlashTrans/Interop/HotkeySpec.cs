@@ -85,7 +85,10 @@ public sealed record HotkeySpec(ModifierKeys Modifiers, Key Key)
         if (key is Key.LeftCtrl or Key.RightCtrl or Key.LeftAlt or Key.RightAlt
             or Key.LeftShift or Key.RightShift or Key.LWin or Key.RWin
             or Key.System or Key.None or Key.ImeProcessed) return null;
-        if (mods == ModifierKeys.None) return null;   // 必须带修饰键，避免抢占普通输入
+        // 普通键单按会抢占输入；F1…F12 平时不是打字键，单独注册才可用。
+        if (mods == ModifierKeys.None && !IsFunctionKey(key)) return null;
         return new HotkeySpec(mods, key);
     }
+
+    static bool IsFunctionKey(Key key) => key is >= Key.F1 and <= Key.F12;
 }

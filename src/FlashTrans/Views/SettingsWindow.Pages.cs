@@ -113,6 +113,7 @@ public sealed partial class SettingsWindow
             {
                 ("复制到剪贴板", CaptureAction.Copy),
                 ("保存成图片", CaptureAction.Save),
+                ("钉在屏幕上", CaptureAction.Pin),
                 ("识别文字", CaptureAction.Ocr),
                 ("识别并翻译", CaptureAction.OcrTranslate),
             }, S.CaptureEnterAction, v => S.CaptureEnterAction = v, width: 230)),
@@ -169,6 +170,7 @@ public sealed partial class SettingsWindow
             CaptureKeyField("保存", S.CkSave, v => S.CkSave = v),
             CaptureKeyField("识别文字", S.CkOcr, v => S.CkOcr = v),
             CaptureKeyField("识别并翻译", S.CkOcrTranslate, v => S.CkOcrTranslate = v),
+            CaptureKeyField("钉住", S.CkPin, v => S.CkPin = v),
             CaptureKeyField("长截图", S.CkLongShot, v => S.CkLongShot = v),
             CaptureKeyField("录制动图", S.CkRecord, v => S.CkRecord = v));
 
@@ -464,7 +466,7 @@ public sealed partial class SettingsWindow
         var page = Page();
 
         Section(page, "全局快捷键",
-            Hint("点输入框后直接按组合键，Backspace 清除。至少要带一个 Ctrl / Alt / Shift / Win。"),
+            Hint("点输入框后直接按组合键，Backspace 清除。普通键至少要带一个 Ctrl / Alt / Shift / Win；F1 到 F12 可以单独使用。"),
             HotkeyField("翻译选中文本", S.HkTranslateSelection, v => S.HkTranslateSelection = v),
             HotkeyField("显示 / 隐藏主窗口", S.HkToggleWindow, v => S.HkToggleWindow = v),
             HotkeyField("翻译剪贴板内容", S.HkTranslateClipboard, v => S.HkTranslateClipboard = v),

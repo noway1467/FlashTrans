@@ -159,6 +159,16 @@ public sealed class SettingsService
             changed = true;
         }
 
+        // v5 -> v6：截图热键从 Ctrl+Alt+A 改成更顺手的 F1。
+        // 只迁移旧默认值；已经自己改过热键的用户不被打扰。
+        if (s.Version < 6)
+        {
+            if (string.Equals(s.HkCaptureOcr, "Ctrl+Alt+A", StringComparison.OrdinalIgnoreCase))
+                s.HkCaptureOcr = "F1";
+            s.Version = 6;
+            changed = true;
+        }
+
         return changed;
     }
 

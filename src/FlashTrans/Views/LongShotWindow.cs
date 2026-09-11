@@ -58,6 +58,7 @@ public sealed class LongShotWindow : Window
         };
         bar.Children.Add(Btn("识别文字", CaptureAction.Ocr, "GhostBtn"));
         bar.Children.Add(Btn("识别并翻译", CaptureAction.OcrTranslate, "GhostBtn"));
+        bar.Children.Add(Btn("钉住", CaptureAction.Pin, "GhostBtn"));
         bar.Children.Add(Btn("复制", CaptureAction.Copy, "OutlineBtn"));
         bar.Children.Add(Btn("保存", CaptureAction.Save, "PrimaryBtn"));
 
@@ -82,6 +83,7 @@ public sealed class LongShotWindow : Window
                 case Key.Escape: e.Handled = true; Fire(CaptureAction.None); break;
                 case Key.C when ctrl: e.Handled = true; Fire(CaptureAction.Copy); break;
                 case Key.S when ctrl: e.Handled = true; Fire(CaptureAction.Save); break;
+                case Key.P when ctrl: e.Handled = true; Fire(CaptureAction.Pin); break;
                 case Key.D when ctrl:
                     e.Handled = true;
                     Fire(shift ? CaptureAction.OcrTranslate

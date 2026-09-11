@@ -146,6 +146,7 @@ static class UiProbe
         step("识别结果：翻译按钮走的也是框里的字", () => OcrResultProbe(copy: false));
         step("识别结果：清空后按复制不关窗", OcrResultEmptyProbe);
         step("识别结果：调整尺寸后下次按原尺寸打开", OcrResultSizeProbe);
+        step("钉住截图：复制/保存/销毁都能触发", PinnedShotProbe);
         step("设置窗口：切页不串滚动位置，各页各自记住", SettingsScrollProbe);
     }
 
@@ -1223,6 +1224,40 @@ static class UiProbe
 
         Console.WriteLine($"       v1 → v{old.Version}，源 {old.Providers.Count} 个，顺序：" +
                           string.Join(" ", old.Providers.Select(p => p.Kind)));
+
+        var v5 = new AppSettings { Version = 5, HkCaptureOcr = "Ctrl+Alt+A" };
+        if (!Services.SettingsService.Migrate(v5) || v5.HkCaptureOcr != "F1")
+            throw new InvalidOperationException("旧默认截图热键没有迁移到 F1");
+
+        var custom = new AppSettings { Version = 5, HkCaptureOcr = "Ctrl+Alt+Z" };
+        Services.SettingsService.Migrate(custom);
+        if (custom.HkCaptureOcr != "Ctrl+Alt+Z")
+            throw new InvalidOperationException("自定义截图热键被迁移改掉了");
+    }
+
+    /// <summary>钉住窗的三个入口都必须真的接线，否则用户会被一张关不掉的图困住。</summary>
+    static void PinnedShotProbe()
+    {
+        var image = new CapturedImage(8, 8, new byte[8 * 8 * 4]);
+        var region = new RECT { Left = -4000, Top = -4000, Right = -3984, Bottom = -3984 };
+        var win = new PinnedShotWindow(image, region);
+        var copy = 0;
+        var save = 0;
+        win.CopyRequested += () => copy++;
+        win.SaveRequested += () => save++;
+
+        Probe(win, close: false);
+        var buttons = Descendants<Button>(win).ToDictionary(b => (string)(b.ToolTip ?? ""));
+        if (buttons.Count != 3)
+            throw new InvalidOperationException($"钉住工具条应有复制/保存/销毁 3 个按钮，实际 {buttons.Count}");
+
+        buttons["复制截图"].RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+        buttons["保存截图"].RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+        if (copy != 1 || save != 1) throw new InvalidOperationException($"复制/保存回调没触发：{copy}/{save}");
+
+        buttons["销毁钉住 (Esc / Delete)"].RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+        Pump();
+        if (win.IsVisible) throw new InvalidOperationException("点销毁后钉住窗仍然可见");
     }
 
     /// <summary>
