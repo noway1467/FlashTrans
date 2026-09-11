@@ -17,6 +17,8 @@ public sealed class OcrResultWindow : Window
     public event Action<string>? Copy;
     /// <summary>用户改完之后要翻译。</summary>
     public event Action<string>? Translate;
+    /// <summary>用户点击设置按钮。</summary>
+    public event Action? OpenSettings;
 
     readonly TextBox _box;
     double _lastNormalWidth;
@@ -54,15 +56,30 @@ public sealed class OcrResultWindow : Window
         // 改了字数要跟着变，不然那行数字跟框里的内容对不上
         _box.TextChanged += (_, _) => head.Text = Count(_box.Text);
 
-        var bar = new StackPanel
+        var barRight = new StackPanel
         {
             Orientation = Orientation.Horizontal,
             HorizontalAlignment = HorizontalAlignment.Right,
-            Margin = new Thickness(14, 10, 14, 12),
         };
-        bar.Children.Add(Btn("关闭 (Esc)", "GhostBtn", Close));
-        bar.Children.Add(Btn("翻译 (Ctrl+Enter)", "OutlineBtn", FireTranslate));
-        bar.Children.Add(Btn("复制 (Ctrl+C)", "PrimaryBtn", FireCopy));
+        barRight.Children.Add(Btn("关闭 (Esc)", "GhostBtn", Close));
+        barRight.Children.Add(Btn("翻译 (Ctrl+Enter)", "OutlineBtn", FireTranslate));
+        barRight.Children.Add(Btn("复制 (Ctrl+C)", "PrimaryBtn", FireCopy));
+
+        var settingsBtn = Btn("设置", "GhostBtn", () => OpenSettings?.Invoke());
+        settingsBtn.Content = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Children = { UiKit.Icon(UiKit.IconSettings, 12), new System.Windows.Controls.TextBlock { Text = " 设置", VerticalAlignment = VerticalAlignment.Center } },
+        };
+        settingsBtn.HorizontalAlignment = HorizontalAlignment.Left;
+
+        var bar = new Grid { Margin = new Thickness(14, 10, 14, 12) };
+        bar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        bar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        UiKit.SetGrid(settingsBtn, col: 0);
+        UiKit.SetGrid(barRight, col: 1);
+        bar.Children.Add(settingsBtn);
+        bar.Children.Add(barRight);
 
         var grid = new Grid();
         grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });

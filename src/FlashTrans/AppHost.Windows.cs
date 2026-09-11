@@ -122,6 +122,9 @@ public sealed partial class AppHost
     {
         if (_settings is { IsLoaded: true })
         {
+            // 短暂置顶抢焦点，然后恢复正常 z-order
+            _settings.Topmost = true;
+            _settings.Topmost = false;
             _settings.Activate();
             if (tab is not null) _settings.SelectTab(tab);
             return;
@@ -130,6 +133,9 @@ public sealed partial class AppHost
         _settings.Closed += (_, _) => _settings = null;
         if (tab is not null) _settings.SelectTab(tab);
         _settings.Show();
+        // 短暂置顶确保窗口能抢到前台焦点，然后立即取消置顶
+        _settings.Topmost = true;
+        _settings.Topmost = false;
         _settings.Activate();
     }
 

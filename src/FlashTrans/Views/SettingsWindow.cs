@@ -35,7 +35,6 @@ public sealed partial class SettingsWindow : Window
         MinHeight = 440;
         WindowStyle = WindowStyle.None;
         ResizeMode = ResizeMode.CanResize;
-        Topmost = true;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         TextOptions.SetTextFormattingMode(this, TextFormattingMode.Display);
         UseLayoutRounding = true;

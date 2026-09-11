@@ -147,6 +147,7 @@ public sealed partial class AppHost
                 : null;
             ShowPopupFor(t, anchor);
         };
+        win.OpenSettings += () => ShowSettings();
         win.Show();
         win.Activate();
     }

@@ -73,14 +73,9 @@ public sealed partial class PopupWindow
         if (!_everActive && !force) return;
 
         Topmost = false;
-
-        var self = new System.Windows.Interop.WindowInteropHelper(this).Handle;
-        if (self == IntPtr.Zero) return;
-        var fore = Win32.GetForegroundWindow();
-        if (fore == IntPtr.Zero || fore == self) return;
-
-        Win32.SetWindowPos(self, fore, 0, 0, 0, 0,
-            Win32.SWP_NOSIZE | Win32.SWP_NOMOVE | Win32.SWP_NOACTIVATE);
+        // 只撤掉置顶即可，让 Windows 标准 z-order 管理窗口层级。
+        // 之前用 SetWindowPos 把窗口插到前台窗口后面，会导致弹窗被别的窗口
+        // 一盖就直接沉到所有窗口底层，再也看不见。
     }
 
     /// <summary>把弹窗重新抬到最前（被别的窗口盖住时用快捷键叫它）。</summary>
