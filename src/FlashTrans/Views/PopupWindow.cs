@@ -5,7 +5,6 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shell;
 using FlashTrans.Core;
-using FlashTrans.Interop;
 using FlashTrans.Services;
 
 namespace FlashTrans.Views;
@@ -43,7 +42,7 @@ public sealed partial class PopupWindow : Window
         Title = "闪译";
         WindowStyle = WindowStyle.None;
         ResizeMode = ResizeMode.CanResize;
-        ShowInTaskbar = false;
+        ShowInTaskbar = true;
         SizeToContent = SizeToContent.Height;
         MinWidth = 260;
         MinHeight = 120;
@@ -95,12 +94,6 @@ public sealed partial class PopupWindow : Window
                 }
             }
             if (e.HeightChanged && SizeToContent == SizeToContent.Manual) _userResized = true;
-        };
-        SourceInitialized += (_, _) =>
-        {
-            var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
-            var ex = Win32.GetWindowLong(hwnd, Win32.GWL_EXSTYLE);
-            Win32.SetWindowLong(hwnd, Win32.GWL_EXSTYLE, ex | Win32.WS_EX_TOOLWINDOW);
         };
         // 关窗过程中焦点会交出去，那会再走一遍 Deactivated；那时候窗口句柄已经在拆，
         // 别再去动它的 z-order。

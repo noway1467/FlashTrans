@@ -25,6 +25,7 @@ static class UiProbe
         step("弹窗：收起能原样叫回，关掉的叫不回", () => PopupStashProbe(host));
         step("弹窗：最大高度按屏幕工作区收口", () => PopupMaxHeightProbe(host));
         step("弹窗：焦点一走就撤置顶，让别的窗口盖上来", () => PopupTopmostProbe(host));
+        step("弹窗：有任务栏会话且不是工具窗", () => PopupTaskbarProbe(host));
         step("托盘菜单：弹出建锚点、收干净、重复收不炸", () => TrayMenuProbe(host));
 
         step("主窗口：构造 + 布局", () => Probe(new MainWindow(host)));
@@ -709,6 +710,35 @@ static class UiProbe
         finally
         {
             s.PopupTopmost = top0; s.PopupLeft = l0; s.PopupTop = t0;
+            Close(w);
+        }
+    }
+
+    /// <summary>
+    /// 工具窗不会进任务栏，Alt-Tab 也不把它当普通窗口。这里必须验 Win32 样式，
+    /// 不然 WPF 属性 true 也可能被句柄层的工具窗标记抵消。
+    /// </summary>
+    static void PopupTaskbarProbe(AppHost host)
+    {
+        var w = new PopupWindow(host) { ShowActivated = false };
+        try
+        {
+            if (!w.ShowInTaskbar)
+                throw new InvalidOperationException("翻译弹窗没有启用任务栏显示");
+
+            w.Left = -4000;
+            w.Top = -4000;
+            w.Show();
+            Pump();
+
+            var hwnd = new System.Windows.Interop.WindowInteropHelper(w).Handle;
+            if (hwnd == IntPtr.Zero) throw new InvalidOperationException("翻译弹窗没有窗口句柄");
+            var ex = Win32.GetWindowLong(hwnd, Win32.GWL_EXSTYLE);
+            if ((ex & Win32.WS_EX_TOOLWINDOW) != 0)
+                throw new InvalidOperationException("翻译弹窗仍被标记为工具窗");
+        }
+        finally
+        {
             Close(w);
         }
     }
