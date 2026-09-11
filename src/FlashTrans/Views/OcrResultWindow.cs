@@ -51,35 +51,29 @@ public sealed class OcrResultWindow : Window
             Margin = new Thickness(14, 10, 14, 0),
         };
 
-        var head = UiKit.Text(Count(text), 12.5, "TextDim");
-        head.Margin = new Thickness(15, 10, 14, 0);
+        var headText = UiKit.Text(Count(text), 12.5, "TextDim");
         // 改了字数要跟着变，不然那行数字跟框里的内容对不上
-        _box.TextChanged += (_, _) => head.Text = Count(_box.Text);
+        _box.TextChanged += (_, _) => headText.Text = Count(_box.Text);
 
-        var barRight = new StackPanel
+        var settingsBtn = UiKit.IconButton(UiKit.IconSettings, "设置", (_, _) => OpenSettings?.Invoke(), 13);
+
+        var head = new Grid { Margin = new Thickness(15, 10, 10, 0) };
+        head.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        UiKit.SetGrid(headText, col: 0);
+        UiKit.SetGrid(settingsBtn, col: 1);
+        head.Children.Add(headText);
+        head.Children.Add(settingsBtn);
+
+        var bar = new StackPanel
         {
             Orientation = Orientation.Horizontal,
             HorizontalAlignment = HorizontalAlignment.Right,
+            Margin = new Thickness(14, 10, 14, 12),
         };
-        barRight.Children.Add(Btn("关闭 (Esc)", "GhostBtn", Close));
-        barRight.Children.Add(Btn("翻译 (Ctrl+Enter)", "OutlineBtn", FireTranslate));
-        barRight.Children.Add(Btn("复制 (Ctrl+C)", "PrimaryBtn", FireCopy));
-
-        var settingsBtn = Btn("设置", "GhostBtn", () => OpenSettings?.Invoke());
-        settingsBtn.Content = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            Children = { UiKit.Icon(UiKit.IconSettings, 12), new System.Windows.Controls.TextBlock { Text = " 设置", VerticalAlignment = VerticalAlignment.Center } },
-        };
-        settingsBtn.HorizontalAlignment = HorizontalAlignment.Left;
-
-        var bar = new Grid { Margin = new Thickness(14, 10, 14, 12) };
-        bar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        bar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        UiKit.SetGrid(settingsBtn, col: 0);
-        UiKit.SetGrid(barRight, col: 1);
-        bar.Children.Add(settingsBtn);
-        bar.Children.Add(barRight);
+        bar.Children.Add(Btn("关闭 (Esc)", "GhostBtn", Close));
+        bar.Children.Add(Btn("翻译 (Ctrl+Enter)", "OutlineBtn", FireTranslate));
+        bar.Children.Add(Btn("复制 (Ctrl+C)", "PrimaryBtn", FireCopy));
 
         var grid = new Grid();
         grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });

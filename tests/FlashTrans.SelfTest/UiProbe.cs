@@ -96,7 +96,8 @@ static class UiProbe
             step($"设置窗口：{key} 页", () =>
             {
                 var w = new SettingsWindow(host);
-                if (!w.Topmost) throw new InvalidOperationException("设置窗必须保持在翻译窗之上");
+                // 真实入口是短暂置顶抢前台后取消，不能恢复成永久置顶挡住别的窗口。
+                if (w.Topmost) throw new InvalidOperationException("设置窗不能永久保持置顶");
                 Probe(w, close: false);
                 w.SelectTab(key);
                 w.UpdateLayout();
@@ -124,6 +125,7 @@ static class UiProbe
         step("识别结果：改完再复制，拿到的是改后的字", () => OcrResultProbe(copy: true));
         step("识别结果：翻译按钮走的也是框里的字", () => OcrResultProbe(copy: false));
         step("识别结果：清空后按复制不关窗", OcrResultEmptyProbe);
+        step("识别结果：顶部设置入口能触发打开设置", OcrResultSettingsProbe);
         step("识别结果：调整尺寸后下次按原尺寸打开", OcrResultSizeProbe);
         step("设置窗口：切页不串滚动位置，各页各自记住", SettingsScrollProbe);
     }
@@ -1393,6 +1395,27 @@ static class UiProbe
 
         if (fired) throw new InvalidOperationException("空内容不该复制出去");
         if (!w.IsVisible) throw new InvalidOperationException("空内容时窗口要留着让人接着改");
+        Close(w);
+    }
+
+    /// <summary>设置入口在字数那一行右侧，错放到底部栏会挤占收工按钮的可用宽度。</summary>
+    static void OcrResultSettingsProbe()
+    {
+        var w = new OcrResultWindow("settings probe");
+        var opened = 0;
+        w.OpenSettings += () => opened++;
+        Probe(w, close: false);
+
+        var btn = Descendants<Button>(w)
+                  .Where(b => (b.ToolTip as string) == "设置")
+                  .ToList();
+        if (btn.Count != 1)
+            throw new InvalidOperationException($"识别结果窗应有 1 个设置入口，实际 {btn.Count}");
+        if (btn[0].Parent is not Grid head || Grid.GetRow(head) != 0)
+            throw new InvalidOperationException("设置入口没有放在窗口顶部行");
+
+        btn[0].RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+        if (opened != 1) throw new InvalidOperationException("点击设置入口没有发出 OpenSettings 事件");
         Close(w);
     }
 
