@@ -18,3 +18,4 @@ package-lock.json
 # 便携模式的配置与日志，别把本机设置传上去
 data/
 *.log
+AGENTS.md

@@ -71,12 +71,15 @@ public static class AnimEncoder
     /// 把 frames（按顺序的临时位图路径）编成一张动图，存到 outPath 去掉扩展名之后
     /// 加上真正的后缀。返回实际存成了什么。
     /// audioPath: 可选的音频文件路径（只对 MP4 有效）。
+    /// ct: 用户取消录制时中断编码。三条路都会把已经写出去的半成品删掉，
+    /// 抛 OperationCanceledException 给调用方。
     /// </summary>
     public static async Task<AnimResult> SaveAsync(
         IReadOnlyList<string> frames, string outNoExt, int fps, RecordFormat want,
-        string? audioPath = null)
+        string? audioPath = null, CancellationToken ct = default)
     {
         if (frames.Count == 0) throw new InvalidOperationException("没有帧可以编码。");
+        ct.ThrowIfCancellationRequested();
 
         var dir = Path.GetDirectoryName(outNoExt);
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
@@ -88,8 +91,12 @@ public static class AnimEncoder
             var mp4Path = outNoExt + ".mp4";
             try
             {
-                var m = await Mp4Encoder.SaveAsync(frames, mp4Path, fps, audioPath);
+                var m = await Mp4Encoder.SaveAsync(frames, mp4Path, fps, audioPath, ct);
                 return m with { Wanted = want };
+            }
+            catch (OperationCanceledException)
+            {
+                throw;   // 用户取消的，不是编码失败，别包成 InvalidOperationException
             }
             catch (Exception ex)
             {
@@ -98,23 +105,23 @@ public static class AnimEncoder
             }
         }
 
-        if (want == RecordFormat.Webp) return await SaveWebpOrGifAsync(frames, outNoExt, fps);
-        return (await SaveGifAsync(frames, outNoExt + ".gif", fps)) with { Wanted = want };
+        if (want == RecordFormat.Webp) return await SaveWebpOrGifAsync(frames, outNoExt, fps, ct);
+        return (await SaveGifAsync(frames, outNoExt + ".gif", fps, ct)) with { Wanted = want };
     }
 
     /// <summary>WebP，没有 img2webp 就 GIF。</summary>
     static async Task<AnimResult> SaveWebpOrGifAsync(
-        IReadOnlyList<string> frames, string outNoExt, int fps)
+        IReadOnlyList<string> frames, string outNoExt, int fps, CancellationToken ct)
     {
         var tool = FindImg2Webp();
         if (tool is null)
         {
             // 不是错误：绿色版被人只拷了个 exe 走也会走到这儿。
             Log.Warn($"没找到 {Img2WebpRelative}，这次录制改存 GIF。");
-            var g = await SaveGifAsync(frames, outNoExt + ".gif", fps);
+            var g = await SaveGifAsync(frames, outNoExt + ".gif", fps, ct);
             return g with { Wanted = RecordFormat.Webp, FellBackWhy = "没找到 img2webp" };
         }
-        var w = await SaveWebpAsync(tool, frames, outNoExt + ".webp", fps);
+        var w = await SaveWebpAsync(tool, frames, outNoExt + ".webp", fps, ct);
         return w with { Wanted = RecordFormat.Webp };
     }
 
@@ -127,7 +134,7 @@ public static class AnimEncoder
     /// 参数用 ArgumentList 一项一项给，转义交给运行库——路径里有空格是常态。
     /// </summary>
     static async Task<AnimResult> SaveWebpAsync(
-        string tool, IReadOnlyList<string> frames, string outPath, int fps)
+        string tool, IReadOnlyList<string> frames, string outPath, int fps, CancellationToken ct)
     {
         var work = Path.GetDirectoryName(frames[0]) ?? AppContext.BaseDirectory;
 
@@ -157,7 +164,9 @@ public static class AnimEncoder
         // 两个流都要读。只读一个的话另一个的缓冲写满就卡住不动了。
         var errTask = proc.StandardError.ReadToEndAsync();
         var outTask = proc.StandardOutput.ReadToEndAsync();
-        using var kill = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+        // 看门狗和用户的取消并成一个：两者都得能把这个外部进程弄下去。
+        using var kill = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        kill.CancelAfter(TimeSpan.FromMinutes(3));
         try
         {
             await proc.WaitForExitAsync(kill.Token);
@@ -165,6 +174,13 @@ public static class AnimEncoder
         catch (OperationCanceledException)
         {
             try { proc.Kill(entireProcessTree: true); } catch { }
+            // 半成品不能留在用户的截图目录里。进程刚被杀，文件句柄可能还没放开，
+            // 删不掉也不要紧——反正扩展名是 .webp 的残文件比一个假动图好解释。
+            try { if (File.Exists(outPath)) File.Delete(outPath); }
+            catch (Exception ex) { Log.Warn("删 WebP 半成品失败：" + ex.Message); }
+
+            // 用户按的取消跟「跑太久」要分开报：前者不是错误。
+            ct.ThrowIfCancellationRequested();
             throw new InvalidOperationException("img2webp 跑太久了，已经中断。");
         }
 
@@ -178,9 +194,19 @@ public static class AnimEncoder
     }
 
     static async Task<AnimResult> SaveGifAsync(
-        IReadOnlyList<string> frames, string outPath, int fps)
+        IReadOnlyList<string> frames, string outPath, int fps, CancellationToken ct)
     {
-        await Task.Run(() => BuildGif(frames, outPath, fps));
+        try
+        {
+            await Task.Run(() => BuildGif(frames, outPath, fps, ct), ct);
+        }
+        catch (OperationCanceledException)
+        {
+            // 文件流在 BuildGif 里已经 using 掉了，这儿删得掉。
+            try { if (File.Exists(outPath)) File.Delete(outPath); }
+            catch (Exception ex) { Log.Warn("删 GIF 半成品失败：" + ex.Message); }
+            throw;
+        }
         return new AnimResult(outPath, RecordFormat.Gif, new FileInfo(outPath).Length);
     }
 
@@ -195,7 +221,8 @@ public static class AnimEncoder
     /// 附带的好处是每帧带自己的局部调色板（WIC 按这一帧的实际颜色挑），
     /// 比所有帧共用一个全局调色板少很多色带。
     /// </summary>
-    internal static void BuildGif(IReadOnlyList<string> frames, string outPath, int fps)
+    internal static void BuildGif(
+        IReadOnlyList<string> frames, string outPath, int fps, CancellationToken ct = default)
     {
         using var fs = File.Create(outPath);
         var started = false;
@@ -203,6 +230,10 @@ public static class AnimEncoder
 
         foreach (var path in frames)
         {
+            // 每帧查一次。单帧的量化加 LZW 是毫秒级的，取消最多等一帧，
+            // 比等几百帧编完再放手强得多。
+            ct.ThrowIfCancellationRequested();
+
             var one = SplitSingleGif(EncodeSingleGif(path));
             if (one is null) continue;
 

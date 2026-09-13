@@ -14,6 +14,8 @@ public enum RecordStop
     Failed,
     /// <summary>暂停着太久没动静，自己收了。</summary>
     PausedTooLong,
+    /// <summary>用户取消了，录到的东西不要了。跟 Stopped 的区别是不编码、不留文件。</summary>
+    Cancelled,
 }
 
 /// <summary>
@@ -161,6 +163,7 @@ public static class RecordService
     /// 在 region（屏幕物理像素）上录。
     /// onProgress 每抓一帧调一次，参数是帧数和已经录了多久（不含暂停掉的时间）。
     /// cancelled 返回 true 就停；paused 返回 true 就挂着不抓帧。
+    /// discarded 返回 true 就是「取消」：立刻停，并且录到的帧不要了（Stopped = Cancelled）。
     /// captureAudio 为 true 时同时录制系统音频（只对 MP4 有效）。
     /// muted 每拍问一次，返回 true 就把音频拧成无声（照样写，不然音画会错位）。
     /// </summary>
@@ -172,7 +175,8 @@ public static class RecordService
         int? maxPausedMs = null,
         Func<RECT, CapturedImage?>? capture = null,
         bool captureAudio = false,
-        Func<bool>? muted = null)
+        Func<bool>? muted = null,
+        Func<bool>? discarded = null)
     {
         // 默认那道闸是 10 分钟，自测等不了；留个口子让它传小值进来。
         var pauseLimit = maxPausedMs ?? MaxPausedMinutes * 60_000;
@@ -231,6 +235,9 @@ public static class RecordService
         var capturedCount = 0;
         while (capturedCount < maxFrames)
         {
+            // 取消排在停止前面：两个都按下时，「不要了」比「停下保存」更强。
+            // 暂停中按取消也走这儿——暂停那段是 continue 回来的，每 50ms 过一次。
+            if (discarded?.Invoke() == true) { stop = RecordStop.Cancelled; break; }
             if (cancelled?.Invoke() == true) { stop = RecordStop.Stopped; break; }
 
             // 时长也要看，不能只数帧。跟不上目标帧率时（区域大、机器忙）帧数攒得慢，
@@ -338,7 +345,9 @@ public static class RecordService
         }
 
         var saved = await writer.CompleteAsync();
-        if (writer.Failed) stop = RecordStop.Failed;
+        // 取消掉的这次本来就不要了，存帧失败与否都无所谓；别把状态冲成 Failed，
+        // 那样调用方会报「一帧都没抓到」而不是「已取消」。
+        if (writer.Failed && stop != RecordStop.Cancelled) stop = RecordStop.Failed;
         var paths = saved.Select(w => w.Path).ToList();
         if (saved.Count > 0)
         {
@@ -349,8 +358,11 @@ public static class RecordService
         var active = TimeSpan.FromMilliseconds(Math.Max(0, sw.Elapsed.TotalMilliseconds - pausedMs));
         var pausedFor = TimeSpan.FromMilliseconds(pausedMs);
 
+        // 0 帧通常是「录制没成功」，但取消是例外：刚开录就按取消本来就抓不到帧，
+        // 这种情况报 Failed 会让用户以为出错了。
         if (paths.Count == 0)
-            return new RecordFrames(dir, paths, TimeSpan.Zero, fps, RecordStop.Failed)
+            return new RecordFrames(dir, paths, TimeSpan.Zero, fps,
+                stop == RecordStop.Cancelled ? RecordStop.Cancelled : RecordStop.Failed)
             { Pauses = pauses, PausedFor = pausedFor, AudioPath = audioPath };
 
         return new RecordFrames(dir, paths, active,

@@ -302,6 +302,14 @@ public sealed partial class AppHost
         var captureAudio = S.RecordAudio && S.RecordFormat == RecordFormat.Mp4;
 
         var hud = new RecordHud(region, maxSec, captureAudio);
+        // 编码阶段的取消要靠它去掐：那时候录制循环已经退出，没人再轮询 hud.Cancelled 了。
+        using var cancelEncode = new CancellationTokenSource();
+        hud.CancelRequested += () =>
+        {
+            // Cancel() 可能在编码已经结束之后才被按下，这时 CTS 已经 Dispose 了。
+            try { cancelEncode.Cancel(); }
+            catch (ObjectDisposedException) { }
+        };
         hud.Show();
 
         // 蒙层刚关，还没真从屏幕上下去。不等一下，头几帧录进去的是那层黑蒙层。
@@ -316,7 +324,16 @@ public sealed partial class AppHost
                 cancelled: () => hud.Stopped,
                 paused: () => hud.Paused,
                 captureAudio: captureAudio,
-                muted: () => hud.Muted);
+                muted: () => hud.Muted,
+                discarded: () => hud.Cancelled);
+
+            // 取消要排在「没抓到帧」前面：刚开录就取消本来就是 0 帧，
+            // 那不是失败，不能报「录制没成功」。
+            if (frames.Stopped == RecordStop.Cancelled)
+            {
+                Toast("已取消录制，没有保存");
+                return;
+            }
 
             if (frames.Stopped == RecordStop.Failed || frames.Paths.Count == 0)
             {
@@ -328,7 +345,7 @@ public sealed partial class AppHost
             var result = await AnimEncoder.SaveAsync(
                 frames.Paths, UniqueRecordPath(), frames.EffectiveFps > 0
                     ? (int)Math.Round(frames.EffectiveFps) : fps,
-                S.RecordFormat, frames.AudioPath);
+                S.RecordFormat, frames.AudioPath, cancelEncode.Token);
 
             var note = result.FellBack
                 ? $"（{result.FellBackWhy}，存成了 {result.Format.ToString().ToUpperInvariant()}）"
@@ -342,6 +359,12 @@ public sealed partial class AppHost
                   + $"（{Mb(result.Bytes)} · {frames.Paths.Count} 帧 · "
                   + $"{frames.EffectiveFps:0.#} fps）{note}",
                 () => RevealInExplorer(result.Path));
+        }
+        catch (OperationCanceledException)
+        {
+            // 编码到一半被取消的。半成品文件由各个编码器自己删掉了，
+            // 临时帧交给下面的 finally。
+            Toast("已取消录制，没有保存");
         }
         catch (Exception ex)
         {

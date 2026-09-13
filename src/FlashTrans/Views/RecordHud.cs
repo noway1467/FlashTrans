@@ -24,13 +24,21 @@ public sealed class RecordHud : Window
     /// </summary>
     public const string PauseHotkey = "Ctrl+Alt+P";
 
+    /// <summary>
+    /// 取消并丢弃的热键。Esc 是「停下来保存」，这个是「不要了」。
+    /// 选 C 是因为 Ctrl+Alt 下 Q/W/E/S/H/P 都被占了（见 Settings 里那几个 Hk*）。
+    /// </summary>
+    public const string CancelHotkey = "Ctrl+Alt+C";
+
     const int PauseHotkeyId = 0xA1F0;
+    const int CancelHotkeyId = 0xA1F1;
 
     readonly TextBlock _text;
     readonly TextBlock _hint;
     readonly TextBlock _pauseLabel;
     readonly TextBlock _muteLabel;
     readonly Border _muteButton;
+    readonly Border _pauseButton;
     readonly Ellipse _dot;
     readonly RECT _region;
     readonly int _maxSeconds;
@@ -40,7 +48,9 @@ public sealed class RecordHud : Window
     bool _escArmed;
     /// <summary>热键没注册上时的兜底轮询用：上一拍那个组合键是不是按着的。</summary>
     bool _pauseChordDown;
+    bool _cancelChordDown;
     bool _hotkeyOk;
+    bool _cancelHotkeyOk;
     bool _encoding;
     int _lastFrames;
     TimeSpan _lastElapsed;
@@ -48,6 +58,20 @@ public sealed class RecordHud : Window
 
     /// <summary>用户按过 Esc 或者点了浮条。录制那边每帧问一次。</summary>
     public bool Stopped { get; private set; }
+
+    /// <summary>
+    /// 用户要取消：录到的东西不要了。跟 Stopped 分开两个标志，因为两者的收尾完全不同
+    /// ——那个要编码保存，这个要把临时帧和半成品都删掉。
+    /// 录制阶段和编码阶段都可能被置上。
+    /// </summary>
+    public bool Cancelled { get; private set; }
+
+    /// <summary>
+    /// 用户按了取消。录制阶段靠轮询 <see cref="Cancelled"/> 就够了（每帧问一次），
+    /// 但编码阶段没有那个循环，所以这儿给个事件，让调用方能立刻去掐编码。
+    /// 在界面线程上触发。
+    /// </summary>
+    public event Action? CancelRequested;
 
     /// <summary>正暂停着。录制那边每拍问一次，为 true 就不抓帧、也不走时钟。</summary>
     public bool Paused { get; private set; }
@@ -103,7 +127,7 @@ public sealed class RecordHud : Window
 
         // 自己拿 Border 拼一个按钮：Button 的默认模板在 AllowsTransparency 的窗口上
         // 会带一层灰底，而且点它要抢焦点。
-        var pause = new Border
+        _pauseButton = new Border
         {
             Background = new SolidColorBrush(Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF)),
             CornerRadius = new CornerRadius(5),
@@ -113,7 +137,7 @@ public sealed class RecordHud : Window
             Child = _pauseLabel,
             ToolTip = $"暂停 / 继续（{PauseHotkey}）",
         };
-        pause.MouseLeftButtonUp += (_, e) =>
+        _pauseButton.MouseLeftButtonUp += (_, e) =>
         {
             // 不让它冒到外面那层 Border 上——那层是「点一下就停」。
             e.Handled = true;
@@ -146,9 +170,37 @@ public sealed class RecordHud : Window
             ToggleMute();
         };
 
+        // 取消：红底红字，跟旁边那两个中性色的按钮拉开距离。
+        // 按下去录到的东西就没了，不能让它看起来跟「暂停」是一类操作。
+        var cancelLabel = new TextBlock
+        {
+            Text = "取消",
+            FontSize = 11.5,
+            Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0x9A, 0x92)),
+            VerticalAlignment = VerticalAlignment.Center,
+            FontFamily = new FontFamily("Microsoft YaHei UI"),
+        };
+        var cancel = new Border
+        {
+            Background = new SolidColorBrush(Color.FromArgb(0x33, 0xFF, 0x3B, 0x30)),
+            BorderBrush = new SolidColorBrush(Color.FromArgb(0x66, 0xFF, 0x3B, 0x30)),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(5),
+            Padding = new Thickness(8, 2, 8, 3),
+            Margin = new Thickness(6, 0, 0, 0),
+            Cursor = Cursors.Hand,
+            Child = cancelLabel,
+            ToolTip = $"取消，不保存（{CancelHotkey}）",
+        };
+        cancel.MouseLeftButtonUp += (_, e) =>
+        {
+            e.Handled = true;   // 别冒到外层那个「停止并保存」上
+            Cancel();
+        };
+
         _hint = new TextBlock
         {
-            Text = $"{PauseHotkey} 暂停 · Esc 停止并保存",
+            Text = $"{PauseHotkey} 暂停 · {CancelHotkey} 取消 · Esc 停止并保存",
             FontSize = 11.5,
             Foreground = new SolidColorBrush(Color.FromRgb(0x9A, 0xA0, 0xAA)),
             VerticalAlignment = VerticalAlignment.Center,
@@ -159,8 +211,9 @@ public sealed class RecordHud : Window
         var row = new StackPanel { Orientation = Orientation.Horizontal };
         row.Children.Add(_dot);
         row.Children.Add(_text);
-        row.Children.Add(pause);
+        row.Children.Add(_pauseButton);
         row.Children.Add(_muteButton);
+        row.Children.Add(cancel);
         row.Children.Add(_hint);
 
         Content = new Border
@@ -174,7 +227,7 @@ public sealed class RecordHud : Window
             Child = row,
             ToolTip = "点一下停止并保存",
         };
-        ((Border)Content).MouseLeftButtonUp += (_, _) => Stopped = true;
+        ((Border)Content).MouseLeftButtonUp += (_, _) => { if (!Cancelled) Stopped = true; };
 
         // 自己不接键盘（没焦点），只能盯着 Esc 的实时状态。顺便让红点闪起来。
         var poll = new System.Windows.Threading.DispatcherTimer
@@ -188,6 +241,7 @@ public sealed class RecordHud : Window
             // 热键被别的程序占了才走这条：轮询组合键，只在「刚按下」那一拍翻转，
             // 不然按住 200ms 就来回切好几次。代价是这个 p 会漏进被录的程序里。
             if (!_hotkeyOk) WatchPauseChord(ChordDown());
+            if (!_cancelHotkeyOk) WatchCancelChord(CancelChordDown());
 
             // 每 8 拍（约 500ms）翻一次，让人一眼看出还在录。
             // 暂停时不闪：停着的红点 + 「已暂停」才是「真的停住了」的样子。
@@ -211,19 +265,34 @@ public sealed class RecordHud : Window
                 _hotkeyOk = Win32.RegisterHotKey(
                     hwnd, PauseHotkeyId, spec.Win32Modifiers, spec.VirtualKey);
             if (!_hotkeyOk)
-            {
                 Log.Warn($"录制暂停热键 {PauseHotkey} 注册失败，改用轮询");
-                _hint.Text = "Esc 停止并保存";   // 热键没拿到就别在界面上承诺它
-            }
+
+            var cancelSpec = HotkeySpec.Parse(CancelHotkey);
+            if (!cancelSpec.IsEmpty)
+                _cancelHotkeyOk = Win32.RegisterHotKey(
+                    hwnd, CancelHotkeyId, cancelSpec.Win32Modifiers, cancelSpec.VirtualKey);
+            if (!_cancelHotkeyOk)
+                Log.Warn($"录制取消热键 {CancelHotkey} 注册失败，改用轮询");
+
+            // 提示条上只写真正拿到的那几个键：承诺了按不动的键，比不写还糟。
+            // 两个都没拿到也还有 Esc 和浮条上的按钮，功能不缺。
+            _hint.Text = (_hotkeyOk, _cancelHotkeyOk) switch
+            {
+                (true, true) => $"{PauseHotkey} 暂停 · {CancelHotkey} 取消 · Esc 停止并保存",
+                (true, false) => $"{PauseHotkey} 暂停 · Esc 停止并保存",
+                (false, true) => $"{CancelHotkey} 取消 · Esc 停止并保存",
+                _ => "Esc 停止并保存",
+            };
 
             System.Windows.Interop.HwndSource.FromHwnd(hwnd)?.AddHook(WndProc);
         };
 
         Closed += (_, _) =>
         {
-            if (!_hotkeyOk) return;
             var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
-            if (hwnd != IntPtr.Zero) Win32.UnregisterHotKey(hwnd, PauseHotkeyId);
+            if (hwnd == IntPtr.Zero) return;
+            if (_hotkeyOk) Win32.UnregisterHotKey(hwnd, PauseHotkeyId);
+            if (_cancelHotkeyOk) Win32.UnregisterHotKey(hwnd, CancelHotkeyId);
         };
 
         Loaded += (_, _) => Place();
@@ -231,10 +300,17 @@ public sealed class RecordHud : Window
 
     IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
-        if (msg == Win32.WM_HOTKEY && wParam.ToInt32() == PauseHotkeyId)
+        if (msg != Win32.WM_HOTKEY) return IntPtr.Zero;
+        switch (wParam.ToInt32())
         {
-            handled = true;
-            TogglePause();
+            case PauseHotkeyId:
+                handled = true;
+                TogglePause();
+                break;
+            case CancelHotkeyId:
+                handled = true;
+                Cancel();
+                break;
         }
         return IntPtr.Zero;
     }
@@ -245,6 +321,12 @@ public sealed class RecordHud : Window
         && (Win32.GetAsyncKeyState(Win32.VK_MENU) & 0x8000) != 0
         && (Win32.GetAsyncKeyState(0x50 /* VK_P */) & 0x8000) != 0;
 
+    /// <summary>取消键那个组合现在按着没有。</summary>
+    static bool CancelChordDown()
+        => (Win32.GetAsyncKeyState(Win32.VK_CONTROL) & 0x8000) != 0
+        && (Win32.GetAsyncKeyState(Win32.VK_MENU) & 0x8000) != 0
+        && (Win32.GetAsyncKeyState(0x43 /* VK_C */) & 0x8000) != 0;
+
     /// <summary>只在「上一拍没按、这一拍按下」时翻转。拎出来是为了能测。</summary>
     internal void WatchPauseChord(bool down)
     {
@@ -252,10 +334,47 @@ public sealed class RecordHud : Window
         _pauseChordDown = down;
     }
 
+    /// <summary>
+    /// 取消键的兜底轮询。跟暂停那个一样只认「刚按下」那一拍——取消是不可逆的，
+    /// 更不能因为按住 200ms 就重复触发。
+    /// </summary>
+    internal void WatchCancelChord(bool down)
+    {
+        if (down && !_cancelChordDown) Cancel();
+        _cancelChordDown = down;
+    }
+
+    /// <summary>
+    /// 取消：录到的东西不要了。
+    ///
+    /// 跟 TogglePause 不同，编码阶段照样受理——编几百帧要好几秒，
+    /// 那段时间里用户最可能想反悔，也正是「只能暂停不能取消」最难受的地方。
+    /// 取消完就把暂停解掉：录制循环是靠 paused 挂着的，不解开它会先卡在
+    /// 暂停分支里，要多等一拍才看得见取消。
+    /// </summary>
+    internal void Cancel()
+    {
+        if (Cancelled) return;
+        Cancelled = true;
+        Paused = false;
+        _dot.Opacity = 1.0;
+        _dot.Fill = new SolidColorBrush(Color.FromRgb(0x8A, 0x90, 0x99));   // 灰：不再录了
+        _text.Text = "正在取消…";
+        _pauseLabel.Text = "暂停";
+        _pauseButton.Visibility = Visibility.Collapsed;
+        _muteButton.Visibility = Visibility.Collapsed;
+        _hint.Text = "";
+
+        // 订阅方在这儿去掐编码。放在界面都改完之后：这个回调可能同步跑挺久
+        // （要等外部进程被杀掉），先把「正在取消…」画出来，屏幕上才不是一僵。
+        try { CancelRequested?.Invoke(); }
+        catch (Exception ex) { Log.Warn("取消录制的回调出错：" + ex.Message); }
+    }
+
     /// <summary>暂停 / 继续。编码阶段按了不算——那时候已经没帧可录了。</summary>
     internal void TogglePause()
     {
-        if (_encoding || Stopped) return;
+        if (_encoding || Stopped || Cancelled) return;
         Paused = !Paused;
         _dot.Opacity = 1.0;
         _dot.Fill = new SolidColorBrush(Paused
@@ -271,7 +390,7 @@ public sealed class RecordHud : Window
     /// <summary>静音 / 取消静音。只有开着音频录制时才显示这个按钮。</summary>
     internal void ToggleMute()
     {
-        if (_encoding || Stopped || !_captureAudio) return;
+        if (_encoding || Stopped || Cancelled || !_captureAudio) return;
         Muted = !Muted;
         _muteLabel.Text = Muted ? "🔇" : "🔊";
         _muteButton.Background = new SolidColorBrush(Muted
@@ -290,6 +409,9 @@ public sealed class RecordHud : Window
     /// </summary>
     internal void WatchEsc(bool escDown)
     {
+        // 已经取消了就别再认 Esc：那会把「不要了」翻成「停下并保存」，
+        // 正好跟用户刚按的相反。
+        if (Cancelled) return;
         if (!escDown) _escArmed = true;
         else if (_escArmed) Stopped = true;
     }
@@ -308,7 +430,9 @@ public sealed class RecordHud : Window
 
     void Render()
     {
-        if (_encoding) return;
+        // 取消之后那行字就定在「正在取消…」：这时候还可能有在途的 Report 进来，
+        // 让它把字改回「录制中…」的话，屏幕上看着像没取消掉。
+        if (_encoding || Cancelled) return;
         var head = Paused ? "已暂停" : "录制中…";
         _text.Text = $"{head} {_lastElapsed.TotalSeconds:0.0}s / {_maxSeconds}s（{_lastFrames} 帧）";
     }
@@ -317,11 +441,14 @@ public sealed class RecordHud : Window
     public void ReportEncoding(int frames)
     {
         _encoding = true;
+        if (Cancelled) return;   // 取消了就别再改字，让「正在取消…」留着
         _dot.Opacity = 1.0;
         _dot.Fill = new SolidColorBrush(Color.FromRgb(0x4C, 0x8D, 0xFF));
         _text.Text = $"正在编码 {frames} 帧…";
         _pauseLabel.Text = "暂停";
-        _hint.Text = "";
+        // 编码阶段暂停没意义，但取消有——这时候取消按钮要留着。
+        _pauseButton.Visibility = Visibility.Collapsed;
+        _hint.Text = _cancelHotkeyOk ? $"{CancelHotkey} 取消" : "";
     }
 
     /// <summary>

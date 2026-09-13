@@ -44,6 +44,11 @@ static class RecordProbe
         step("录制：跟不上帧率也按秒数收，不会超时长", TimeCapProbe);
         step("录制：选区宽高吸到 4 的倍数（H.264 要求）", Snap4Probe);
         step("录制：暂停键要「刚按下」才翻转，按住不会来回切", PauseChordProbe);
+        step("录制：取消键也只认「刚按下」，且编码阶段照样能按", CancelChordProbe);
+        step("录制：编码阶段按取消能触发中断事件", CancelWhileEncodingProbe);
+        step("录制：取消之后 Esc 和点浮条都翻不回「保存」", CancelWinsProbe);
+        step("录制：取消会立刻收摊，帧不交付、临时目录删干净", CancelDiscardProbe);
+        step("录制：编码中途取消，不留半成品文件", CancelEncodeProbe);
         step("录制：真编 MP4，容器和时长都对", Mp4RealProbe);
         step("录制：MP4 从 WPF 界面线程也能编", Mp4UiProbe);
         step("录制：MP4 失败不留下空文件或额外 WebP", Mp4FailureCleanupProbe);
@@ -952,6 +957,173 @@ static class RecordProbe
             Need(!hud.Paused, "编码阶段还能被按成暂停");
         }
         finally { hud.Close(); Pump(); }
+    }
+
+    // ------------------------------------------------------------- 取消
+
+    /// <summary>
+    /// 取消键的边沿判定。跟暂停那项一个道理，但多验一条：编码阶段必须还能按。
+    /// 「只能暂停不能取消」就是从这儿来的——编几百帧要好几秒，那段时间用户最想反悔。
+    /// </summary>
+    static void CancelChordProbe()
+    {
+        var hud = new RecordHud(SmallRegion(), 30, captureAudio: false);
+        try
+        {
+            hud.Show();
+            Pump();
+            Need(!hud.Cancelled, "刚建出来就是已取消");
+
+            hud.WatchCancelChord(false);   // 没按：不该有动作
+            Need(!hud.Cancelled, "没按就取消了");
+
+            hud.WatchCancelChord(true);
+            Need(hud.Cancelled, "按下没取消");
+
+            var fired = 0;
+            hud.CancelRequested += () => fired++;
+            hud.WatchCancelChord(true);    // 按住：不该重复触发
+            hud.WatchCancelChord(true);
+            Need(fired == 0, $"按住重复触发了取消：{fired} 次");
+        }
+        finally { hud.Close(); Pump(); }
+    }
+
+    /// <summary>
+    /// 编码阶段按取消要能触发事件——录制循环这时已经退出，只剩这个事件能去掐编码。
+    /// 单开一项是因为上一项里浮条已经是「已取消」状态了，再按不会有事件。
+    /// </summary>
+    static void CancelWhileEncodingProbe()
+    {
+        var hud = new RecordHud(SmallRegion(), 30, captureAudio: false);
+        try
+        {
+            hud.Show();
+            Pump();
+            var fired = 0;
+            hud.CancelRequested += () => fired++;
+
+            hud.ReportEncoding(120);
+            Need(!hud.Cancelled, "报编码把浮条变成已取消了");
+
+            hud.WatchCancelChord(true);
+            Need(hud.Cancelled, "编码阶段按取消没生效");
+            Need(fired == 1, $"编码阶段取消该触发一次事件，实际 {fired} 次");
+        }
+        finally { hud.Close(); Pump(); }
+    }
+
+    /// <summary>
+    /// 取消之后再按 Esc 或者点浮条，都不能翻回「停止并保存」。
+    /// 这两条路本来都是置 Stopped 的，而 Stopped 那条会去编码保存——
+    /// 正好跟用户刚按的取消相反。
+    /// </summary>
+    static void CancelWinsProbe()
+    {
+        var hud = new RecordHud(SmallRegion(), 30, captureAudio: false);
+        try
+        {
+            hud.Cancel();
+            Need(hud.Cancelled, "Cancel() 没置上标志");
+            Need(!hud.Stopped, "取消不该顺带置上 Stopped");
+
+            // Esc：先松开一次让它 armed，再按下
+            hud.WatchEsc(escDown: false);
+            hud.WatchEsc(escDown: true);
+            Need(!hud.Stopped, "取消之后按 Esc 又翻回了「停止并保存」");
+
+            // 暂停也不该还能按
+            hud.WatchPauseChord(true);
+            Need(!hud.Paused, "取消之后还能按成暂停");
+        }
+        finally { hud.Close(); }
+    }
+
+    /// <summary>
+    /// 取消要真的中断录制循环，并且录到的帧一律不交付。
+    ///
+    /// 验三件事：状态是 Cancelled（不是 Stopped，也不是 Failed——取消常常正好是
+    /// 0 帧，报 Failed 的话用户看到的是「录制没成功」）、墙上时间远小于时长预算、
+    /// 临时目录能删干净（帧文件的句柄都放开了，没有还在写盘的）。
+    /// </summary>
+    static void CancelDiscardProbe()
+    {
+        var frames = 0;
+        var cancel = false;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var r = Task.Run(async () =>
+        {
+            var run = RecordService.RunAsync(SmallRegion(), fps: 10, maxSeconds: 30,
+                onProgress: (n, _) => frames = n,
+                discarded: () => Volatile.Read(ref cancel),
+                capture: FakeCapture);
+
+            while (Volatile.Read(ref frames) < 3) await Task.Delay(20);
+            Volatile.Write(ref cancel, true);
+            return await run;
+        }).GetAwaiter().GetResult();
+        sw.Stop();
+
+        try
+        {
+            Need(r.Stopped == RecordStop.Cancelled,
+                $"取消该报 Cancelled，得到 {r.Stopped}");
+            // 预算 30 秒，取消是在录到 3 帧（约 0.3 秒）之后按的
+            Need(sw.Elapsed.TotalSeconds < 5,
+                $"取消没中断循环，跑了 {sw.Elapsed.TotalSeconds:0.0}s（预算 30s）");
+        }
+        finally { r.Cleanup(); }
+
+        // Cleanup 之后临时目录必须没了：取消时如果还有帧在写盘，句柄没放开就删不掉，
+        // 用户的临时目录里会一次次攒下几百 MB 的 PNG。
+        Need(!Directory.Exists(r.Dir), $"取消之后临时目录还在：{r.Dir}");
+    }
+
+    /// <summary>
+    /// 编码中途取消：不能在截图目录里留下半成品。
+    ///
+    /// 用 GIF 这条（自己的逐帧循环，每帧查一次 token，不依赖外部程序，也不依赖
+    /// 系统有没有 H.264 编码器）。
+    ///
+    /// 帧列表把那 40 个文件重复堆到 800 项：磁盘上还是 40 个小文件，但编码要走
+    /// 800 轮「解 PNG + 量化 + LZW」，稳稳是秒级。不这么做的话 48×32 的 40 帧
+    /// 可能十几毫秒就编完了，取消根本插不进去，这一项会时绿时红。
+    /// </summary>
+    static void CancelEncodeProbe()
+    {
+        var (dir, paths) = WriteFrames(40);
+        var many = Enumerable.Repeat(paths, 20).SelectMany(p => p).ToList();
+        var outDir = Path.Combine(dir, "out");
+        Directory.CreateDirectory(outDir);
+        var outNoExt = Path.Combine(outDir, "cancelled");
+        try
+        {
+            using var cts = new CancellationTokenSource();
+            var cancelled = false;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                Task.Run(async () =>
+                {
+                    var enc = AnimEncoder.SaveAsync(many, outNoExt, 10, RecordFormat.Gif, null, cts.Token);
+                    cts.CancelAfter(50);   // 编了一小会儿就掐
+                    await enc;
+                }).GetAwaiter().GetResult();
+            }
+            catch (OperationCanceledException) { cancelled = true; }
+            sw.Stop();
+
+            Need(cancelled, "编码没有因为取消而中断");
+            // 取消得跟手：每帧查一次 token，最多等一帧。给到 3 秒是给慢机器留的余量，
+            // 但 800 帧真编完远不止这个数，所以这条能分辨「真中断了」和「编完才放手」。
+            Need(sw.Elapsed.TotalSeconds < 3,
+                $"取消之后还编了 {sw.Elapsed.TotalSeconds:0.0}s 才放手");
+            // 半成品必须删掉：留个能双击打开、播到一半就断的 GIF 比什么都不留更糟
+            var left = Directory.GetFiles(outDir);
+            Need(left.Length == 0,
+                $"取消之后还留着文件：{string.Join(", ", left.Select(Path.GetFileName))}");
+        }
+        finally { Wipe(dir); }
     }
 
     // ------------------------------------------------------------- MP4

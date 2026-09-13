@@ -122,7 +122,7 @@ public sealed partial class SettingsWindow
             LeftRow(SmallButton("试一下", () => _ = TryCaptureAsync())));
 
         Section(page, "录制动图",
-            Hint($"录的是实时画面，最高 60 fps；实际帧率会随选区大小和机器性能变化。高流畅场景优先选 WebP / MP4，部分 GIF 播放器会限速。标注不会进去。`Esc` 停下，`{RecordHud.PauseHotkey}` 暂停。"),
+            Hint($"录的是实时画面，最高 60 fps；实际帧率会随选区大小和机器性能变化。高流畅场景优先选 WebP / MP4，部分 GIF 播放器会限速。标注不会进去。`Esc` 停下并保存，`{RecordHud.PauseHotkey}` 暂停，`{RecordHud.CancelHotkey}` 取消（录制和编码中都能按，不留文件）。"),
             Field("格式", Combo(new (string, RecordFormat)[]
             {
                 ("WebP", RecordFormat.Webp),

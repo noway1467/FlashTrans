@@ -90,9 +90,11 @@ public static class Mp4Encoder
     }
 
     public static async Task<AnimResult> SaveAsync(
-        IReadOnlyList<string> frames, string outPath, int fps, string? audioPath = null)
+        IReadOnlyList<string> frames, string outPath, int fps, string? audioPath = null,
+        CancellationToken ct = default)
     {
         if (frames.Count == 0) throw new InvalidOperationException("没有帧可以编码。");
+        ct.ThrowIfCancellationRequested();
         fps = Math.Max(1, fps);
         var finalPath = Path.GetFullPath(outPath);
         var tempPath = SidecarPath(finalPath);
@@ -123,7 +125,10 @@ public static class Mp4Encoder
             source.SampleRequested += (_, args) =>
             {
                 var req = args.Request;
-                if (next >= frames.Count)
+                // 取消了就当流结束：不给样本，转码器立刻收。这条比 AsTask(ct) 更快
+                // 见效——WinRT 那边的 Cancel 要等当前这一下转码走完才响应。
+                // 半成品文件由下面的 catch 删掉。
+                if (next >= frames.Count || ct.IsCancellationRequested)
                 {
                     // 不给样本就是流结束了。必须显式走这一步，不然转码器一直等。
                     req.Sample = null;
@@ -182,8 +187,12 @@ public static class Mp4Encoder
                     throw new InvalidOperationException(
                         $"系统拒绝转码（{prepared.FailureReason}）。这台机器可能没装 H.264 编码器。");
 
-                await prepared.TranscodeAsync();
+                await prepared.TranscodeAsync().AsTask(ct);
             }
+
+            // 上面那个「取消就不给样本」的口子会让转码正常结束、留下一个短文件。
+            // 所以转码回来必须再查一次，否则取消会变成「存了半截视频」。
+            ct.ThrowIfCancellationRequested();
 
             if (failure is not null)
                 throw new InvalidOperationException("喂帧的时候出错了：" + failure.Message, failure);
@@ -198,11 +207,18 @@ public static class Mp4Encoder
                 var muxedPath = tempPath + ".muxed.mp4";
                 try
                 {
-                    await MuxAudioVideoAsync(tempPath, audioPath, muxedPath);
+                    await MuxAudioVideoAsync(tempPath, audioPath, muxedPath, ct);
                     File.Delete(tempPath);  // 删除只有视频的临时文件
                     File.Move(muxedPath, finalPath, overwrite: true);
                     var muxedInfo = new FileInfo(finalPath);
                     return new AnimResult(finalPath, RecordFormat.Mp4, muxedInfo.Length);
+                }
+                catch (OperationCanceledException)
+                {
+                    // 取消不能走下面那条「退回纯视频」——那是给合成出错兜底的，
+                    // 在这儿会变成「用户按了取消，反而存下一个没声音的片子」。
+                    if (File.Exists(muxedPath)) File.Delete(muxedPath);
+                    throw;
                 }
                 catch (Exception ex)
                 {
@@ -294,8 +310,10 @@ public static class Mp4Encoder
     /// 使用 MediaComposition 来合并音视频轨。这是 WinRT 提供的高层 API，
     /// 比直接操作 MediaFoundation 的 IMFSourceReader/IMFSinkWriter 简单很多。
     /// </summary>
-    static async Task MuxAudioVideoAsync(string videoPath, string audioPath, string outPath)
+    static async Task MuxAudioVideoAsync(
+        string videoPath, string audioPath, string outPath, CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         var composition = new Windows.Media.Editing.MediaComposition();
 
         // 加载视频文件
@@ -316,6 +334,7 @@ public static class Mp4Encoder
         var file = await folder.CreateFileAsync(
             Path.GetFileName(outPath), CreationCollisionOption.ReplaceExisting);
 
-        await composition.RenderToFileAsync(file, Windows.Media.Editing.MediaTrimmingPreference.Fast);
+        await composition.RenderToFileAsync(file, Windows.Media.Editing.MediaTrimmingPreference.Fast)
+                         .AsTask(ct);
     }
 }
