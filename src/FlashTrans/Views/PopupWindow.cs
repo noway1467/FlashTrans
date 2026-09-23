@@ -29,6 +29,7 @@ public sealed partial class PopupWindow : Window
     bool _stashed;
     bool _everActive;
     bool _closing;
+    bool _ocrPending;
     CancellationTokenSource? _cts;
     TranslateBatch? _batch;
 
@@ -97,7 +98,7 @@ public sealed partial class PopupWindow : Window
         };
         // 关窗过程中焦点会交出去，那会再走一遍 Deactivated；那时候窗口句柄已经在拆，
         // 别再去动它的 z-order。
-        Closing += (_, _) => _closing = true;
+        Closing += (_, _) => { _closing = true; _cts?.Cancel(); };
     }
 
     // ------------------------------------------------------------- 布局
@@ -159,7 +160,10 @@ public sealed partial class PopupWindow : Window
             Engine.Cache.InvalidateText(_text);
             Run();
         }, 12));
-        tools.Children.Add(UiKit.IconButton(UiKit.IconExpand, "在主窗口中打开", (_, _) => _host.ExpandToMain(_text), 12));
+        tools.Children.Add(UiKit.IconButton(UiKit.IconExpand, "在主窗口中打开", (_, _) =>
+        {
+            if (_text.Length > 0) _host.ExpandToMain(_text);
+        }, 12));
         _pinBtn = PinButton();
         tools.Children.Add(_pinBtn);
         _stashBtn = UiKit.IconButton(UiKit.IconMinimize, "临时收起", (_, _) => StashPopup(), 12);

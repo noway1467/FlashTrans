@@ -21,6 +21,11 @@ public sealed class OcrResultWindow : Window
     public event Action? OpenSettings;
 
     readonly TextBox _box;
+    readonly TextBlock _head;
+    readonly Button _copyBtn;
+    readonly Button _translateBtn;
+    bool _loading;
+    bool _closed;
     double _lastNormalWidth;
     double _lastNormalHeight;
 
@@ -51,10 +56,10 @@ public sealed class OcrResultWindow : Window
             Margin = new Thickness(14, 10, 14, 0),
         };
 
-        var head = UiKit.Text(Count(text), 12.5, "TextDim");
+        var head = _head = UiKit.Text(Count(text), 12.5, "TextDim");
         head.Margin = new Thickness(15, 10, 14, 0);
         // 改了字数要跟着变，不然那行数字跟框里的内容对不上
-        _box.TextChanged += (_, _) => head.Text = Count(_box.Text);
+        _box.TextChanged += (_, _) => { if (!_loading) head.Text = Count(_box.Text); };
 
         var barRight = new StackPanel
         {
@@ -62,8 +67,10 @@ public sealed class OcrResultWindow : Window
             HorizontalAlignment = HorizontalAlignment.Right,
         };
         barRight.Children.Add(Btn("关闭 (Esc)", "GhostBtn", Close));
-        barRight.Children.Add(Btn("翻译 (Ctrl+Enter)", "OutlineBtn", FireTranslate));
-        barRight.Children.Add(Btn("复制 (Ctrl+C)", "PrimaryBtn", FireCopy));
+        _translateBtn = Btn("翻译 (Ctrl+Enter)", "OutlineBtn", FireTranslate);
+        _copyBtn = Btn("复制 (Ctrl+C)", "PrimaryBtn", FireCopy);
+        barRight.Children.Add(_translateBtn);
+        barRight.Children.Add(_copyBtn);
 
         var settingsBtn = Btn("设置", "GhostBtn", () => OpenSettings?.Invoke());
         settingsBtn.Content = new StackPanel
@@ -96,14 +103,45 @@ public sealed class OcrResultWindow : Window
         PreviewKeyDown += OnKey;
         SizeChanged += (_, _) => RememberNormalSize();
         Closing += (_, _) => SaveSize();
+        Closed += (_, _) => _closed = true;
 
         // 一打开就选中全部：多数时候识别得对，直接 Ctrl+C 走人；
         // 要改的话按一下方向键就取消选中了，不挡事。
         Loaded += (_, _) =>
         {
+            if (_loading) return;
             _box.Focus();
             _box.SelectAll();
         };
+    }
+
+    internal void ShowRecognizing()
+    {
+        _loading = true;
+        _box.IsReadOnly = true;
+        _box.Text = "";
+        _head.Text = "正在识别文字…（本机处理，不上传截图）";
+        _copyBtn.IsEnabled = _translateBtn.IsEnabled = false;
+    }
+
+    internal bool SetRecognitionResult(string text)
+    {
+        if (_closed) return false;
+        _loading = false;
+        _box.IsReadOnly = false;
+        _box.Text = text;
+        _head.Text = Count(text);
+        _copyBtn.IsEnabled = _translateBtn.IsEnabled = true;
+        // 后台完成不能抢回用户已经切走的焦点。
+        if (IsActive) _box.Focus();
+        _box.SelectAll();
+        return true;
+    }
+
+    internal void SetRecognitionError(string message)
+    {
+        if (_closed) return;
+        _head.Text = message;
     }
 
     void RememberNormalSize()
@@ -163,7 +201,7 @@ public sealed class OcrResultWindow : Window
     /// </summary>
     void Fire(Action<string> run)
     {
-        if (_fired) return;
+        if (_fired || _loading || _closed) return;
         var text = _box.Text.TrimEnd();
         if (string.IsNullOrWhiteSpace(text)) return;   // 保留代码缩进，但纯空白不触发动作
 

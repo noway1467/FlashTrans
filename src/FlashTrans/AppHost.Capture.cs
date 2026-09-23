@@ -91,52 +91,90 @@ public sealed partial class AppHost
     /// <summary>识别这块图里的文字，送进主窗口或者直接弹翻译。</summary>
     async Task OcrAsync(CapturedImage shot, bool translate, bool copyDirectly = false)
     {
-        if (!OcrService.IsAvailable && !OcrService.RapidModelsPresent)
-        {
-            // 图还在手上，别让用户白截一次——先塞进剪贴板再报错
-            var copied = TrySetClipboardImage(shot);
-            var detail = OcrService.IsAvailable
-                ? OcrService.RapidModelsHint() + "。可以参考 models\\v6\\README.txt 补上模型文件。"
-                : OcrService.NoEngineHint()
-                  + (OcrService.RapidModelsHint() is { } hint ? "\n\n" + hint + "。到「设置 → 文字识别」里可以选引擎。" : "");
-            AppDialog.Info(_main is { IsVisible: true } ? _main : null, "缺少文字识别引擎",
-                "系统 OCR 语言包和 RapidOCR 本地模型都没就位，暂时不能识别截图里的文字。",
-                tone: DialogTone.Warning,
-                detail: detail
-                        + (copied ? "\n刚才那张图已经复制到剪贴板了，可以先粘出去。" : ""));
-            return;
-        }
-
-        var text = await RecognizeAsync(shot, null);
-        if (text is null) return;
-
+        using var lifetime = new CancellationTokenSource();
+        var token = lifetime.Token;
+        PopupWindow? popup = null;
+        OcrResultWindow? result = null;
         if (translate)
         {
-            if (S.OcrCopyText) TrySetClipboardBoth(shot, text);
             Point? anchor = S.PopupPlace == PopupPlace.NearMouse
                 ? ScreenHelper.ToDip(ScreenHelper.CursorPos(), _popup)
                 : null;
-            ShowPopupFor(text, anchor);
+            HideSelectionIcon();
+            popup = EnsurePopup();
+            token = popup.ShowOcrLoading(anchor);
         }
-        else
+        else if (!copyDirectly)
         {
-            if (copyDirectly)
+            result = CreateOcrResult("");
+            result.ShowRecognizing();
+            result.Closed += OnResultClosed;
+            result.Show();
+            result.Activate();
+        }
+
+        try
+        {
+            // 模型枚举也可能冷启动 WinRT，先让窗口完成首轮布局再到后台检查。
+            await Dispatcher.Yield(DispatcherPriority.Background);
+            token.ThrowIfCancellationRequested();
+            var available = await Task.Run(() => OcrService.RapidModelsPresent || OcrService.IsAvailable, token);
+            token.ThrowIfCancellationRequested();
+            if (!available)
             {
-                if (TrySetClipboard(text)) Toast(CopiedToast(text));
-                else Toast("复制 OCR 结果失败");
+                popup?.ClosePopup();
+                result?.Close();
+                // 图还在手上，别让用户白截一次——先塞进剪贴板再报错。
+                var copied = TrySetClipboardImage(shot);
+                AppDialog.Info(_main is { IsVisible: true } ? _main : null, "缺少文字识别引擎",
+                    "系统 OCR 语言包和 RapidOCR 本地模型都没就位，暂时不能识别截图里的文字。",
+                    tone: DialogTone.Warning,
+                    detail: OcrService.NoEngineHint() + "\n\n" + OcrService.RapidModelsHint()
+                        + (copied ? "\n刚才那张图已经复制到剪贴板了，可以先粘出去。" : ""));
                 return;
             }
 
-            // 「识别文字」：把字摆在一个能改的框里。识别难免有错字，
-            // 直接进剪贴板的话用户得粘出去才发现错了。
-            // 不往主窗口的输入框里塞——要翻译有「识别并翻译」，
-            // 这个按钮是把图上的字拿去用在别处。
-            ShowOcrResult(text);
+            var text = await RecognizeAsync(shot, null, token, ReportError);
+            token.ThrowIfCancellationRequested();
+            if (text is null) return;
+
+            if (popup is not null)
+            {
+                // CompleteOcr 会切换到翻译令牌；先确认归属，旧结果不能覆盖新翻译或剪贴板。
+                if (!popup.IsOcrRequestCurrent(token)) return;
+                if (S.OcrCopyText) TrySetClipboardBoth(shot, text);
+                popup.CompleteOcr(token, text);
+            }
+            else if (copyDirectly)
+            {
+                if (TrySetClipboard(text)) Toast(CopiedToast(text));
+                else Toast("复制 OCR 结果失败");
+            }
+            else result?.SetRecognitionResult(text);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { /* 关闭或被新内容取代 */ }
+        catch (Exception ex)
+        {
+            Log.Error("截图文字识别失败", ex);
+            ReportError("识别失败：" + ex.Message);
+        }
+        finally
+        {
+            if (result is not null) result.Closed -= OnResultClosed;
+        }
+
+        void OnResultClosed(object? sender, EventArgs e) => lifetime.Cancel();
+        void ReportError(string message)
+        {
+            if (token.IsCancellationRequested) return;
+            if (popup is not null) popup.FailOcr(token, message);
+            else if (result is not null) result.SetRecognitionError(message);
+            else Toast(message);
         }
     }
 
     /// <summary>摆出识别结果，让用户改完再挑复制还是翻译。</summary>
-    void ShowOcrResult(string text)
+    OcrResultWindow CreateOcrResult(string text)
     {
         var win = new OcrResultWindow(text);
         win.Copy += t =>
@@ -152,8 +190,7 @@ public sealed partial class AppHost
             ShowPopupFor(t, anchor);
         };
         win.OpenSettings += () => ShowSettings();
-        win.Show();
-        win.Activate();
+        return win;
     }
 
     /// <summary>钉住截图。复制和保存继续走主程序的既有路径，销毁只关钉住窗。</summary>
@@ -194,26 +231,29 @@ public sealed partial class AppHost
     /// 识别，顺带把「没认出字」和「引擎缺失」分开提示。返回 null 表示不用往下走了。
     /// saved 是图片存到了哪儿：识别失败时也要告诉用户图还在，别让人以为整个白截了。
     /// </summary>
-    async Task<string?> RecognizeAsync(CapturedImage shot, string? saved)
+    async Task<string?> RecognizeAsync(CapturedImage shot, string? saved,
+        CancellationToken token, Action<string> reportError)
     {
         // OCR 的自动检测独立于翻译源语言；不能被主窗口上次选中的语种锁住。
         var lang = S.OcrLang;
+        var engine = S.OcrEngine;
         var kept = saved is null ? "" : $"（图片已存：{Path.GetFileName(saved)}）";
         string text;
         try
         {
             // 识别是 CPU 活儿，别占着界面线程
-            text = await Task.Run(() => OcrService.RecognizeAsync(shot, lang, engine: S.OcrEngine));
+            text = await Task.Run(() => OcrService.RecognizeAsync(shot, lang, token, engine), token);
+            token.ThrowIfCancellationRequested();
         }
         catch (InvalidOperationException ex)
         {
-            Toast(ex.Message + kept);
+            reportError(ex.Message + kept);
             return null;
         }
 
         if (string.IsNullOrWhiteSpace(text))
         {
-            Toast($"没识别出文字（{shot.Width}×{shot.Height}）。试试选大一点，或者换个识别语言{kept}");
+            reportError($"没识别出文字（{shot.Width}×{shot.Height}）。试试选大一点，或者换个识别语言{kept}");
             return null;
         }
         return text.TrimEnd();

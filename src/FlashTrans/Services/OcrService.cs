@@ -45,6 +45,18 @@ public static partial class OcrService
 
     public static bool IsAvailable => AvailableLanguages.Length > 0;
 
+    /// <summary>仅预加载本地引擎，不截图、不推理、不联网，也不占 UI 线程。</summary>
+    internal static Task WarmupAsync(string? engine, string? preferred) => Task.Run(() =>
+    {
+        try
+        {
+            if (!string.Equals(engine, "system", StringComparison.OrdinalIgnoreCase)
+                && RapidModelsPresent && RapidEngine() is not null) return;
+            foreach (var tag in RecognitionLanguages(preferred)) _ = EngineFor(tag);
+        }
+        catch (Exception ex) { Log.Warn("预加载本地 OCR 失败：" + ex.Message); }
+    });
+
     /// <summary>
     /// 挑一个能用的识别语言。传进来的是本程序的统一语言代码（zh-CN / en / ja …）。
     /// 系统里可能装的是 zh-Hans-CN 这类更长的标签，所以按前缀匹配。

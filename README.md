@@ -55,6 +55,22 @@ tools\publish.cmd small  # 依赖 .NET 9 Desktop Runtime
 - 工具条里有标注、长截图、录制、识别、钉住、保存、复制。
 - 钉住后可以把截图贴在屏幕上；鼠标移到贴图上能复制、保存或销毁。
 - OCR 用本机 RapidOCR 或 Windows OCR，不上传截图。小字、花底色、竖排可能识别不准，重要内容要人工核对。
+- 识别文字和识别后翻译会先显示窗口，识别完成后原地填入结果；识别中可关闭或收起，旧结果不会重新弹窗或覆盖下一次翻译。
+- 程序启动后的空闲阶段会预加载翻译弹窗和本地 OCR 引擎，减少首次调用的初始化等待；识别耗时仍取决于截图大小和所选引擎。
+
+### 启动耗时验证
+
+先构建当前自测程序，再在独立进程中分别测量冷调用和预加载后的调用。测试使用便携隔离配置，不请求外部翻译接口；输出的是 WPF 渲染帧时间和 OCR 流程完成时间，不是翻译网络耗时或显示器实际呈现延迟。
+
+```powershell
+dotnet build .\tests\FlashTrans.SelfTest\FlashTrans.SelfTest.csproj -c Release --nologo
+if ($LASTEXITCODE -ne 0) { throw '自测构建失败，停止执行。' }
+$selfTest = '.\tests\FlashTrans.SelfTest\bin\Release\net9.0-windows10.0.19041.0\FlashTrans.SelfTest.dll'
+dotnet $selfTest --only-startup
+dotnet $selfTest --only-startup --preload-startup
+```
+
+该定向测试也覆盖 OCR 回填、关闭、替换、收起和空白截图反馈；完整自测包含这些回归。
 
 ## 数据
 

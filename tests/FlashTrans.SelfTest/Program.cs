@@ -37,6 +37,13 @@ static class Program
             ThemeService.ApplyAccent(s.AccentColor);
         });
 
+        if (args.Contains("--only-startup"))
+        {
+            WindowStartupProbe.RunAll(Step, args.Contains("--preload-startup"));
+            app.Shutdown();
+            return _fail == 0 ? 0 : 1;
+        }
+
         CacheProbe.RunAll(Step);
         SettingsProbe.RunAll(Step);
         HttpVersionProbe.RunAll(Step);
@@ -70,6 +77,7 @@ static class Program
             return _fail == 0 ? 0 : 1;
         }
 
+        WindowStartupProbe.RunAll(Step);
         var host = new AppHost();
         UiProbe.RunAll(host, Step);
         OcrProbe.RunAll(Step);

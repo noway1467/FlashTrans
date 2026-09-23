@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using FlashTrans.Core;
 using FlashTrans.Interop;
 using FlashTrans.Services;
@@ -17,6 +18,50 @@ public sealed partial class PopupWindow
     {
         text = text.Trim();
         if (text.Length == 0) return;
+
+        _cts?.Cancel();
+        _ocrPending = false;
+        PrepareShow(text, anchor, "正在准备翻译…");
+        Run();
+    }
+
+    /// <summary>识别期间先摆出结果窗；令牌同时标记这次内容的所有权。</summary>
+    internal CancellationToken ShowOcrLoading(Point? anchor)
+    {
+        _cts?.Cancel();
+        _cts = new CancellationTokenSource();
+        _ocrPending = true;
+        PrepareShow("", anchor, "正在识别文字…（本机处理，不上传截图）");
+        return _cts.Token;
+    }
+
+    internal bool IsOcrRequestCurrent(CancellationToken token) =>
+        _ocrPending && !_closing && !token.IsCancellationRequested && _cts?.Token == token;
+
+    internal bool CompleteOcr(CancellationToken token, string text)
+    {
+        if (!IsOcrRequestCurrent(token)) return false;
+        _ocrPending = false;
+        _text = text.Trim();
+        _dictBtn.Visibility = S.EudicEnabled && IsWordLike(_text) ? Visibility.Visible : Visibility.Collapsed;
+        // 不调用 Show/Activate/Place：收起的继续收起，拖过的位置也不跳回去。
+        Run();
+        return true;
+    }
+
+    internal void FailOcr(CancellationToken token, string message)
+    {
+        if (!IsOcrRequestCurrent(token)) return;
+        _result.ShowMessage(message, dim: false);
+        _status.Text = "识别未完成 · 可以重新截图，或在设置中更换识别引擎";
+    }
+
+    void PrepareShow(string text, Point? anchor, string message)
+    {
+        _batch = null;
+        _result.ShowMessage(message);
+        _status.Text = message;
+        _status.SetResourceReference(ForegroundProperty, "TextFaint");
 
         // 新翻译一来，之前收起的那个就作废：按收起快捷键该拿到这一次的结果，
         // 而不是把上一段译文又捞回来。
@@ -38,7 +83,7 @@ public sealed partial class PopupWindow
         ApplyLayoutSettings();
         RebuildTabs();
         UpdateLangLabel();
-        _dictBtn.Visibility = S.EudicEnabled && IsWordLike(text) ? Visibility.Visible : Visibility.Collapsed;
+        _dictBtn.Visibility = text.Length > 0 && S.EudicEnabled && IsWordLike(text) ? Visibility.Visible : Visibility.Collapsed;
 
         Place(anchor);
         Show();
@@ -46,7 +91,21 @@ public sealed partial class PopupWindow
         // 上限放宽以后差得更多，摆完得照实际高度再收一次边。
         ClampIntoWorkArea();
         Activate();
-        Run();
+    }
+
+    /// <summary>只创建隐藏句柄和测量模板，不 Show，避免预加载闪窗或抢焦点。</summary>
+    internal void Preload()
+    {
+        if (IsVisible || _closing) return;
+        ApplyLayoutSettings();
+        RebuildTabs();
+        UpdateLangLabel();
+        new System.Windows.Interop.WindowInteropHelper(this).EnsureHandle();
+        if (Content is FrameworkElement content)
+        {
+            content.Measure(new Size(Width, MaxHeight));
+            content.Arrange(new Rect(content.DesiredSize));
+        }
     }
 
     /// <summary>
@@ -106,6 +165,7 @@ public sealed partial class PopupWindow
     public void ClosePopup()
     {
         _cts?.Cancel();
+        _ocrPending = false;
         _stashed = false;
         if (!IsVisible) return;
         PersistGeometry();
@@ -125,7 +185,7 @@ public sealed partial class PopupWindow
     }
 
     /// <summary>有没有被收起、等着叫回来的内容。</summary>
-    public bool CanRestore => _stashed && _text.Length > 0 && !IsVisible;
+    public bool CanRestore => _stashed && (_text.Length > 0 || _ocrPending) && !IsVisible;
 
     /// <summary>把收起的弹窗原样放回来，不重译。没有可恢复的就返回 false。</summary>
     public bool RestorePopup()
@@ -327,14 +387,17 @@ public sealed partial class PopupWindow
     {
         try
         {
+            // 同步缓存命中、源初始化和结果卡布局不能挡住窗口的第一轮渲染。
+            await Dispatcher.Yield(DispatcherPriority.Background);
+            cts.Token.ThrowIfCancellationRequested();
             TranslateBatch batch;
             if (_aggregate)
             {
                 // 边到边显示：占位卡先摆好，谁先回来谁先填。收尾用 EndAggregate 只补说明，
                 // 不重画——重画会丢掉已选中的文本，弹窗还会跟着闪一下高度。
                 batch = await Engine.AggregateAsync(_text, cts.Token,
-                    onStart: _result.BeginAggregate,
-                    onResult: _result.UpdateOne);
+                    onStart: (b, configs) => { if (!cts.IsCancellationRequested) _result.BeginAggregate(b, configs); },
+                    onResult: result => { if (!cts.IsCancellationRequested) _result.UpdateOne(result); });
                 if (cts.IsCancellationRequested) return;
                 _batch = batch;
                 _result.EndAggregate(batch);
@@ -361,6 +424,7 @@ public sealed partial class PopupWindow
         catch (OperationCanceledException) { /* 换源或关闭了 */ }
         catch (Exception ex)
         {
+            if (cts.IsCancellationRequested) return;
             Log.Error("弹窗翻译失败", ex);
             _result.ShowMessage("翻译出错：" + ex.Message, dim: false);
         }
@@ -410,8 +474,8 @@ public sealed partial class PopupWindow
         if (e.Key == Key.Escape) { e.Handled = true; ClosePopup(); }
         else if (ctrl && e.Key == Key.Tab) { e.Handled = true; SelectNext(); }
         else if (ctrl && e.Key == Key.C) { e.Handled = true; CopyResult(); }
-        else if (ctrl && e.Key == Key.D) { e.Handled = true; Lookup(_text); }
-        else if (ctrl && e.Key == Key.E) { e.Handled = true; _host.ExpandToMain(_text); }
+        else if (ctrl && e.Key == Key.D && _text.Length > 0) { e.Handled = true; Lookup(_text); }
+        else if (ctrl && e.Key == Key.E && _text.Length > 0) { e.Handled = true; _host.ExpandToMain(_text); }
         else if (e.Key is >= Key.D1 and <= Key.D9 && ctrl)
         {
             var idx = e.Key - Key.D1;

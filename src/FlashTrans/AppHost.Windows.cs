@@ -73,6 +73,8 @@ public sealed partial class AppHost
 
     PopupWindow EnsurePopup() => _popup ??= new PopupWindow(this);
 
+    internal void PreloadPopup() => EnsurePopup().Preload();
+
     public void ShowPopupFor(string text, Point? anchor)
     {
         HideSelectionIcon();

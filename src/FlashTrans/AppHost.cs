@@ -26,6 +26,7 @@ public sealed partial class AppHost : IDisposable
     bool _clipboardHooked;
     bool _diagnosticMode;
     CancellationTokenSource? _selectionCts;
+    DispatcherTimer? _preloadTimer;
 
     static AppSettings S => SettingsService.Instance.Current;
 
@@ -57,7 +58,7 @@ public sealed partial class AppHost : IDisposable
             WarmupWhenIdle();
             SyncStartupWhenIdle();
         }
-        if (startHidden) PreloadWhenIdle();
+        PreloadWhenIdle(startHidden, preloadOcr: !diagnostic);
     }
 
     // ------------------------------------------------------------- 消息分发
@@ -316,20 +317,22 @@ public sealed partial class AppHost : IDisposable
         timer.Start();
     }
 
-    /// <summary>空闲时预先构造窗口，首次唤出时几乎无延迟。</summary>
-    void PreloadWhenIdle()
+    /// <summary>不论是否显示主窗口，都在空闲时准备弹窗；OCR 模型只在后台加载。</summary>
+    void PreloadWhenIdle(bool preloadMain, bool preloadOcr)
     {
-        var timer = new DispatcherTimer(DispatcherPriority.ApplicationIdle)
+        var timer = _preloadTimer = new DispatcherTimer(DispatcherPriority.ApplicationIdle)
         {
             Interval = TimeSpan.FromMilliseconds(1200)
         };
         timer.Tick += (_, _) =>
         {
             timer.Stop();
+            if (_shuttingDown) return;
+            if (preloadOcr) _ = OcrService.WarmupAsync(S.OcrEngine, S.OcrLang);
             try
             {
-                EnsureMain();
-                EnsurePopup();
+                PreloadPopup();
+                if (preloadMain) EnsureMain();
             }
             catch (Exception ex) { Log.Warn("预加载窗口失败：" + ex.Message); }
         };
@@ -338,6 +341,7 @@ public sealed partial class AppHost : IDisposable
 
     public void Dispose()
     {
+        _preloadTimer?.Stop();
         SettingsService.Instance.Changed -= OnSettingsChanged;
         CloseTrayMenu();
         _selectionCts?.Cancel();
