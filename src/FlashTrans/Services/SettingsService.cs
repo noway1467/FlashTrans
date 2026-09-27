@@ -169,6 +169,13 @@ public sealed class SettingsService
             changed = true;
         }
 
+        if (s.Version < 7)
+        {
+            // 新字段缺失时由模型默认值落到源目录，不猜测用户想要的输出位置。
+            s.DocumentOutputDirectory ??= "";
+            s.Version = 7;
+            changed = true;
+        }
         return changed;
     }
 
@@ -179,6 +186,9 @@ public sealed class SettingsService
     /// </summary>
     public static void Normalize(AppSettings s)
     {
+        s.DocumentOutputDirectory = (s.DocumentOutputDirectory ?? "").Trim();
+        if (s.DocumentOutputDirectory.Length > 0 && !Path.IsPathFullyQualified(s.DocumentOutputDirectory))
+            s.DocumentOutputDirectory = "";
         if (s.Providers.Count == 0) s.Providers.AddRange(AppSettings.CreateDefault().Providers);
         foreach (var p in s.Providers)
         {

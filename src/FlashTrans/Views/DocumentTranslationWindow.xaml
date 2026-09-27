@@ -1,0 +1,178 @@
+<Window x:Class="FlashTrans.Views.DocumentTranslationWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        Title="文件翻译 · FlashTrans" Width="940" Height="760" MinWidth="760" MinHeight="580"
+        WindowStyle="None" ResizeMode="CanResize" WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource Bg}" Foreground="{DynamicResource Text}"
+        TextOptions.TextFormattingMode="Display" UseLayoutRounding="True">
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="0" GlassFrameThickness="0" CornerRadius="0" ResizeBorderThickness="6" UseAeroCaptionButtons="False" />
+    </shell:WindowChrome.WindowChrome>
+    <Window.Resources>
+        <Style x:Key="FieldLabel" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11.5" />
+            <Setter Property="Foreground" Value="{DynamicResource TextDim}" />
+            <Setter Property="Margin" Value="0,0,0,7" />
+        </Style>
+        <Style x:Key="DropButton" TargetType="Button">
+            <Setter Property="Background" Value="{DynamicResource BgAlt}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderStrong}" />
+            <Setter Property="Foreground" Value="{DynamicResource Text}" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Surface" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="1" CornerRadius="10" Padding="20,16">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource Accent}" /></Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Surface" Property="BorderBrush" Value="{DynamicResource Accent}" /></Trigger>
+                            <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Surface" Property="Opacity" Value="0.6" /></Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style TargetType="Expander">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Expander">
+                        <StackPanel>
+                            <ToggleButton IsChecked="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}"
+                                          Background="Transparent" Foreground="{TemplateBinding Foreground}" BorderThickness="0" HorizontalAlignment="Left" Cursor="Hand">
+                                <ToggleButton.Template>
+                                    <ControlTemplate TargetType="ToggleButton">
+                                        <Border Padding="0,3" Background="Transparent">
+                                            <StackPanel Orientation="Horizontal">
+                                                <Path x:Name="Arrow" Data="M0,0 L4,4 L8,0" Stroke="{DynamicResource TextDim}" StrokeThickness="1.2" Width="8" Height="4"
+                                                      Margin="2,0,8,0" VerticalAlignment="Center" RenderTransformOrigin="0.5,0.5" />
+                                                <ContentPresenter />
+                                            </StackPanel>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsChecked" Value="True"><Setter TargetName="Arrow" Property="RenderTransform"><Setter.Value><RotateTransform Angle="180" /></Setter.Value></Setter></Trigger>
+                                            <Trigger Property="IsMouseOver" Value="True"><Setter Property="Foreground" Value="{DynamicResource Text}" /></Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </ToggleButton.Template>
+                                <ContentPresenter Content="{TemplateBinding Header}" />
+                            </ToggleButton>
+                            <ContentPresenter x:Name="Body" Visibility="Collapsed" />
+                        </StackPanel>
+                        <ControlTemplate.Triggers><Trigger Property="IsExpanded" Value="True"><Setter TargetName="Body" Property="Visibility" Value="Visible" /></Trigger></ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+    <Border BorderBrush="{DynamicResource Border}" BorderThickness="1">
+        <Grid>
+            <Grid.RowDefinitions><RowDefinition Height="50" /><RowDefinition Height="*" /></Grid.RowDefinitions>
+            <Border Background="{DynamicResource BgAlt}" BorderBrush="{DynamicResource Border}" BorderThickness="0,0,0,1" MouseLeftButtonDown="OnHeaderDrag">
+                <Grid Margin="18,0,10,0">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <ContentControl x:Name="HeaderIcon" Margin="0,0,10,0" />
+                        <TextBlock Text="文件翻译" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center" />
+                        <TextBlock Text="FlashTrans" FontSize="11" Foreground="{DynamicResource TextFaint}" Margin="12,0,0,0" VerticalAlignment="Center" />
+                    </StackPanel>
+                    <StackPanel x:Name="WindowTools" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                </Grid>
+            </Border>
+            <Grid Grid.Row="1">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition x:Name="HistoryColumn" Width="278" /></Grid.ColumnDefinitions>
+                <Grid Margin="24,20,24,20">
+                    <Grid.RowDefinitions><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                        <StackPanel Margin="0,0,2,0">
+                            <Button x:Name="DropArea" Style="{StaticResource DropButton}" MinHeight="182" HorizontalContentAlignment="Stretch" Click="OnChooseFile"
+                                    AllowDrop="True" PreviewDragOver="OnDragOver" DragLeave="OnDragLeave" PreviewDrop="OnDrop" AutomationProperties.Name="拖入或选择翻译文件">
+                                <StackPanel>
+                                    <Border Background="{DynamicResource AccentSoft}" CornerRadius="10" Width="44" Height="44" HorizontalAlignment="Center" Margin="0,0,0,12">
+                                        <ContentControl x:Name="DropIcon" />
+                                    </Border>
+                                    <TextBlock x:Name="FileTitle" Text="拖入文件，开始翻译" FontSize="18" FontWeight="SemiBold" HorizontalAlignment="Center"
+                                               TextTrimming="CharacterEllipsis" MaxWidth="450" />
+                                    <TextBlock x:Name="FileSummary" Text="或点击选择文件" FontSize="12" Foreground="{DynamicResource TextDim}" HorizontalAlignment="Center" Margin="0,7,0,10" />
+                                    <TextBlock Text="EPUB   /   TXT   /   Markdown   /   DOCX" FontSize="10.5" Foreground="{DynamicResource TextFaint}" HorizontalAlignment="Center" />
+                                </StackPanel>
+                            </Button>
+                            <Grid x:Name="Options" Margin="0,20,0,0">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Grid>
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="翻译源" Style="{StaticResource FieldLabel}" />
+                                        <ComboBox x:Name="Providers" Height="34" SelectionChanged="OnProviderChanged" AutomationProperties.Name="翻译源" />
+                                    </StackPanel>
+                                    <ContentControl x:Name="RefreshHost" Grid.Column="1" VerticalAlignment="Bottom" Margin="8,0,0,3" />
+                                </Grid>
+                                <Grid Grid.Row="1" Margin="0,15,0,0">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="26" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="原文语言" Style="{StaticResource FieldLabel}" />
+                                        <Border Background="{DynamicResource BgInput}" BorderBrush="{DynamicResource Border}" BorderThickness="1" CornerRadius="6" Padding="6,3"><ContentControl x:Name="FromHost" /></Border>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="目标语言" Style="{StaticResource FieldLabel}" />
+                                        <Border Background="{DynamicResource BgInput}" BorderBrush="{DynamicResource Border}" BorderThickness="1" CornerRadius="6" Padding="6,3"><ContentControl x:Name="ToHost" /></Border>
+                                    </StackPanel>
+                                </Grid>
+                                <StackPanel Grid.Row="2" Margin="0,16,0,0">
+                                    <TextBlock Text="输出文件夹" Style="{StaticResource FieldLabel}" />
+                                    <Grid>
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                        <TextBox x:Name="OutputFolder" IsReadOnly="True" Height="34" VerticalContentAlignment="Center" Text="源文件所在目录" AutomationProperties.Name="输出文件夹" />
+                                        <Button Grid.Column="1" Content="选择" Style="{StaticResource OutlineBtn}" Margin="8,0,0,0" Padding="12,4" Click="OnChooseFolder" />
+                                        <ContentControl Grid.Column="2" x:Name="ResetFolderHost" Margin="6,0,0,0" VerticalAlignment="Center" />
+                                    </Grid>
+                                    <CheckBox x:Name="DefaultFolder" Content="设为默认输出位置" Margin="0,9,0,0" FontSize="11.5" Checked="OnDefaultFolderChanged" Unchecked="OnDefaultFolderChanged" />
+                                </StackPanel>
+                                <TextBlock Grid.Row="3" x:Name="Privacy" FontSize="11" Foreground="{DynamicResource TextDim}" TextWrapping="Wrap" Margin="0,14,0,0" />
+                                <Expander Grid.Row="4" Header="选项与格式说明" FontSize="11" Foreground="{DynamicResource TextDim}" Margin="0,12,0,0">
+                                    <StackPanel Margin="0,10,0,0">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="单段超时" VerticalAlignment="Center" Margin="0,0,10,0" />
+                                            <TextBox x:Name="TimeoutBox" Text="180" Width="66" Height="28" TextChanged="OnOptionChanged" />
+                                            <TextBlock Text="秒" VerticalAlignment="Center" Margin="8,0,0,0" />
+                                        </StackPanel>
+                                        <TextBlock x:Name="Warnings" TextWrapping="Wrap" Margin="0,10,0,0" FontSize="11" LineHeight="17" />
+                                        <TextBlock Text="只用所选源；失败重试 2 次。关闭窗口不保留续译进度。" TextWrapping="Wrap" Margin="0,6,0,0" FontSize="11" />
+                                    </StackPanel>
+                                </Expander>
+                            </Grid>
+                        </StackPanel>
+                    </ScrollViewer>
+                    <StackPanel Grid.Row="1" Margin="0,18,0,0">
+                        <ProgressBar x:Name="Progress" Height="4" Minimum="0" Maximum="1" Background="{DynamicResource BgInput}" Foreground="{DynamicResource Accent}" BorderThickness="0" />
+                        <TextBlock x:Name="Status" Text="完成后自动保存译文副本" FontSize="12" TextWrapping="Wrap" Margin="0,10,0,13" MaxHeight="54" />
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                            <Button x:Name="OpenResult" Content="打开译文" Style="{StaticResource GhostBtn}" HorizontalAlignment="Left" Click="OnOpenResult" Visibility="Collapsed" />
+                            <Button x:Name="CancelButton" Grid.Column="1" Content="取消" Style="{StaticResource OutlineBtn}" Padding="18,8" Margin="0,0,8,0" Click="OnCancel" Visibility="Collapsed" />
+                            <Button x:Name="StartButton" Grid.Column="2" Content="开始翻译" Style="{StaticResource PrimaryBtn}" Padding="25,8" MinWidth="118" Click="OnStart" />
+                        </Grid>
+                    </StackPanel>
+                </Grid>
+                <Border Grid.Column="1" Background="{DynamicResource BgAlt}" BorderBrush="{DynamicResource Border}" BorderThickness="1,0,0,0">
+                    <Grid Margin="16,21,16,18">
+                        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                        <Grid Margin="0,0,0,12">
+                            <TextBlock Text="翻译历史" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center" />
+                            <Button Content="清空" HorizontalAlignment="Right" Style="{StaticResource GhostBtn}" FontSize="11" Click="OnClearHistory" ToolTip="仅清空记录，不删除原文件或译文" />
+                        </Grid>
+                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                            <StackPanel x:Name="HistoryList" />
+                        </ScrollViewer>
+                        <TextBlock Grid.Row="2" Text="最近 100 条 · 仅保存在本机" Foreground="{DynamicResource TextFaint}" FontSize="10.5" Margin="0,12,0,0"
+                                   ToolTip="记录文件路径、语言、翻译源、时间和状态。不保存正文或密钥；清空记录不会删除文件。" />
+                    </Grid>
+                </Border>
+            </Grid>
+        </Grid>
+    </Border>
+</Window>

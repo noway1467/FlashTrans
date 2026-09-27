@@ -36,6 +36,8 @@ public static class UiKit
     public static readonly Geometry IconRefresh = Geometry.Parse(
         "M13.5,8 A5.5,5.5 0 1 1 11.6,3.8 M13.8,1.8 V4.4 H11.2");
     public static readonly Geometry IconPlus = Geometry.Parse("M8,3 V13 M3,8 H13");
+    public static readonly Geometry IconDocument = Geometry.Parse("M3,1 H9 L13,5 V15 H3 Z M9,1 V5 H13 M5.5,8 H10.5 M5.5,11 H9");
+    public static readonly Geometry IconFolder = Geometry.Parse("M1,4 V2.5 H6 L8,4 H15 V13 H1 Z");
     public static readonly Geometry IconTrash = Geometry.Parse(
         "M3,4.5 H13 M6.5,4.5 V2.8 H9.5 V4.5 M4.3,4.5 L5,13.2 H11 L11.7,4.5 M6.7,7 V11 M9.3,7 V11");
     public static readonly Geometry IconUp = Geometry.Parse("M4,10 L8,5.5 L12,10");

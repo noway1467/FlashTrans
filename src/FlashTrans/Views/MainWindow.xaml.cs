@@ -30,6 +30,7 @@ public partial class MainWindow : Window
     TranslateBatch? _batch;
     bool _suppressInput;
     string? _settingsSignature;
+    DocumentTranslationWindow? _documentWindow;
 
     static AppSettings S => SettingsService.Instance.Current;
     static TranslateEngine Engine => TranslateEngine.Instance;
@@ -121,6 +122,19 @@ public partial class MainWindow : Window
             SettingsService.Instance.Touch();
         });
 
+        var documentLabel = new StackPanel { Orientation = Orientation.Horizontal };
+        var documentIcon = UiKit.Icon(UiKit.IconDocument, 13);
+        documentIcon.SetResourceReference(System.Windows.Shapes.Shape.StrokeProperty, "Accent");
+        documentLabel.Children.Add(documentIcon);
+        documentLabel.Children.Add(new TextBlock { Text = "文件翻译", Margin = new Thickness(6, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center });
+        var fileButton = new Button
+        {
+            Content = documentLabel, FontSize = 11.5, Height = 25, Padding = new Thickness(9, 0, 9, 0),
+            Margin = new Thickness(0, 0, 7, 0), ToolTip = "翻译 EPUB、TXT、Markdown 和 Word 文件",
+        };
+        fileButton.SetResourceReference(StyleProperty, "OutlineBtn");
+        fileButton.Click += (_, _) => ShowDocumentTranslation();
+        ToolHost.Children.Add(fileButton);
         ToolHost.Children.Add(_bilingualBtn);
         ToolHost.Children.Add(_pinBtn);
         ToolHost.Children.Add(UiKit.IconButton(UiKit.IconSettings, "设置", (_, _) => _host.ShowSettings()));
@@ -144,6 +158,28 @@ public partial class MainWindow : Window
             // Translate(force: true) 会统一清掉当前文本的缓存，避免在这里重复扫描缓存。
             Translate(force: true);
         }, 12));
+        // 窄窗口将语言栏换到第二行，入口仍在右上角，不让两组控件互相压住。
+        void ArrangeHeader()
+        {
+            var narrow = ActualWidth < 720;
+            Grid.SetRow(LangHost, narrow ? 1 : 0);
+            Grid.SetColumnSpan(LangHost, narrow ? 3 : 1);
+            LangHost.Margin = new Thickness(0, narrow ? 5 : 0, 0, 0);
+        }
+        SizeChanged += (_, _) => ArrangeHeader();
+        ArrangeHeader();
+    }
+
+    void ShowDocumentTranslation()
+    {
+        if (_documentWindow is null)
+        {
+            _documentWindow = new DocumentTranslationWindow { Owner = this };
+            _documentWindow.Closed += (_, _) => _documentWindow = null;
+        }
+        _documentWindow.Show();
+        if (_documentWindow.WindowState == WindowState.Minimized) _documentWindow.WindowState = WindowState.Normal;
+        _documentWindow.Activate();
     }
 
     ToggleButton Toggle(string text, bool isChecked, Action<bool> onChange)

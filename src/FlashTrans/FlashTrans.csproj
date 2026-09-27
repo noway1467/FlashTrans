@@ -12,7 +12,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>FlashTrans</AssemblyName>
     <RootNamespace>FlashTrans</RootNamespace>
-    <Version>1.8.3</Version>
+    <Version>1.9.0</Version>
     <Product>闪译 FlashTrans</Product>
     <Company>FlashTrans</Company>
     <ApplicationManifest>app.manifest</ApplicationManifest>
@@ -39,6 +39,8 @@
     <!-- 截图 OCR 的本地托管引擎（RapidOCR 移植）。包自带 PP-OCRv5 latin 模型，
          其中文/日韩等识别需要 PP-OCRv6 模型，见下方 models\v6 拷贝项。 -->
     <PackageReference Include="RapidOcrNet" Version="4.1.0" />
+    <!-- 用语法树定位正文，避免改写 Markdown 代码、链接和元数据。 -->
+    <PackageReference Include="Markdig" Version="0.41.3" />
   </ItemGroup>
 
   <ItemGroup>
@@ -61,6 +63,7 @@
          ArgumentNullException，把整个窗口的 XAML 加载带崩。
          None 只管拷文件，不注册内容文件，pack URI 就老实回退到上面的 Resource。 -->
     <None Include="Assets\app.ico" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Assets\licenses\*.txt" CopyToOutputDirectory="PreserveNewest" />
 
     <!-- 录制动图存 WebP 要用的 img2webp.exe，放到 Assets\tools\ 就会被拷到输出目录，
          没放也不影响编译（通配符匹配不到就是空集）。为什么是外挂一个程序、

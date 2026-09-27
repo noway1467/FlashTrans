@@ -1,57 +1,36 @@
-# Zips the published folders in dist\ into release archives.
-#   powershell -NoProfile -File tools\pack-release.ps1 [-Version 1.8.3]
-#
-# Why zip the folder instead of shrinking the exe: single-file compression
-# (EnableCompressionInSingleFile) gets the exe to ~62MB but pushes cold start
-# from ~0.4s to 1.8-2.8s, because the whole bundle has to be inflated to a temp
-# dir on every launch. A zip costs the user one extraction and keeps the fast
-# start. Downloads are the same size either way.
-param([string]$Version = '1.8.3')
-
+﻿# 将带版本号的发布目录压缩成同名包，包内也保留同名顶层目录。
+param([string]$Version = '1.9.0')
 $ErrorActionPreference = 'Stop'
-# $PSScriptRoot is empty when the script is piped in on stdin - fall back to cwd,
-# which is the repo root in that case.
-$root = if ($PSScriptRoot) { Split-Path -Parent $PSScriptRoot } else { (Get-Location).Path }
-$out = Join-Path $root 'dist\release'
-New-Item -ItemType Directory -Force -Path $out | Out-Null
+if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw '版本格式必须是 x.y.z。' }
+$root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$dist = Join-Path $root 'dist'
+$out = Join-Path $dist 'release'
+$packages = @()
 
-foreach ($flavour in 'fast', 'small') {
-    $src = Join-Path $root "dist\FlashTrans-win-x64-$flavour"
-    if (-not (Test-Path (Join-Path $src 'FlashTrans.exe'))) {
-        Write-Host "skip $flavour - not published"
-        continue
+foreach ($flavour in @('fast', 'small')) {
+    $name = "FlashTrans-$Version-win-x64-$flavour"
+    $source = Join-Path $dist $name
+    $binary = Join-Path $source 'FlashTrans.exe'
+    if (-not (Test-Path -LiteralPath $binary)) { throw "缺少 $name，请先执行 tools\publish.cmd both。" }
+    if ((Get-Item -LiteralPath $binary).VersionInfo.FileVersion -ne "$Version.0") { throw "包名与程序版本不一致：$binary" }
+    $zip = Join-Path $out "$name.zip"
+    if (Test-Path -LiteralPath $zip) { throw "压缩包已存在，未覆盖：$zip" }
+    # 不能把便携数据、日志或链接到其他目录的内容打包发布。
+    $items = @((Get-Item -LiteralPath $source)) + @(Get-ChildItem -LiteralPath $source -Recurse -Force)
+    if ($items | Where-Object { ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 }) { throw "发布目录含链接，停止：$source" }
+    if ($items | Where-Object { $_.Name -in @('data', 'settings.json', 'document-history.json', 'portable.txt') -or $_.Extension -eq '.log' }) {
+        throw "发布目录含用户配置或日志，停止：$source"
     }
-    $zip = Join-Path $out "FlashTrans-$Version-win-x64-$flavour.zip"
-    if (Test-Path $zip) { Remove-Item $zip -Force }
-
-    # A running instance keeps Assets\app.ico open (the tray icon loads from it) and
-    # Compress-Archive refuses to read a file that is open elsewhere, even though a
-    # plain copy of it succeeds. So stage a copy and zip that - no need to make the
-    # user close the app, which may be mid-edit on a screenshot.
-    $stage = Join-Path $root "dist\_zipsrc\$flavour"
-    if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
-    New-Item -ItemType Directory -Force -Path $stage | Out-Null
-    Copy-Item -Path (Join-Path $src '*') -Destination $stage -Recurse -Force
-
-    $seconds = Measure-Command {
-        Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -CompressionLevel Optimal
-    }
-    $raw = (Get-ChildItem $src -Recurse -File | Measure-Object -Sum Length).Sum
-    $packed = (Get-Item $zip).Length
-    '{0,-6} {1,4}MB -> {2,6}MB zip ({3}% of original, {4}s)' -f `
-        $flavour, [math]::Round($raw / 1MB), [math]::Round($packed / 1MB, 1),
-        [math]::Round(100 * $packed / $raw), [math]::Round($seconds.TotalSeconds)
-
-    Remove-Item $stage -Recurse -Force
+    $packages += [pscustomobject]@{ Source = $source; Zip = $zip; Name = $name }
 }
-
-$zipsrc = Join-Path $root 'dist\_zipsrc'
-if (Test-Path $zipsrc) { Remove-Item $zipsrc -Recurse -Force }
-
-Write-Host ''
-Get-ChildItem $out -Filter *.zip | ForEach-Object {
-    '{0}  {1}MB  SHA256 {2}' -f $_.Name, [math]::Round($_.Length / 1MB, 1),
-        (Get-FileHash $_.FullName -Algorithm SHA256).Hash.Substring(0, 16)
+New-Item -ItemType Directory -Path $out -Force | Out-Null
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+foreach ($package in $packages) {
+    $temp = Join-Path $out ('.pack-' + [guid]::NewGuid().ToString('N') + '.tmp')
+    try {
+        [IO.Compression.ZipFile]::CreateFromDirectory($package.Source, $temp, [IO.Compression.CompressionLevel]::Optimal, $true)
+        [IO.File]::Move($temp, $package.Zip)
+    } finally { if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp } }
+    $hash = (Get-FileHash -LiteralPath $package.Zip -Algorithm SHA256).Hash
+    '{0}  {1:N1} MB  SHA256 {2}' -f $package.Zip, ((Get-Item -LiteralPath $package.Zip).Length / 1MB), $hash
 }
-Write-Host ''
-Write-Host "release archives in $out"

@@ -37,7 +37,8 @@ public static partial class Net
             handler.Proxy = new WebProxy(proxy);
             handler.UseProxy = true;
         }
-        var c = new HttpClient(handler, disposeHandler: true) { Timeout = TimeSpan.FromSeconds(30) };
+        // 各请求已有独立超时；全局 30 秒会提前截断本地模型的文档翻译。
+        var c = new HttpClient(handler, disposeHandler: true) { Timeout = Timeout.InfiniteTimeSpan };
         // 注意：这里不设 DefaultRequestVersion。它只对 HttpClient 自己造的请求（GetAsync(url) 之类）
         // 有效，而本程序全是自己 new HttpRequestMessage —— 那种请求自带 1.1/OrLower，
         // 客户端的默认值压根不会被查。版本改在 PreferHttp2 里逐请求设。
@@ -62,7 +63,8 @@ public static partial class Net
             var old = _client;
             _client = Build(next);
             // 在途请求还持有 old，等它们收尾后再回收连接池
-            _ = Task.Delay(TimeSpan.FromSeconds(35)).ContinueWith(_ =>
+            // 文档任务允许单段最多十分钟，不能仍按原来的 30 秒请求上限回收旧客户端。
+            _ = Task.Delay(TimeSpan.FromMinutes(11)).ContinueWith(_ =>
             {
                 try { old.Dispose(); } catch { /* ignore */ }
             }, TaskScheduler.Default);

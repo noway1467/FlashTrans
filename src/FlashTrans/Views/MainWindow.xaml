@@ -31,6 +31,7 @@
                     BorderBrush="{DynamicResource Border}" BorderThickness="0,0,0,1"
                     MouseLeftButtonDown="OnHeaderDrag">
                 <Grid Margin="7,5">
+                    <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
