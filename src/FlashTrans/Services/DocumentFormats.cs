@@ -14,10 +14,9 @@ internal static partial class DocumentFormats
 {
     const int MaxFileBytes = 64 * 1024 * 1024;
     const int MaxExpandedBytes = 128 * 1024 * 1024;
-    const int MaxChunk = 1200;
     static readonly UTF8Encoding Utf8 = new(false, true);
 
-    internal static TranslationDocument Load(string path, CancellationToken ct)
+    internal static TranslationDocument Load(string path, int batchCharacters, CancellationToken ct)
     {
         path = Path.GetFullPath(path);
         if (!DocumentTranslation.Supports(path)) throw new NotSupportedException("支持 EPUB、TXT、Markdown（.md/.markdown）和 DOCX；旧版 .doc 请先另存为 .docx。");
@@ -27,7 +26,11 @@ internal static partial class DocumentFormats
         if (input.Length > MaxFileBytes) throw new InvalidDataException("文件超过 64 MB，请拆分后翻译。");
         var data = new byte[checked((int)input.Length)];
         input.ReadExactly(data);
-        var document = new TranslationDocument { SourcePath = path };
+        var document = new TranslationDocument
+        {
+            SourcePath = path,
+            BatchCharacters = Math.Clamp(batchCharacters, DocumentTranslation.MinBatchCharacters, DocumentTranslation.MaxBatchCharacters)
+        };
         switch (Path.GetExtension(path).ToLowerInvariant())
         {
             case ".txt": LoadText(document, DecodeText(document, data), false, ct); break;
@@ -151,7 +154,7 @@ internal static partial class DocumentFormats
         var size = 0;
         foreach (var original in source)
         {
-            var chunks = Split(original.Text).ToArray();
+            var chunks = Split(original.Text, doc.BatchCharacters).ToArray();
             var values = chunks.ToArray();
             for (var i = 0; i < chunks.Length; i++)
             {
@@ -161,7 +164,7 @@ internal static partial class DocumentFormats
                 var prefix = raw[..(raw.Length - raw.TrimStart().Length)];
                 var suffix = raw[raw.TrimEnd().Length..];
                 var index = i;
-                if (pending.Count > 0 && (size + trimmed.Length + 20 > 1700 || pending.Count >= 12))
+                if (pending.Count > 0 && (size + trimmed.Length + 20 > doc.BatchCharacters || pending.Count >= 12))
                 {
                     doc.Units.Add(new(pending)); pending = []; size = 0;
                 }
@@ -176,13 +179,13 @@ internal static partial class DocumentFormats
         if (pending.Count > 0) doc.Units.Add(new(pending));
     }
 
-    static IEnumerable<string> Split(string text)
+    static IEnumerable<string> Split(string text, int maxChunk)
     {
         // 保留所有换行。长行优先按句子/空格切；极长单词按 Unicode 文本元素边界切。
         var start = 0;
         while (start < text.Length)
         {
-            var count = Math.Min(MaxChunk, text.Length - start);
+            var count = Math.Min(maxChunk, text.Length - start);
             var newline = text.IndexOfAny(['\r', '\n'], start, count);
             if (newline >= 0) count = newline - start + 1;
             else if (start + count < text.Length)

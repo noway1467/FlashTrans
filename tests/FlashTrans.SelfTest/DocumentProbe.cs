@@ -36,9 +36,10 @@ static class DocumentProbe
         step("文件：WPF 深浅主题窗口、读取、按钮和渲染", () => InTemp(WindowRoundtrip));
         step("文件：自动副本、目录选择和同名避让", () => InTemp(AutomaticCopies));
         step("文件：历史持久化、上限、更新、清空及损坏保护", () => InTemp(HistoryPersistence));
-        step("文件：默认输出配置迁移及往返，版本 1.9.1", () => InTemp(OutputSettings));
+        step("文件：默认输出配置迁移及往返，版本 1.9.0", () => InTemp(OutputSettings));
         step("文件：路径与超时文本的完整高度（字号、缩放、禁用状态）", () => InTemp(InputTextHeight));
         step("文件：目标语言独立持久化，重开、重载及历史恢复", () => InTemp(TargetLanguagePersistence));
+        step("文件：分批字符数和请求间隔可调、可持久化", () => InTemp(BatchAndDelay));
     }
 
     static void Check(bool condition, string message)
@@ -82,7 +83,7 @@ static class DocumentProbe
         var before = File.ReadAllBytes(path);
         var translator = new TestTranslator();
         var doc = Translate(path, translator);
-        Check(translator.Inputs.All(t => t.Length <= 1800), "分块超限");
+        Check(translator.Inputs.All(t => t.Length <= DocumentTranslation.DefaultBatchCharacters), "默认分块超限");
         Check(translator.Inputs.All(t => !t.Contains('\uFFFD')), "Unicode 被切坏");
         Throws<IOException>(() => doc.SaveAs(path));
         var output = Path.Combine(root, "output.txt");
@@ -101,6 +102,8 @@ static class DocumentProbe
         using var cancel = new CancellationTokenSource(); cancel.Cancel();
         Throws<OperationCanceledException>(() => doc.SaveAs(Path.Combine(root, "cancel.txt"), cancel.Token));
         Check(!Directory.EnumerateFiles(root, ".flashtrans-*").Any(), "保存临时文件未清理");
+        var small = DocumentTranslation.Load(path, 300);
+        Check(small.Units.All(u => u.Input.Length <= 300), "自定义分批字符数未生效");
     }
     static void MarkdownRoundtrip(string root)
     {
@@ -405,19 +408,38 @@ static class DocumentProbe
                     Render(window, Path.Combine(smallFolder, $"document-{theme}-small.png"));
                 if (theme == AppTheme.Dark)
                 {
-                    var oldDefault = SettingsService.Instance.Current.DocumentOutputDirectory;
+                        var current = SettingsService.Instance.Current;
+                        var oldDefault = current.DocumentOutputDirectory;
+                        var oldBatch = current.DocumentBatchCharacters;
+                        var oldDelay = current.DocumentRequestDelayMs;
+                        var oldTimeout = current.DocumentTimeoutSeconds;
                     try
                     {
                         window.SetOutputDirectory(root); window.DefaultFolder.IsChecked = true;
+                        window.BatchCharactersBox.Text = "450";
+                        window.RequestDelayBox.Text = "75";
+                        window.TimeoutBox.Text = "90";
                         var saved = JsonSerializer.Deserialize(File.ReadAllText(SettingsService.Instance.ConfigPath), SettingsJson.Default.AppSettings)!;
                         Check(saved.DocumentOutputDirectory == root, "勾选默认目录后未落盘");
+                        Check(saved.DocumentBatchCharacters == 450 && saved.DocumentRequestDelayMs == 75 && saved.DocumentTimeoutSeconds == 90,
+                            "分批、请求间隔或超时没有从窗口落盘");
                         var reopened = new DocumentTranslationWindow(history);
-                        try { Check(reopened.OutputFolder.Text == root, "重开窗口未使用默认目录"); }
+                        try
+                        {
+                            Check(reopened.OutputFolder.Text == root, "重开窗口未使用默认目录");
+                            Check(reopened.BatchCharactersBox.Text == "450" && reopened.RequestDelayBox.Text == "75" && reopened.TimeoutBox.Text == "90",
+                                "重开窗口没有恢复分批参数");
+                        }
                         finally { reopened.Close(); }
                         window.DefaultFolder.IsChecked = false;
                         Check(SettingsService.Instance.Current.DocumentOutputDirectory == "", "取消默认未恢复源目录");
                     }
-                    finally { SettingsService.Instance.Current.DocumentOutputDirectory = oldDefault; SettingsService.Instance.Save(); }
+                    finally
+                    {
+                        current.DocumentOutputDirectory = oldDefault; current.DocumentBatchCharacters = oldBatch;
+                        current.DocumentRequestDelayMs = oldDelay; current.DocumentTimeoutSeconds = oldTimeout;
+                        SettingsService.Instance.Save();
+                    }
                 }
             }
             finally { window.Close(); }
@@ -479,7 +501,7 @@ static class DocumentProbe
             foreach (var enabled in new[] { true, false })
             {
                 window.Options.IsEnabled = enabled;
-                foreach (var box in new[] { window.OutputFolder, window.TimeoutBox })
+                foreach (var box in new[] { window.OutputFolder, window.BatchCharactersBox, window.RequestDelayBox, window.TimeoutBox })
                 {
                     box.FontSize = size; box.LayoutTransform = new ScaleTransform(scale, scale);
                 }
@@ -534,7 +556,7 @@ static class DocumentProbe
             {
                 var settings = JsonSerializer.Deserialize("{\"version\":7}", SettingsJson.Default.AppSettings)!;
                 Check(settings.DocumentTargetLang == "", "旧配置没有使用兼容默认值");
-                Check(SettingsService.Migrate(settings) && settings.Version == 8, "目标语言迁移失败");
+                Check(SettingsService.Migrate(settings) && settings.Version == AppSettings.CurrentVersion, "目标语言迁移失败");
                 settings.DocumentTargetLang = bad; SettingsService.Normalize(settings);
                 Check(settings.DocumentTargetLang == "", "非法目标语言未回退");
             }
@@ -599,6 +621,32 @@ static class DocumentProbe
         Check(!Directory.GetFiles(custom, ".flashtrans-*").Any(), "保存失败残留临时文件");
         doc.Write = write; Check(File.Exists(doc.SaveCopy(custom, "en")), "保存失败后不能重试");
     }
+    static void BatchAndDelay(string root)
+    {
+        var source = PutText(root, "throttle.txt", "Hello one\nHello two\nHello three");
+        var document = DocumentTranslation.Load(source, 260);
+        Check(document.Units.Count == 3 && document.Units.All(u => u.Input.Length <= 260), "自定义分批没有落到每个请求");
+        var translator = new TestTranslator();
+        var started = DateTime.UtcNow;
+        DocumentTranslation.RunAsync(document, translator, "en", "zh-CN", "delay-test", null, default, 100).GetAwaiter().GetResult();
+        var elapsed = DateTime.UtcNow - started;
+        Check(elapsed >= TimeSpan.FromMilliseconds(180), "请求间隔没有生效：" + elapsed.TotalMilliseconds);
+        var settings = JsonSerializer.Deserialize("{\"version\":8}", SettingsJson.Default.AppSettings)!;
+        Check(settings.DocumentBatchCharacters == 600 && settings.DocumentRequestDelayMs == 200 && settings.DocumentTimeoutSeconds == 180,
+            "旧配置没有采用新的文件翻译默认值");
+        Check(SettingsService.Migrate(settings) && settings.Version == 9, "文件翻译参数迁移失败");
+        settings.DocumentBatchCharacters = 1; settings.DocumentRequestDelayMs = -1; settings.DocumentTimeoutSeconds = 1;
+        SettingsService.Normalize(settings);
+        Check(settings.DocumentBatchCharacters == 600 && settings.DocumentRequestDelayMs == 200 && settings.DocumentTimeoutSeconds == 180,
+            "非法文件翻译参数没有回退");
+        settings.DocumentBatchCharacters = DocumentTranslation.MaxBatchCharacters;
+        settings.DocumentRequestDelayMs = DocumentTranslation.MaxRequestDelayMs;
+        settings.DocumentTimeoutSeconds = DocumentTranslation.MaxTimeoutSeconds;
+        var roundtrip = JsonSerializer.Deserialize(JsonSerializer.Serialize(settings, SettingsJson.Default.AppSettings), SettingsJson.Default.AppSettings)!;
+        Check(roundtrip.DocumentBatchCharacters == DocumentTranslation.MaxBatchCharacters
+            && roundtrip.DocumentRequestDelayMs == DocumentTranslation.MaxRequestDelayMs
+            && roundtrip.DocumentTimeoutSeconds == DocumentTranslation.MaxTimeoutSeconds, "文件翻译参数没有持久化");
+    }
     static void HistoryPersistence(string root)
     {
         var history = new DocumentHistoryService(root);
@@ -629,7 +677,7 @@ static class DocumentProbe
         var copy = JsonSerializer.Deserialize(JsonSerializer.Serialize(settings, SettingsJson.Default.AppSettings), SettingsJson.Default.AppSettings)!;
         SettingsService.Normalize(copy); Check(copy.DocumentOutputDirectory == root, "默认输出目录未保存");
         copy.DocumentOutputDirectory = "relative"; SettingsService.Normalize(copy); Check(copy.DocumentOutputDirectory == "", "相对目录未归一化");
-        Check(typeof(MainWindow).Assembly.GetName().Version == new Version(1, 9, 1, 0), "主程序版本未升级到 1.9.1");
+        Check(typeof(MainWindow).Assembly.GetName().Version == new Version(1, 9, 0, 0), "主程序版本未调整为 1.9.0");
     }
 
     sealed class TestTranslator : ITranslator

@@ -183,6 +183,17 @@ public sealed class SettingsService
             s.Version = 8;
             changed = true;
         }
+        if (s.Version < 9)
+        {
+            if (s.DocumentBatchCharacters is < DocumentTranslation.MinBatchCharacters or > DocumentTranslation.MaxBatchCharacters)
+                s.DocumentBatchCharacters = DocumentTranslation.DefaultBatchCharacters;
+            if (s.DocumentRequestDelayMs is < 0 or > DocumentTranslation.MaxRequestDelayMs)
+                s.DocumentRequestDelayMs = DocumentTranslation.DefaultRequestDelayMs;
+            if (s.DocumentTimeoutSeconds is < DocumentTranslation.MinTimeoutSeconds or > DocumentTranslation.MaxTimeoutSeconds)
+                s.DocumentTimeoutSeconds = DocumentTranslation.DefaultTimeoutSeconds;
+            s.Version = 9;
+            changed = true;
+        }
         return changed;
     }
 
@@ -195,6 +206,12 @@ public sealed class SettingsService
     {
         s.DocumentTargetLang = Languages.All.FirstOrDefault(l =>
             string.Equals(l.Code, s.DocumentTargetLang?.Trim(), StringComparison.OrdinalIgnoreCase))?.Code ?? "";
+        if (s.DocumentBatchCharacters is < DocumentTranslation.MinBatchCharacters or > DocumentTranslation.MaxBatchCharacters)
+            s.DocumentBatchCharacters = DocumentTranslation.DefaultBatchCharacters;
+        if (s.DocumentRequestDelayMs is < 0 or > DocumentTranslation.MaxRequestDelayMs)
+            s.DocumentRequestDelayMs = DocumentTranslation.DefaultRequestDelayMs;
+        if (s.DocumentTimeoutSeconds is < DocumentTranslation.MinTimeoutSeconds or > DocumentTranslation.MaxTimeoutSeconds)
+            s.DocumentTimeoutSeconds = DocumentTranslation.DefaultTimeoutSeconds;
         s.DocumentOutputDirectory = (s.DocumentOutputDirectory ?? "").Trim();
         if (s.DocumentOutputDirectory.Length > 0 && !Path.IsPathFullyQualified(s.DocumentOutputDirectory))
             s.DocumentOutputDirectory = "";

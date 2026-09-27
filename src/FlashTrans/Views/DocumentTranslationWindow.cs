@@ -15,7 +15,7 @@ public partial class DocumentTranslationWindow : Window
     readonly LangPicker _to = new();
     TranslationDocument? _document;
     CancellationTokenSource? _cts;
-    bool _busy, _closeWhenIdle, _readyToSave, _saving, _syncDefault;
+    bool _busy, _closeWhenIdle, _readyToSave, _saving, _syncDefault, _syncOptions;
     string _outputDirectory = "", _outputPath = "", _translatedTarget = "";
     DocumentHistoryEntry? _attempt;
     int _generation;
@@ -38,6 +38,11 @@ public partial class DocumentTranslationWindow : Window
         _to.SelectedCode = string.IsNullOrWhiteSpace(settings.DocumentTargetLang) ? settings.TargetLang : settings.DocumentTargetLang;
         _from.SelectionChanged += _ => InvalidateTranslation();
         _to.SelectionChanged += RememberTargetLanguage;
+        _syncOptions = true;
+        BatchCharactersBox.Text = settings.DocumentBatchCharacters.ToString();
+        RequestDelayBox.Text = settings.DocumentRequestDelayMs.ToString();
+        TimeoutBox.Text = settings.DocumentTimeoutSeconds.ToString();
+        _syncOptions = false;
         SetOutputDirectory(settings.DocumentOutputDirectory);
         RefreshProviders(); RefreshHistory(); UpdateButtons();
         Loaded += (_, _) =>
@@ -109,7 +114,28 @@ public partial class DocumentTranslationWindow : Window
         SetStatus(DefaultFolder.IsChecked == true ? "已设为默认输出位置" : "默认恢复为源文件目录");
     }
     void OnProviderChanged(object sender, SelectionChangedEventArgs e) { if (!IsInitialized) return; InvalidateTranslation(); UpdatePrivacy(); }
-    void OnOptionChanged(object sender, TextChangedEventArgs e) { if (IsInitialized) InvalidateTranslation(); }
+    void OnOptionChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_syncOptions || !IsInitialized) return;
+        InvalidateTranslation();
+        if (TryReadOptions(out var batch, out var delay, out var timeout))
+        {
+            SettingsService.Instance.Current.DocumentBatchCharacters = batch;
+            SettingsService.Instance.Current.DocumentRequestDelayMs = delay;
+            SettingsService.Instance.Current.DocumentTimeoutSeconds = timeout;
+            SettingsService.Instance.Save();
+        }
+    }
+    bool TryReadOptions(out int batchCharacters, out int requestDelayMs, out int timeoutSeconds)
+    {
+        var batchOk = int.TryParse(BatchCharactersBox.Text, out batchCharacters)
+            && batchCharacters is >= DocumentTranslation.MinBatchCharacters and <= DocumentTranslation.MaxBatchCharacters;
+        var delayOk = int.TryParse(RequestDelayBox.Text, out requestDelayMs)
+            && requestDelayMs is >= 0 and <= DocumentTranslation.MaxRequestDelayMs;
+        var timeoutOk = int.TryParse(TimeoutBox.Text, out timeoutSeconds)
+            && timeoutSeconds is >= DocumentTranslation.MinTimeoutSeconds and <= DocumentTranslation.MaxTimeoutSeconds;
+        return batchOk && delayOk && timeoutOk;
+    }
     void InvalidateTranslation() { _readyToSave = false; _outputPath = ""; UpdateButtons(); }
     void RememberTargetLanguage(string code)
     {
@@ -166,13 +192,15 @@ public partial class DocumentTranslationWindow : Window
     internal async Task LoadFileAsync(string path)
     {
         if (_busy) return;
+        if (!TryReadOptions(out var batchCharacters, out _, out _))
+        { SetStatus("每批 200–2000 字符，请求间隔 0–5000 毫秒，单段超时 10–600 秒。"); return; }
         Begin(); _document = null; _readyToSave = false; _outputPath = ""; _attempt = null;
         FileTitle.Text = Path.GetFileName(path); FileTitle.ToolTip = path;
         FileSummary.Text = "正在读取…"; Warnings.Text = ""; SetStatus("正在本机解析文件…"); Progress.IsIndeterminate = true;
         try
         {
             var ct = _cts!.Token;
-            _document = await Task.Run(() => DocumentTranslation.Load(path, ct), ct);
+            _document = await Task.Run(() => DocumentTranslation.Load(path, batchCharacters, ct), ct);
             FileSummary.Text = $"{_document.CharacterCount:N0} 字符 · {_document.Count:N0} 段 · 点击更换";
             Warnings.Text = string.Join("\n\n", _document.Warnings);
             Progress.Value = 0;
@@ -187,8 +215,8 @@ public partial class DocumentTranslationWindow : Window
     internal async Task TranslateFileAsync()
     {
         if (_busy || _document is null || SelectedProvider is not { } provider) return;
-        if (!int.TryParse(TimeoutBox.Text, out var seconds) || seconds is < 10 or > 600)
-        { SetStatus("单段超时需为 10–600 秒"); return; }
+        if (!TryReadOptions(out var batchCharacters, out var requestDelayMs, out var timeoutSeconds))
+        { SetStatus("每批 200–2000 字符，请求间隔 0–5000 毫秒，单段超时 10–600 秒。"); return; }
         var directory = _outputDirectory.Length == 0 ? Path.GetDirectoryName(_document.SourcePath)! : _outputDirectory;
         if (!Directory.Exists(directory)) { SetStatus("输出目录不可用，请重新选择文件夹。"); return; }
         var from = _from.SelectedCode; var target = _to.SelectedCode;
@@ -206,7 +234,14 @@ public partial class DocumentTranslationWindow : Window
             var ct = _cts!.Token;
             if (!_readyToSave)
             {
-                await Task.Run(() => DocumentTranslation.TranslateAsync(_document, provider, from, target, progress, ct, seconds), ct);
+                if (_document.BatchCharacters != batchCharacters)
+                {
+                    SetStatus("分批设置已改变，正在重新分段…");
+                    var source = _document.SourcePath;
+                    _document = await Task.Run(() => DocumentTranslation.Load(source, batchCharacters, ct), ct);
+                    _attempt = new DocumentHistoryEntry { SourcePath = source, ProviderName = provider.DisplayName, SourceLanguage = from, TargetLanguage = target };
+                }
+                await Task.Run(() => DocumentTranslation.TranslateAsync(_document, provider, from, target, progress, ct, timeoutSeconds, requestDelayMs), ct);
                 _readyToSave = true; _translatedTarget = target;
             }
             _saving = true; SetStatus("正在生成译文副本…"); Progress.IsIndeterminate = true;

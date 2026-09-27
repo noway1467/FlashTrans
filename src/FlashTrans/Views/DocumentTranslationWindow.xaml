@@ -158,13 +158,25 @@
                                 <TextBlock Grid.Row="3" x:Name="Privacy" FontSize="11" Foreground="{DynamicResource TextDim}" TextWrapping="Wrap" Margin="0,14,0,0" />
                                 <Expander Grid.Row="4" Header="选项与格式说明" FontSize="11" Foreground="{DynamicResource TextDim}" Margin="0,12,0,0">
                                     <StackPanel Margin="0,10,0,0">
-                                        <StackPanel Orientation="Horizontal">
-                                            <TextBlock Text="单段超时" VerticalAlignment="Center" Margin="0,0,10,0" />
-                                            <TextBox x:Name="TimeoutBox" Style="{StaticResource DocumentSingleLineInput}" Text="180" Width="66" TextChanged="OnOptionChanged" />
-                                            <TextBlock Text="秒" VerticalAlignment="Center" Margin="8,0,0,0" />
-                                        </StackPanel>
+                                        <WrapPanel>
+                                            <StackPanel Orientation="Horizontal" Margin="0,0,22,8">
+                                                <TextBlock Text="每批" VerticalAlignment="Center" Margin="0,0,10,0" />
+                                                <TextBox x:Name="BatchCharactersBox" Style="{StaticResource DocumentSingleLineInput}" Width="66" TextChanged="OnOptionChanged" />
+                                                <TextBlock Text="字符" VerticalAlignment="Center" Margin="8,0,0,0" />
+                                            </StackPanel>
+                                            <StackPanel Orientation="Horizontal" Margin="0,0,22,8">
+                                                <TextBlock Text="请求间隔" VerticalAlignment="Center" Margin="0,0,10,0" />
+                                                <TextBox x:Name="RequestDelayBox" Style="{StaticResource DocumentSingleLineInput}" Width="66" TextChanged="OnOptionChanged" />
+                                                <TextBlock Text="毫秒" VerticalAlignment="Center" Margin="8,0,0,0" />
+                                            </StackPanel>
+                                            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                                <TextBlock Text="单段超时" VerticalAlignment="Center" Margin="0,0,10,0" />
+                                                <TextBox x:Name="TimeoutBox" Style="{StaticResource DocumentSingleLineInput}" Width="66" TextChanged="OnOptionChanged" />
+                                                <TextBlock Text="秒" VerticalAlignment="Center" Margin="8,0,0,0" />
+                                            </StackPanel>
+                                        </WrapPanel>
                                         <TextBlock x:Name="Warnings" TextWrapping="Wrap" Margin="0,10,0,0" FontSize="11" LineHeight="17" />
-                                        <TextBlock Text="只用所选源；失败重试 2 次。关闭窗口不保留续译进度。" TextWrapping="Wrap" Margin="0,6,0,0" FontSize="11" />
+                                        <TextBlock Text="单并发；失败重试 2 次。关闭窗口不保留续译进度。" TextWrapping="Wrap" Margin="0,6,0,0" FontSize="11" />
                                     </StackPanel>
                                 </Expander>
                             </Grid>

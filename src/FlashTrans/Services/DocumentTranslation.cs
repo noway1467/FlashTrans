@@ -17,6 +17,7 @@ public sealed class TranslationDocument
     internal Action<Stream> Write = null!;
     internal Action<string>? Finish;
     internal string? RunIdentity;
+    internal int BatchCharacters { get; set; } = DocumentTranslation.DefaultBatchCharacters;
     public string SourcePath { get; internal set; } = "";
     public List<string> Warnings { get; } = [];
     public int Count => Units.Count;
@@ -126,23 +127,34 @@ internal sealed class DocumentUnit(List<DocumentPart> parts)
 
 public static class DocumentTranslation
 {
+    public const int MinBatchCharacters = 200;
+    public const int MaxBatchCharacters = 2000;
+    public const int DefaultBatchCharacters = 600;
+    public const int MaxRequestDelayMs = 5000;
+    public const int DefaultRequestDelayMs = 200;
+    public const int MinTimeoutSeconds = 10;
+    public const int MaxTimeoutSeconds = 600;
+    public const int DefaultTimeoutSeconds = 180;
+
     public const string FileFilter = "可翻译文件|*.epub;*.txt;*.md;*.markdown;*.docx|EPUB 电子书|*.epub|文本|*.txt|Markdown|*.md;*.markdown|Word 文档|*.docx";
     public static bool Supports(string path) => Path.GetExtension(path).ToLowerInvariant() is ".epub" or ".txt" or ".md" or ".markdown" or ".docx";
-    public static TranslationDocument Load(string path, CancellationToken ct = default) => DocumentFormats.Load(path, ct);
+    public static TranslationDocument Load(string path, CancellationToken ct = default) => Load(path, DefaultBatchCharacters, ct);
+    public static TranslationDocument Load(string path, int batchCharacters, CancellationToken ct = default)
+        => DocumentFormats.Load(path, batchCharacters, ct);
 
     public static Task TranslateAsync(TranslationDocument document, ProviderConfig provider, string from, string target,
-        IProgress<DocumentProgress>? progress, CancellationToken ct, int timeoutSeconds = 180)
+        IProgress<DocumentProgress>? progress, CancellationToken ct, int timeoutSeconds = DefaultTimeoutSeconds, int requestDelayMs = DefaultRequestDelayMs)
     {
         var snapshot = provider.Clone();
         snapshot.TimeoutMs = Math.Clamp(timeoutSeconds, 10, 600) * 1000;
         // 独立注册表和快照：不经过自动切源/聚合/历史缓存，设置页也不能改变在途任务。
         var translator = new ProviderRegistry().Get(snapshot);
         var identity = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(snapshot))));
-        return RunAsync(document, translator, from, target, identity, progress, ct);
+        return RunAsync(document, translator, from, target, identity, progress, ct, requestDelayMs);
     }
 
     internal static async Task RunAsync(TranslationDocument document, ITranslator translator, string from, string target,
-        string identity, IProgress<DocumentProgress>? progress, CancellationToken ct)
+        string identity, IProgress<DocumentProgress>? progress, CancellationToken ct, int requestDelayMs = 0)
     {
         if (document.Count == 0) throw new InvalidOperationException("文件没有可翻译的正文。");
         if (string.IsNullOrWhiteSpace(target) || target == Languages.Auto) throw new ArgumentException("请选择目标语言。");
@@ -154,10 +166,14 @@ public static class DocumentTranslation
             document.RunIdentity = runIdentity;
         }
         progress?.Report(new(document.Completed, document.Count, "正在翻译"));
+        var firstRequest = true;
         foreach (var unit in document.Units)
         {
             ct.ThrowIfCancellationRequested();
             if (unit.Result is not null) continue;
+            if (!firstRequest && requestDelayMs > 0)
+                await Task.Delay(Math.Clamp(requestDelayMs, 0, MaxRequestDelayMs), ct).ConfigureAwait(false);
+            firstRequest = false;
             Exception? failure = null;
             for (var attempt = 0; attempt < 3; attempt++)
             {
