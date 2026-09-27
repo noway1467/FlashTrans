@@ -10,6 +10,29 @@
         <shell:WindowChrome CaptionHeight="0" GlassFrameThickness="0" CornerRadius="0" ResizeBorderThickness="6" UseAeroCaptionButtons="False" />
     </shell:WindowChrome.WindowChrome>
     <Window.Resources>
+        <!-- 全局文本框模板把 Padding 既作为宿主 Margin 又留在滚动内容中，固定高度时会裁字。
+             这两个单行框只保留一层 Padding，并让高度按字体测量，不影响其他多行编辑器。 -->
+        <Style x:Key="DocumentSingleLineInput" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+            <Setter Property="MinHeight" Value="34" />
+            <Setter Property="Padding" Value="9,4" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="VerticalScrollBarVisibility" Value="Disabled" />
+            <Setter Property="HorizontalScrollBarVisibility" Value="Hidden" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <Border x:Name="InputBorder" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="6">
+                            <ScrollViewer x:Name="PART_ContentHost" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True"><Setter TargetName="InputBorder" Property="BorderBrush" Value="{DynamicResource Accent}" /></Trigger>
+                            <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.55" /></Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
         <Style x:Key="FieldLabel" TargetType="TextBlock">
             <Setter Property="FontSize" Value="11.5" />
             <Setter Property="Foreground" Value="{DynamicResource TextDim}" />
@@ -126,7 +149,7 @@
                                     <TextBlock Text="输出文件夹" Style="{StaticResource FieldLabel}" />
                                     <Grid>
                                         <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                                        <TextBox x:Name="OutputFolder" IsReadOnly="True" Height="34" VerticalContentAlignment="Center" Text="源文件所在目录" AutomationProperties.Name="输出文件夹" />
+                                        <TextBox x:Name="OutputFolder" Style="{StaticResource DocumentSingleLineInput}" IsReadOnly="True" Text="源文件所在目录" AutomationProperties.Name="输出文件夹" />
                                         <Button Grid.Column="1" Content="选择" Style="{StaticResource OutlineBtn}" Margin="8,0,0,0" Padding="12,4" Click="OnChooseFolder" />
                                         <ContentControl Grid.Column="2" x:Name="ResetFolderHost" Margin="6,0,0,0" VerticalAlignment="Center" />
                                     </Grid>
@@ -137,7 +160,7 @@
                                     <StackPanel Margin="0,10,0,0">
                                         <StackPanel Orientation="Horizontal">
                                             <TextBlock Text="单段超时" VerticalAlignment="Center" Margin="0,0,10,0" />
-                                            <TextBox x:Name="TimeoutBox" Text="180" Width="66" Height="28" TextChanged="OnOptionChanged" />
+                                            <TextBox x:Name="TimeoutBox" Style="{StaticResource DocumentSingleLineInput}" Text="180" Width="66" TextChanged="OnOptionChanged" />
                                             <TextBlock Text="秒" VerticalAlignment="Center" Margin="8,0,0,0" />
                                         </StackPanel>
                                         <TextBlock x:Name="Warnings" TextWrapping="Wrap" Margin="0,10,0,0" FontSize="11" LineHeight="17" />

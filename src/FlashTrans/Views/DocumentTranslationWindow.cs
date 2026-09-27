@@ -34,9 +34,10 @@ public partial class DocumentTranslationWindow : Window
         ResetFolderHost.Content = UiKit.IconButton(UiKit.IconRefresh, "使用源文件目录", (_, _) => SetOutputDirectory(""));
         FromHost.Content = _from; ToHost.Content = _to;
         var settings = SettingsService.Instance.Current;
-        _from.SelectedCode = settings.SourceLang; _to.SelectedCode = settings.TargetLang;
+        _from.SelectedCode = settings.SourceLang;
+        _to.SelectedCode = string.IsNullOrWhiteSpace(settings.DocumentTargetLang) ? settings.TargetLang : settings.DocumentTargetLang;
         _from.SelectionChanged += _ => InvalidateTranslation();
-        _to.SelectionChanged += _ => InvalidateTranslation();
+        _to.SelectionChanged += RememberTargetLanguage;
         SetOutputDirectory(settings.DocumentOutputDirectory);
         RefreshProviders(); RefreshHistory(); UpdateButtons();
         Loaded += (_, _) =>
@@ -110,6 +111,14 @@ public partial class DocumentTranslationWindow : Window
     void OnProviderChanged(object sender, SelectionChangedEventArgs e) { if (!IsInitialized) return; InvalidateTranslation(); UpdatePrivacy(); }
     void OnOptionChanged(object sender, TextChangedEventArgs e) { if (IsInitialized) InvalidateTranslation(); }
     void InvalidateTranslation() { _readyToSave = false; _outputPath = ""; UpdateButtons(); }
+    void RememberTargetLanguage(string code)
+    {
+        _to.SelectedCode = code;
+        // 只保存文件窗口的偏好，不广播主窗口语言变更，也不干扰在途划词翻译。
+        SettingsService.Instance.Current.DocumentTargetLang = code;
+        SettingsService.Instance.Save();
+        InvalidateTranslation();
+    }
     void RefreshProviders()
     {
         var id = SelectedProvider?.Id ?? SettingsService.Instance.Current.PrimaryProviderId;
@@ -260,7 +269,7 @@ public partial class DocumentTranslationWindow : Window
             actions.Children.Add(ActionButton("重新翻译", async () =>
             {
                 if (!File.Exists(entry.SourcePath)) { SetStatus("原文件已移动或删除，请重新选择。"); return; }
-                _from.SelectedCode = entry.SourceLanguage; _to.SelectedCode = entry.TargetLanguage;
+                _from.SelectedCode = entry.SourceLanguage; RememberTargetLanguage(entry.TargetLanguage);
                 InvalidateTranslation(); await LoadFileAsync(entry.SourcePath);
             }));
             content.Children.Add(actions);

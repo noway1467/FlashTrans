@@ -56,11 +56,13 @@ public sealed class AppSettings
     public int Version { get; set; } = CurrentVersion;
 
     /// <summary>加新的默认源/字段时 +1，并在 Migrate 里补一段。</summary>
-    public const int CurrentVersion = 7;
+    public const int CurrentVersion = 8;
 
     // ------- 文件翻译 -------
     /// <summary>空字符串表示源文件目录；只保存用户显式设为默认的目录。</summary>
     public string DocumentOutputDirectory { get; set; } = "";
+    /// <summary>文件翻译独立记住目标语言；尚未选择时沿用主窗口的目标语言。</summary>
+    public string DocumentTargetLang { get; set; } = "";
 
     // ------- 翻译源 -------
     public List<ProviderConfig> Providers { get; set; } = [];

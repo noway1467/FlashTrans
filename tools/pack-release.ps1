@@ -1,5 +1,5 @@
 ﻿# 将带版本号的发布目录压缩成同名包，包内也保留同名顶层目录。
-param([string]$Version = '1.9.0')
+param([string]$Version = '1.9.1')
 $ErrorActionPreference = 'Stop'
 if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw '版本格式必须是 x.y.z。' }
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))

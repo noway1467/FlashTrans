@@ -36,7 +36,9 @@ static class DocumentProbe
         step("文件：WPF 深浅主题窗口、读取、按钮和渲染", () => InTemp(WindowRoundtrip));
         step("文件：自动副本、目录选择和同名避让", () => InTemp(AutomaticCopies));
         step("文件：历史持久化、上限、更新、清空及损坏保护", () => InTemp(HistoryPersistence));
-        step("文件：默认输出配置迁移及往返，版本 1.9.0", () => InTemp(OutputSettings));
+        step("文件：默认输出配置迁移及往返，版本 1.9.1", () => InTemp(OutputSettings));
+        step("文件：路径与超时文本的完整高度（字号、缩放、禁用状态）", () => InTemp(InputTextHeight));
+        step("文件：目标语言独立持久化，重开、重载及历史恢复", () => InTemp(TargetLanguagePersistence));
     }
 
     static void Check(bool condition, string message)
@@ -451,6 +453,138 @@ static class DocumentProbe
         using var file = File.Create(path); encoder.Save(file);
     }
 
+    static IEnumerable<T> Visuals<T>(DependencyObject root) where T : DependencyObject
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is T match) yield return match;
+            foreach (var nested in Visuals<T>(child)) yield return nested;
+        }
+    }
+
+    static void InputTextHeight(string root)
+    {
+        var window = new DocumentTranslationWindow(new DocumentHistoryService(root)) { ShowActivated = false, ShowInTaskbar = false };
+        try
+        {
+            window.Show(); window.UpdateLayout();
+            Visuals<Expander>(window).Single().IsExpanded = true;
+            window.TimeoutBox.Text = "180";
+            foreach (var theme in new[] { AppTheme.Dark, AppTheme.Light })
+            {
+            ThemeService.ApplyTheme(theme);
+            foreach (var scale in new[] { 1.0, 1.25, 1.5, 2.0 })
+            foreach (var size in new[] { 12.0, 14.0, 18.0, 24.0 })
+            foreach (var enabled in new[] { true, false })
+            {
+                window.Options.IsEnabled = enabled;
+                foreach (var box in new[] { window.OutputFolder, window.TimeoutBox })
+                {
+                    box.FontSize = size; box.LayoutTransform = new ScaleTransform(scale, scale);
+                }
+                window.UpdateLayout();
+                foreach (var box in new[] { window.OutputFolder, window.TimeoutBox })
+                {
+                    var viewport = Visuals<ScrollContentPresenter>(box).First();
+                    var bounds = viewport.TransformToAncestor(box).TransformBounds(new Rect(viewport.RenderSize));
+                    var line = box.GetRectFromCharacterIndex(0);
+                    var message = $"{box.Name} 字号 {size} / 缩放 {scale} / 启用 {enabled}：字行 {line}，可视区 {bounds}";
+                    Check(!line.IsEmpty && line.Height > 0, "没有测到文字：" + message);
+                    Check(line.Top >= bounds.Top - 0.5 && line.Bottom <= bounds.Bottom + 0.5, "文字被裁切：" + message);
+                }
+            }
+            if (Environment.GetEnvironmentVariable("FLASHTRANS_DOCUMENT_SHOTS") is { Length: > 0 } folder)
+            {
+                foreach (var box in new[] { window.OutputFolder, window.TimeoutBox })
+                { box.FontSize = 12; box.LayoutTransform = Transform.Identity; }
+                window.UpdateLayout();
+                var width = window.OutputFolder.ActualWidth + 20;
+                var visual = new DrawingVisual();
+                using (var dc = visual.RenderOpen())
+                {
+                    dc.DrawRectangle((Brush)window.FindResource("Bg"), null, new Rect(0, 0, width, 120));
+                    dc.DrawRectangle(new VisualBrush(window.OutputFolder), null, new Rect(10, 10, window.OutputFolder.ActualWidth, window.OutputFolder.ActualHeight));
+                    dc.DrawRectangle(new VisualBrush(window.TimeoutBox), null, new Rect(10, 70, window.TimeoutBox.ActualWidth, window.TimeoutBox.ActualHeight));
+                }
+                var dpi = VisualTreeHelper.GetDpi(window);
+                var bitmap = new RenderTargetBitmap((int)Math.Ceiling(width * dpi.DpiScaleX), (int)Math.Ceiling(120 * dpi.DpiScaleY), dpi.PixelsPerInchX, dpi.PixelsPerInchY, PixelFormats.Pbgra32);
+                bitmap.Render(visual);
+                var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap));
+                Directory.CreateDirectory(folder);
+                using var file = File.Create(Path.Combine(folder, $"text-fields-{theme}.png")); encoder.Save(file);
+            }
+            }
+        }
+        finally { window.Close(); ThemeService.ApplyTheme(AppTheme.Dark); }
+    }
+
+    static void TargetLanguagePersistence(string root)
+    {
+        var service = SettingsService.Instance;
+        var oldTarget = service.Current.TargetLang;
+        var oldDocumentTarget = service.Current.DocumentTargetLang;
+        var history = new DocumentHistoryService(root);
+        const System.Reflection.BindingFlags privateInstance = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var previousContext = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
+        try
+        {
+            foreach (var bad in new[] { "auto", "unknown", "", "  " })
+            {
+                var settings = JsonSerializer.Deserialize("{\"version\":7}", SettingsJson.Default.AppSettings)!;
+                Check(settings.DocumentTargetLang == "", "旧配置没有使用兼容默认值");
+                Check(SettingsService.Migrate(settings) && settings.Version == 8, "目标语言迁移失败");
+                settings.DocumentTargetLang = bad; SettingsService.Normalize(settings);
+                Check(settings.DocumentTargetLang == "", "非法目标语言未回退");
+            }
+            var valid = new AppSettings { Version = 7, DocumentTargetLang = " EN " };
+            SettingsService.Migrate(valid); SettingsService.Normalize(valid);
+            Check(valid.DocumentTargetLang == "en", "迁移覆盖有效选择或归一化失败");
+            service.Current.TargetLang = "en"; service.Current.DocumentTargetLang = "";
+            var window = new DocumentTranslationWindow(history) { ShowActivated = false, ShowInTaskbar = false };
+            try
+            {
+                window.Show();
+                var picker = (LangPicker)window.ToHost.Content;
+                Check(picker.SelectedCode == "en", "首次打开未沿用主窗口语言");
+                // 经过真实语言列表的 Commit，证明用户选择触发保存，不是仅验证模型序列化。
+                picker.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                var list = (ListBox)typeof(LangPicker).GetField("_list", privateInstance)!.GetValue(picker)!;
+                list.SelectedItem = list.Items.OfType<Lang>().Single(l => l.Code == "ja");
+                typeof(LangPicker).GetMethod("Commit", privateInstance)!.Invoke(picker, null);
+                Check(service.Current.DocumentTargetLang == "ja" && service.Current.TargetLang == "en", "选择没有保存或误改主窗口");
+                var disk = JsonSerializer.Deserialize(File.ReadAllText(service.ConfigPath), SettingsJson.Default.AppSettings)!;
+                Check(disk.DocumentTargetLang == "ja" && disk.TargetLang == "en", "目标语言没有落盘");
+            }
+            finally { window.Close(); }
+            service.Current.DocumentTargetLang = "";
+            service.Load(); // 重新走启动时的读取、迁移与归一化路径。
+            service.Current.TargetLang = "fr";
+            var source = PutText(root, "history.txt", "Hello");
+            history.Add(new DocumentHistoryEntry { SourcePath = source, SourceLanguage = "en", TargetLanguage = "ko", Status = "Cancelled" });
+            var reopened = new DocumentTranslationWindow(history) { ShowActivated = false, ShowInTaskbar = false };
+            try
+            {
+                reopened.Show();
+                Check(((LangPicker)reopened.ToHost.Content).SelectedCode == "ja", "重开/重载后目标语言丢失或被主窗口覆盖");
+                var actions = (WrapPanel)((StackPanel)((Border)reopened.HistoryList.Children[0]).Child).Children[3];
+                ((Button)actions.Children[0]).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                WaitUi(() => reopened.DropArea.IsEnabled);
+                Check(((LangPicker)reopened.ToHost.Content).SelectedCode == "ko" && service.Current.DocumentTargetLang == "ko", "历史任务目标语言未记住");
+                Check(service.Current.TargetLang == "fr", "恢复历史改变了主窗口语言");
+                var disk = JsonSerializer.Deserialize(File.ReadAllText(service.ConfigPath), SettingsJson.Default.AppSettings)!;
+                Check(disk.DocumentTargetLang == "ko", "历史选择未落盘");
+            }
+            finally { reopened.Close(); }
+        }
+        finally
+        {
+            service.Current.TargetLang = oldTarget; service.Current.DocumentTargetLang = oldDocumentTarget; service.Save();
+            SynchronizationContext.SetSynchronizationContext(previousContext);
+        }
+    }
+
     static void AutomaticCopies(string root)
     {
         var source = PutText(root, "input.txt", "Hello"); var doc = Translate(source);
@@ -490,12 +624,12 @@ static class DocumentProbe
     {
         var settings = JsonSerializer.Deserialize("{\"version\":6}", SettingsJson.Default.AppSettings)!;
         Check(settings.DocumentOutputDirectory == "", "旧配置未默认使用源目录");
-        Check(SettingsService.Migrate(settings) && settings.Version == 7, "文件翻译配置迁移失败");
+        Check(SettingsService.Migrate(settings) && settings.Version == AppSettings.CurrentVersion, "文件翻译配置迁移失败");
         settings.DocumentOutputDirectory = root;
         var copy = JsonSerializer.Deserialize(JsonSerializer.Serialize(settings, SettingsJson.Default.AppSettings), SettingsJson.Default.AppSettings)!;
         SettingsService.Normalize(copy); Check(copy.DocumentOutputDirectory == root, "默认输出目录未保存");
         copy.DocumentOutputDirectory = "relative"; SettingsService.Normalize(copy); Check(copy.DocumentOutputDirectory == "", "相对目录未归一化");
-        Check(typeof(MainWindow).Assembly.GetName().Version == new Version(1, 9, 0, 0), "主程序版本未升级到 1.9.0");
+        Check(typeof(MainWindow).Assembly.GetName().Version == new Version(1, 9, 1, 0), "主程序版本未升级到 1.9.1");
     }
 
     sealed class TestTranslator : ITranslator

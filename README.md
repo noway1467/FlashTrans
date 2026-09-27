@@ -23,9 +23,9 @@ tools\publish.cmd fast   # 自包含包
 tools\publish.cmd small  # 依赖 .NET 9 Desktop Runtime
 ```
 
-产物在 `dist\FlashTrans-1.9.0-win-x64-fast/` 和 `dist\FlashTrans-1.9.0-win-x64-small/`（目录版本自动取自主工程）。`fast` 自带运行时，`small` 需要 .NET 9 Desktop Runtime。
+产物在 `dist\FlashTrans-1.9.1-win-x64-fast/` 和 `dist\FlashTrans-1.9.1-win-x64-small/`（目录版本自动取自主工程）。`fast` 自带运行时，`small` 需要 .NET 9 Desktop Runtime。
 
-压缩执行 `powershell -NoProfile -File tools\pack-release.ps1 -Version 1.9.0`，包在 `dist\release\`。压缩包名和包内顶层目录都带版本号；发布和压缩脚本会核对 exe 版本，拒绝覆盖同名目录或包，也拒绝打包便携配置和日志。旧版目录不会被清理。
+压缩执行 `powershell -NoProfile -File tools\pack-release.ps1 -Version 1.9.1`，包在 `dist\release\`。压缩包名和包内顶层目录都带版本号；发布和压缩脚本会核对 exe 版本，拒绝覆盖同名目录或包，也拒绝打包便携配置和日志。旧版目录不会被清理。
 
 ## 默认快捷键
 
@@ -57,6 +57,7 @@ tools\publish.cmd small  # 依赖 .NET 9 Desktop Runtime
 在主窗口右上角、双语对照左侧点击 **文件翻译**，将文件拖进大框（也可点击选择），选好翻译源和语言后点击 **开始翻译**。完成后自动生成译文副本，一次处理一个文件、一个目标语言，扩展名与原件一致。
 
 - **输出位置**：默认保存到源文件目录；可选择其他文件夹，并勾选「设为默认输出位置」。取消默认则恢复源目录，右侧重置图标可仅为本次选择源目录。默认路径不存在时会提示重选，不静默改存其他位置。
+- **目标语言**：文件翻译独立记住上次选择，关闭窗口或重启后仍保留，不改变主窗口的目标语言；首次使用沿用主窗口语言。
 - **文件名**：`原文件名_译文_zh-CN.ext`，重名时增加 `(2)` 等编号，不覆盖原件或已有译文。
 - **翻译历史**：右侧显示最近 100 条任务，可打开译文、打开目录、重新载入原件。记录成功、失败和取消状态；只存路径、语言、源名称、时间及进度，不存正文或密钥。清空历史不删除文件。
 - **保存失败**：已完成译文保留在当前窗口，换输出目录后点击「重试保存」，不重复翻译。未保存前请不要关闭窗口。

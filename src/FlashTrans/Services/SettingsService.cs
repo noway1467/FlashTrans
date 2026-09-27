@@ -176,6 +176,13 @@ public sealed class SettingsService
             s.Version = 7;
             changed = true;
         }
+        if (s.Version < 8)
+        {
+            // 不覆盖可能已存在的选择；空值保持旧版首次打开时沿用主窗口语言的行为。
+            s.DocumentTargetLang ??= "";
+            s.Version = 8;
+            changed = true;
+        }
         return changed;
     }
 
@@ -186,6 +193,8 @@ public sealed class SettingsService
     /// </summary>
     public static void Normalize(AppSettings s)
     {
+        s.DocumentTargetLang = Languages.All.FirstOrDefault(l =>
+            string.Equals(l.Code, s.DocumentTargetLang?.Trim(), StringComparison.OrdinalIgnoreCase))?.Code ?? "";
         s.DocumentOutputDirectory = (s.DocumentOutputDirectory ?? "").Trim();
         if (s.DocumentOutputDirectory.Length > 0 && !Path.IsPathFullyQualified(s.DocumentOutputDirectory))
             s.DocumentOutputDirectory = "";
