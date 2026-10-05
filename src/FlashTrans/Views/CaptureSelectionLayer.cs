@@ -137,6 +137,22 @@ sealed class CaptureSelectionLayer : FrameworkElement
 
     public bool HasSelection => _hasSel && _sel.Width >= 4 && _sel.Height >= 4;
     public Rect Selection => _sel;
+    /// <summary>裁切、尺寸标签和贴图共用边界，不能把宽高另外取整后再拉伸回选区。</summary>
+    internal RECT SelectionPixels
+    {
+        get
+        {
+            var (sx, sy) = Scale();
+            var r = ScreenCapture.ToPixels(_sel, sx, sy);
+            return new RECT
+            {
+                Left = Math.Clamp(r.Left, 0, _shot.Width),
+                Top = Math.Clamp(r.Top, 0, _shot.Height),
+                Right = Math.Clamp(r.Right, 0, _shot.Width),
+                Bottom = Math.Clamp(r.Bottom, 0, _shot.Height),
+            };
+        }
+    }
     public bool CanUndo => _items.Count > 0;
     public bool CanRedo => _undone.Count > 0;
     public int AnnotationCount => _items.Count;
@@ -315,10 +331,11 @@ sealed class CaptureSelectionLayer : FrameworkElement
         if (!HasSelection) return null;
         var (sx, sy) = Scale();
 
-        var px = (int)Math.Round(_sel.X * sx);
-        var py = (int)Math.Round(_sel.Y * sy);
-        var pw = (int)Math.Round(_sel.Width * sx);
-        var ph = (int)Math.Round(_sel.Height * sy);
+        var bounds = SelectionPixels;
+        var px = bounds.Left;
+        var py = bounds.Top;
+        var pw = bounds.Right - px;
+        var ph = bounds.Bottom - py;
 
         var cropped = CaptureOverlay.CropPixels(_shot, px, py, pw, ph);
         if (cropped is null) return null;
@@ -327,10 +344,11 @@ sealed class CaptureSelectionLayer : FrameworkElement
         var ctx = new AnnotationCtx
         {
             Scale = sx,
-            Offset = new Vector(_sel.X, _sel.Y),
-            Mosaic = MosaicImage(),
+            // 裁切已经吸附到整数像素，标注也必须相对同一个原点，不能再用小数选区偏移。
+            Offset = new Vector(px / sx, py / sy),
+            Mosaic = _mosaicNeeded() ? MosaicImage() : null,
             // 底图整体的位置：把整张图的左上角平移到裁出来的小图坐标系里
-            ImageBounds = new Rect(-_sel.X * sx, -_sel.Y * sy, _shot.Width, _shot.Height),
+            ImageBounds = new Rect(-px, -py, _shot.Width, _shot.Height),
         };
 
         var visual = new DrawingVisual();
@@ -816,9 +834,9 @@ sealed class CaptureSelectionLayer : FrameworkElement
 
     void DrawSize(DrawingContext dc, Rect sel, Rect full)
     {
-        var (sx, sy) = Scale();
+        var bounds = SelectionPixels;
         // 报的是导出后的像素数，不是 DIP：用户关心存下来的图多大
-        var t = Text($"{(int)Math.Round(sel.Width * sx)} × {(int)Math.Round(sel.Height * sy)}", 12);
+        var t = Text($"{bounds.Right - bounds.Left} × {bounds.Bottom - bounds.Top}", 12);
         const double pad = 6;
         var w = t.Width + pad * 2;
         var h = t.Height + pad;

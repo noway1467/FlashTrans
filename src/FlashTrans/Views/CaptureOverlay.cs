@@ -155,15 +155,13 @@ public sealed partial class CaptureOverlay : Window
     /// <summary>选区换算到屏幕物理像素。长截图要在这块区域上接着滚。</summary>
     RECT SelectionInScreen()
     {
-        var sel = _layer.Selection;
-        var sx = _layer.ActualWidth > 0 ? _shot.Width / _layer.ActualWidth : 1;
-        var sy = _layer.ActualHeight > 0 ? _shot.Height / _layer.ActualHeight : 1;
+        var bounds = _layer.SelectionPixels;
         return new RECT
         {
-            Left = _screen.Left + (int)Math.Round(sel.Left * sx),
-            Top = _screen.Top + (int)Math.Round(sel.Top * sy),
-            Right = _screen.Left + (int)Math.Round(sel.Right * sx),
-            Bottom = _screen.Top + (int)Math.Round(sel.Bottom * sy),
+            Left = _screen.Left + bounds.Left,
+            Top = _screen.Top + bounds.Top,
+            Right = _screen.Left + bounds.Right,
+            Bottom = _screen.Top + bounds.Bottom,
         };
     }
 

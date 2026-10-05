@@ -16,7 +16,11 @@ public sealed class PinnedShotWindow : Window
     static readonly Geometry IconSave = Geometry.Parse(
         "M4,2 H11 L12.5,3.5 V14 H4 Z M6,2 V6 H10 V2 M6,9 H10 V14 H6 Z");
     readonly RECT? _region;
+    readonly CapturedImage _image;
+    readonly Image _picture;
     readonly Border _toolbar;
+    int _pixelWidth;
+    int _pixelHeight;
     bool _closing;
 
     public event Action? CopyRequested;
@@ -25,6 +29,9 @@ public sealed class PinnedShotWindow : Window
     public PinnedShotWindow(CapturedImage image, RECT? region = null)
     {
         _region = region;
+        _image = image;
+        _pixelWidth = image.Width;
+        _pixelHeight = image.Height;
         Title = "钉住的截图";
         WindowStyle = WindowStyle.None;
         ResizeMode = ResizeMode.NoResize;
@@ -34,18 +41,19 @@ public sealed class PinnedShotWindow : Window
         Background = Brushes.Transparent;
         AllowsTransparency = true;
 
-        var pic = new Image
+        _picture = new Image
         {
             Source = image.ToBitmap(),
-            Stretch = Stretch.Fill,
+            Stretch = Stretch.Uniform,
+            SnapsToDevicePixels = true,
             HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalAlignment = VerticalAlignment.Stretch,
         };
-        RenderOptions.SetBitmapScalingMode(pic, BitmapScalingMode.NearestNeighbor);
+        RenderOptions.SetBitmapScalingMode(_picture, BitmapScalingMode.NearestNeighbor);
 
         _toolbar = BuildToolbar();
         var grid = new Grid();
-        grid.Children.Add(pic);
+        grid.Children.Add(_picture);
         grid.Children.Add(_toolbar);
         Content = grid;
 
@@ -75,6 +83,10 @@ public sealed class PinnedShotWindow : Window
             }
         };
         SourceInitialized += (_, _) => Place();
+        // 显示到目标屏幕后再校准一次，避免首次创建 HWND 时沿用另一块屏幕的 DPI。
+        Loaded += (_, _) => Place();
+        DpiChanged += (_, _) => Dispatcher.BeginInvoke(
+            System.Windows.Threading.DispatcherPriority.Loaded, new Action(KeepPixelSize));
         Closing += (_, _) => _closing = true;
     }
 
@@ -95,6 +107,7 @@ public sealed class PinnedShotWindow : Window
             Margin = new Thickness(7),
             VerticalAlignment = VerticalAlignment.Top,
             HorizontalAlignment = HorizontalAlignment.Right,
+            Visibility = Visibility.Collapsed,
             Child = row,
         };
         border.MouseLeftButtonDown += (_, e) => e.Handled = true;
@@ -111,23 +124,41 @@ public sealed class PinnedShotWindow : Window
 
     void Place()
     {
+        int left, top;
         if (_region is { } r)
         {
-            var topLeft = ScreenHelper.ToDip(new POINT { X = r.Left, Y = r.Top }, this);
+            left = r.Left;
+            top = r.Top;
+            // 区域只决定位置；显示尺寸必须来自实际图片，否则一像素的边界误差也会被拉伸。
+            _pixelWidth = _image.Width;
+            _pixelHeight = _image.Height;
+        }
+        else
+        {
+            var area = ScreenHelper.WorkAreaAt(ScreenHelper.CursorPos(), this);
             var (sx, sy) = DpiScale(this);
-            Left = topLeft.X;
-            Top = topLeft.Y;
-            Width = Math.Max(8, (r.Right - r.Left) / sx);
-            Height = Math.Max(8, (r.Bottom - r.Top) / sy);
-            return;
+            var fit = Math.Min(1, Math.Min(Math.Min(680, area.Width * 0.8) * sx / _image.Width,
+                Math.Min(720, area.Height * 0.8) * sy / _image.Height));
+            _pixelWidth = Math.Max(1, (int)Math.Round(_image.Width * fit));
+            _pixelHeight = Math.Max(1, (int)Math.Round(_image.Height * fit));
+            left = (int)Math.Round(area.Left * sx + (area.Width * sx - _pixelWidth) / 2);
+            top = (int)Math.Round(area.Top * sy + (area.Height * sy - _pixelHeight) / 2);
         }
 
-        var area = ScreenHelper.WorkAreaAt(ScreenHelper.CursorPos(), this);
-        Width = Math.Min(680, area.Width * 0.8);
-        Height = Math.Min(720, area.Height * 0.8);
-        WindowStartupLocation = WindowStartupLocation.Manual;
-        Left = area.Left + (area.Width - Width) / 2;
-        Top = area.Top + (area.Height - Height) / 2;
+        RenderOptions.SetBitmapScalingMode(_picture,
+            _pixelWidth == _image.Width && _pixelHeight == _image.Height
+                ? BitmapScalingMode.NearestNeighbor : BitmapScalingMode.HighQuality);
+        var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
+        Win32.SetWindowPos(hwnd, Win32.HWND_TOPMOST, left, top, _pixelWidth, _pixelHeight, Win32.SWP_NOACTIVATE);
+    }
+
+    void KeepPixelSize()
+    {
+        if (_closing) return;
+        var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
+        // 跨 DPI 屏幕拖动时仍保持物理像素大小，不让 WPF 把截图当普通界面整体放大。
+        Win32.SetWindowPos(hwnd, Win32.HWND_TOPMOST, 0, 0, _pixelWidth, _pixelHeight,
+            Win32.SWP_NOMOVE | Win32.SWP_NOACTIVATE);
     }
 
     static (double X, double Y) DpiScale(Window w)
