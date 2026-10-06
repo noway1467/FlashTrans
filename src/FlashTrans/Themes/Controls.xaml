@@ -497,6 +497,7 @@
     </Style>
 
     <Style TargetType="ComboBox">
+        <Setter Property="MaxDropDownHeight" Value="320" />
         <Setter Property="Foreground" Value="{DynamicResource Text}" />
         <Setter Property="Background" Value="{DynamicResource BgInput}" />
         <Setter Property="Height" Value="28" />
@@ -508,15 +509,25 @@
                     <Grid>
                         <ToggleButton Style="{StaticResource ComboToggle}" Focusable="False"
                                       IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}" />
-                        <ContentPresenter Content="{TemplateBinding SelectionBoxItem}"
+                        <ContentPresenter x:Name="SelectionContent" Content="{TemplateBinding SelectionBoxItem}"
                                           ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
                                           Margin="{TemplateBinding Padding}" IsHitTestVisible="False"
                                           VerticalAlignment="Center" HorizontalAlignment="Left" />
+                        <TextBox x:Name="PART_EditableTextBox" Visibility="Collapsed"
+                                 Margin="8,1,24,1" Padding="0" BorderThickness="0"
+                                 Background="Transparent" Foreground="{TemplateBinding Foreground}"
+                                 VerticalContentAlignment="Center" IsReadOnly="{TemplateBinding IsReadOnly}">
+                            <TextBox.Template>
+                                <ControlTemplate TargetType="TextBox">
+                                    <ScrollViewer x:Name="PART_ContentHost" />
+                                </ControlTemplate>
+                            </TextBox.Template>
+                        </TextBox>
                         <Popup x:Name="PART_Popup" AllowsTransparency="True" Placement="Bottom"
                                IsOpen="{TemplateBinding IsDropDownOpen}" PopupAnimation="Fade" Focusable="False">
                             <Border Background="{DynamicResource BgCard}" CornerRadius="7" Margin="0,3,0,0"
                                     BorderBrush="{DynamicResource Border}" BorderThickness="1"
-                                    MinWidth="{TemplateBinding ActualWidth}" MaxHeight="320">
+                                    MinWidth="{TemplateBinding ActualWidth}" MaxHeight="{TemplateBinding MaxDropDownHeight}">
                                 <Border.Effect>
                                     <DropShadowEffect BlurRadius="14" ShadowDepth="2" Opacity="0.35" Color="Black" />
                                 </Border.Effect>
@@ -526,6 +537,12 @@
                             </Border>
                         </Popup>
                     </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsEditable" Value="True">
+                            <Setter TargetName="SelectionContent" Property="Visibility" Value="Collapsed" />
+                            <Setter TargetName="PART_EditableTextBox" Property="Visibility" Value="Visible" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
                 </ControlTemplate>
             </Setter.Value>
         </Setter>

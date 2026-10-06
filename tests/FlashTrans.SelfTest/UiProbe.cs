@@ -1294,7 +1294,13 @@ static class UiProbe
         add.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
         w.UpdateLayout();
 
-        var menus = Descendants<ContextMenu>(w).ToList();
+        var menu = ContextMenuService.GetContextMenu(add)
+                   ?? throw new InvalidOperationException("添加源菜单未创建");
+        var kinds = menu.Items.OfType<MenuItem>().Where(i => i.Tag is ProviderKind)
+            .Select(i => (ProviderKind)i.Tag).ToArray();
+        menu.IsOpen = false;
+        if (kinds.Length != ProviderMeta.All.Length || kinds[0] != ProviderKind.OpenAiCompat)
+            throw new InvalidOperationException("添加源菜单不完整或 AI 未置首");
         Close(w);
     }
 

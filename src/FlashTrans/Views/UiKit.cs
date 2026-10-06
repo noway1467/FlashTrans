@@ -134,6 +134,7 @@ public static class UiKit
     public static Border Badge(string label, string accentHex)
     {
         var color = Services.ThemeService.Parse(accentHex, Color.FromRgb(0x4C, 0x8D, 0xFF));
+        var characters = System.Globalization.StringInfo.ParseCombiningCharacters(label);
         return new Border
         {
             Width = 18, Height = 18, CornerRadius = new CornerRadius(5),
@@ -141,8 +142,8 @@ public static class UiKit
             VerticalAlignment = VerticalAlignment.Center,
             Child = new TextBlock
             {
-                Text = label.Length <= 2 ? label : label[..2],
-                FontSize = label.Length > 1 ? 9.5 : 11,
+                Text = characters.Length <= 2 ? label : label[..characters[2]],
+                FontSize = characters.Length > 1 ? 9.5 : 11,
                 FontWeight = FontWeights.Bold,
                 Foreground = Brushes.White,
                 HorizontalAlignment = HorizontalAlignment.Center,

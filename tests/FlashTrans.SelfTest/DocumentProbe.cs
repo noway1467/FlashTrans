@@ -36,7 +36,7 @@ static class DocumentProbe
         step("文件：WPF 深浅主题窗口、读取、按钮和渲染", () => InTemp(WindowRoundtrip));
         step("文件：自动副本、目录选择和同名避让", () => InTemp(AutomaticCopies));
         step("文件：历史持久化、上限、更新、清空及损坏保护", () => InTemp(HistoryPersistence));
-        step("文件：默认输出配置迁移及往返，版本 1.9.0", () => InTemp(OutputSettings));
+        step("文件：默认输出配置迁移及往返，版本 1.9.1", () => InTemp(OutputSettings));
         step("文件：路径与超时文本的完整高度（字号、缩放、禁用状态）", () => InTemp(InputTextHeight));
         step("文件：目标语言独立持久化，重开、重载及历史恢复", () => InTemp(TargetLanguagePersistence));
         step("文件：分批字符数和请求间隔可调、可持久化", () => InTemp(BatchAndDelay));
@@ -677,7 +677,7 @@ static class DocumentProbe
         var copy = JsonSerializer.Deserialize(JsonSerializer.Serialize(settings, SettingsJson.Default.AppSettings), SettingsJson.Default.AppSettings)!;
         SettingsService.Normalize(copy); Check(copy.DocumentOutputDirectory == root, "默认输出目录未保存");
         copy.DocumentOutputDirectory = "relative"; SettingsService.Normalize(copy); Check(copy.DocumentOutputDirectory == "", "相对目录未归一化");
-        Check(typeof(MainWindow).Assembly.GetName().Version == new Version(1, 9, 0, 0), "主程序版本未调整为 1.9.0");
+        Check(typeof(MainWindow).Assembly.GetName().Version == new Version(1, 9, 1, 0), "主程序版本未调整为 1.9.1");
     }
 
     sealed class TestTranslator : ITranslator

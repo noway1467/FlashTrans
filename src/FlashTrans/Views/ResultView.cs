@@ -389,7 +389,7 @@ public sealed class ResultView : ScrollViewer
         head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         head.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
-        var badge = UiKit.Badge(meta.Badge, meta.Accent);
+        var badge = UiKit.Badge(ProviderMeta.BadgeFor(cfg.Kind, cfg.DisplayName), meta.Accent);
         UiKit.SetGrid(badge, col: 0);
         head.Children.Add(badge);
 
@@ -421,7 +421,7 @@ public sealed class ResultView : ScrollViewer
         head.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-        var badge = UiKit.Badge(meta.Badge, meta.Accent);
+        var badge = UiKit.Badge(ProviderMeta.BadgeFor(meta.Kind, r.ProviderName), meta.Accent);
         UiKit.SetGrid(badge, col: 0);
         head.Children.Add(badge);
 

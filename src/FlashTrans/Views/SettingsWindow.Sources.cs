@@ -74,8 +74,8 @@ public sealed partial class SettingsWindow
         var configError = Engine.ConfigErrorOf(cfg);
 
         var body = new StackPanel();
-        body.Children.Add(BuildSourceHeader(cfg, meta, index, configError));
-        if (expanded) body.Children.Add(BuildSourceEditor(cfg, meta));
+        body.Children.Add(BuildSourceHeader(cfg, meta, index, configError, out var refreshIdentity));
+        if (expanded) body.Children.Add(BuildSourceEditor(cfg, meta, refreshIdentity));
 
         var card = UiKit.Card(body, new Thickness(10, 8, 10, expanded ? 12 : 8));
         card.Margin = new Thickness(0, 0, 0, 6);
@@ -83,7 +83,8 @@ public sealed partial class SettingsWindow
         return card;
     }
 
-    UIElement BuildSourceHeader(ProviderConfig cfg, ProviderMetaInfo meta, int index, string? configError)
+    UIElement BuildSourceHeader(ProviderConfig cfg, ProviderMetaInfo meta, int index, string? configError,
+        out Action refreshIdentity)
     {
         var grid = new Grid();
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });   // 勾选
@@ -103,14 +104,21 @@ public sealed partial class SettingsWindow
         UiKit.SetGrid(enable, col: 0);
         grid.Children.Add(enable);
 
-        var badge = UiKit.Badge(meta.Badge, meta.Accent);
+        var badge = UiKit.Badge(ProviderMeta.BadgeFor(cfg.Kind, cfg.DisplayName), meta.Accent);
         badge.Margin = new Thickness(0, 0, 9, 0);
         UiKit.SetGrid(badge, col: 1);
         grid.Children.Add(badge);
 
         var info = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
         var nameRow = new StackPanel { Orientation = Orientation.Horizontal };
-        nameRow.Children.Add(UiKit.Text(cfg.DisplayName, 12.5, "Text", FontWeights.SemiBold));
+        var sourceName = UiKit.Text(cfg.DisplayName, 12.5, "Text", FontWeights.SemiBold);
+        nameRow.Children.Add(sourceName);
+        refreshIdentity = () =>
+        {
+            // 只更新标题和徽标，不重建编辑区，避免输入时丢焦点或中断模型拉取。
+            sourceName.Text = cfg.DisplayName;
+            ((TextBlock)badge.Child).Text = ProviderMeta.BadgeFor(cfg.Kind, cfg.DisplayName);
+        };
 
         if (cfg.Id == S.PrimaryProviderId)
         {
@@ -196,6 +204,10 @@ public sealed partial class SettingsWindow
             MaxHeight = 460,
         };
 
+        AddGroupLabel(menu, "AI 翻译");
+        foreach (var m in ProviderMeta.All.Where(m => m.IsAi)) menu.Items.Add(AddItem(m));
+
+        menu.Items.Add(new Separator());
         AddGroupLabel(menu, "免费 · 无需密钥");
         foreach (var m in ProviderMeta.All.Where(m => !m.NeedsKey)) menu.Items.Add(AddItem(m));
 
@@ -203,10 +215,7 @@ public sealed partial class SettingsWindow
         AddGroupLabel(menu, "需要密钥 · 有免费额度");
         foreach (var m in ProviderMeta.All.Where(m => m.NeedsKey && !m.IsAi)) menu.Items.Add(AddItem(m));
 
-        menu.Items.Add(new Separator());
-        AddGroupLabel(menu, "AI 翻译");
-        foreach (var m in ProviderMeta.All.Where(m => m.IsAi)) menu.Items.Add(AddItem(m));
-
+        anchor.SetValue(ContextMenuService.ContextMenuProperty, menu);
         menu.IsOpen = true;
     }
 
@@ -220,7 +229,7 @@ public sealed partial class SettingsWindow
     MenuItem AddItem(ProviderMetaInfo meta)
     {
         var header = new StackPanel { Orientation = Orientation.Horizontal };
-        var badge = UiKit.Badge(meta.Badge, meta.Accent);
+        var badge = UiKit.Badge(ProviderMeta.BadgeFor(meta.Kind, meta.DisplayName), meta.Accent);
         badge.Margin = new Thickness(0, 0, 8, 0);
         header.Children.Add(badge);
 
@@ -229,7 +238,7 @@ public sealed partial class SettingsWindow
         text.Children.Add(UiKit.Text(meta.FreeNote, 10, "TextFaint"));
         header.Children.Add(text);
 
-        var item = new MenuItem { Header = header };
+        var item = new MenuItem { Header = header, Tag = meta.Kind };
         item.Click += (_, _) => AddProvider(meta.Kind);
         return item;
     }

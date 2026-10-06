@@ -124,6 +124,15 @@ public static class ProviderMeta
     public static ProviderMetaInfo Get(ProviderKind kind) =>
         Map.TryGetValue(kind, out var m) ? m : All[0];
 
+    /// <summary>AI 实例常被改成服务或模型名，用首个完整字符区分，避免拆开 emoji 和组合字符。</summary>
+    public static string BadgeFor(ProviderKind kind, string? name)
+    {
+        var meta = Get(kind);
+        if (!meta.IsAi) return meta.Badge;
+        var displayName = string.IsNullOrWhiteSpace(name) ? meta.DisplayName : name.Trim();
+        return System.Globalization.StringInfo.GetNextTextElement(displayName).ToUpperInvariant();
+    }
+
     public static readonly string[] SecretKeys = ["apiKey", "appKey", "secretKey", "token"];
 
     public static bool IsSecret(string key) =>

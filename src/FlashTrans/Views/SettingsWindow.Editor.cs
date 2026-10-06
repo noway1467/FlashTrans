@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using FlashTrans.Core;
+using FlashTrans.Providers;
 using FlashTrans.Services;
 
 namespace FlashTrans.Views;
@@ -8,7 +9,7 @@ namespace FlashTrans.Views;
 public sealed partial class SettingsWindow
 {
     /// <summary>展开后的单源编辑区：动态字段 + 测试按钮。</summary>
-    UIElement BuildSourceEditor(ProviderConfig cfg, ProviderMetaInfo meta)
+    UIElement BuildSourceEditor(ProviderConfig cfg, ProviderMetaInfo meta, Action refreshIdentity)
     {
         var panel = new StackPanel { Margin = new Thickness(0, 10, 0, 0) };
 
@@ -21,7 +22,7 @@ public sealed partial class SettingsWindow
             panel.Children.Add(BuildAiPresets(cfg));
 
         panel.Children.Add(Field("标签显示名",
-            Input(cfg.Name, v => cfg.Name = v, meta.DisplayName),
+            Input(cfg.Name, v => { cfg.Name = v; refreshIdentity(); }, meta.DisplayName),
             "留空用默认名"));
 
         foreach (var f in meta.Fields)
@@ -45,6 +46,9 @@ public sealed partial class SettingsWindow
     {
         cfg.Options.TryGetValue(f.Key, out var current);
         current ??= f.Default ?? "";
+
+        if (cfg.Kind == ProviderKind.OpenAiCompat && f.Key == "model")
+            return BuildModelEditor(cfg, current);
 
         switch (f.Kind)
         {
@@ -87,6 +91,103 @@ public sealed partial class SettingsWindow
                 text.LostFocus += (_, _) => Invalidate();
                 return text;
         }
+    }
+
+    UIElement BuildModelEditor(ProviderConfig cfg, string current)
+    {
+        var models = new ComboBox
+        {
+            IsEditable = true, IsTextSearchEnabled = false, Text = current,
+            FontSize = 12.5, MinWidth = 120, MaxDropDownHeight = 280,
+            ToolTip = "可手动填写模型 ID，也可拉取后从下拉列表选择",
+            Name = "AiModelSelector",
+        };
+        var updating = false;
+        models.AddHandler(System.Windows.Controls.Primitives.TextBoxBase.TextChangedEvent,
+            new TextChangedEventHandler((_, e) =>
+            {
+                if (!updating && e.OriginalSource is TextBox text) cfg.Options["model"] = text.Text;
+            }));
+        models.SelectionChanged += (_, _) =>
+        {
+            if (!updating && models.SelectedItem is string model)
+            {
+                cfg.Options["model"] = model;
+                Invalidate();
+            }
+        };
+        models.LostKeyboardFocus += (_, _) => Invalidate();
+
+        var status = UiKit.Text("使用当前接口地址和 API Key；不支持列表时仍可手动填写。", 10.5, "TextFaint", wrap: true);
+        status.Name = "AiModelStatus";
+        status.Margin = new Thickness(0, 5, 0, 0);
+        var fetch = SmallButton("拉取模型", () => { }, "OutlineBtn");
+        fetch.Margin = new Thickness(7, 0, 0, 0);
+        fetch.VerticalAlignment = VerticalAlignment.Top;
+        CancellationTokenSource? pending = null;
+
+        var row = new Grid();
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        row.Children.Add(models);
+        UiKit.SetGrid(fetch, col: 1);
+        row.Children.Add(fetch);
+        var panel = new StackPanel();
+        panel.Children.Add(row);
+        panel.Children.Add(status);
+        panel.Unloaded += (_, _) => pending?.Cancel();
+
+        fetch.Click += async (_, _) =>
+        {
+            if (pending is not null) return;
+            using var operation = new CancellationTokenSource();
+            pending = operation;
+            var snapshot = cfg.Clone();
+            fetch.IsEnabled = false;
+            fetch.Content = "拉取中…";
+            status.Text = "正在拉取模型列表…";
+            status.SetResourceReference(ForegroundProperty, "TextFaint");
+            try
+            {
+                var ids = await new OpenAiCompatTranslator(snapshot).ListModelsAsync(operation.Token);
+                if (operation.IsCancellationRequested || !panel.IsLoaded) return;
+                // 改地址/Key 或切换预设后，旧服务的结果不能覆盖当前配置。
+                if (new[] { "baseUrl", "apiKey" }.Any(key =>
+                    cfg.Options.GetValueOrDefault(key) != snapshot.Options.GetValueOrDefault(key)))
+                {
+                    status.Text = "接口地址或 Key 已更改，请重新拉取。";
+                    return;
+                }
+                var keep = cfg.Options.GetValueOrDefault("model", "");
+                updating = true;
+                try
+                {
+                    models.ItemsSource = ids;
+                    models.Text = keep;
+                }
+                finally { updating = false; }
+                status.Text = ids.Count == 0
+                    ? "接口未返回可用模型；请检查 Key 权限、加载本地模型或手动填写。"
+                    : $"已获取 {ids.Count} 个模型，请展开选择；已保留当前填写内容。列表可能含非聊天模型。";
+                status.SetResourceReference(ForegroundProperty, ids.Count == 0 ? "TextFaint" : "Success");
+            }
+            catch (OperationCanceledException) when (operation.IsCancellationRequested) { }
+            catch (Exception ex)
+            {
+                if (!operation.IsCancellationRequested && panel.IsLoaded)
+                {
+                    status.Text = ex is ProviderException ? ex.Message : "拉取失败，请检查接口配置或手动填写模型。";
+                    status.SetResourceReference(ForegroundProperty, "Danger");
+                }
+            }
+            finally
+            {
+                pending = null;
+                fetch.IsEnabled = true;
+                fetch.Content = "拉取模型";
+            }
+        };
+        return panel;
     }
 
     UIElement BuildSecretEditor(ProviderConfig cfg, ProviderField f, string current)

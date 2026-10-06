@@ -59,6 +59,13 @@ static class Program
             return _fail == 0 ? 0 : 1;
         }
 
+        if (args.Contains("--only-source-capture"))
+        {
+            SourceCaptureProbe.RunAll(Step);
+            app.Shutdown();
+            return _fail == 0 ? 0 : 1;
+        }
+
         CacheProbe.RunAll(Step);
         SettingsProbe.RunAll(Step);
         HttpVersionProbe.RunAll(Step);
@@ -92,6 +99,7 @@ static class Program
             return _fail == 0 ? 0 : 1;
         }
 
+        SourceCaptureProbe.RunAll(Step);
         DocumentProbe.RunAll(Step);
         WindowStartupProbe.RunAll(Step);
         var host = new AppHost();

@@ -23,13 +23,10 @@ public sealed partial class AppHost
         _capturing = true;
         try
         {
-            // 弹窗和划词图标会挡住要截的内容，先收走。
-            // 主窗口留着：用户可能就是想截它里面的东西。
-            // 收起而不是关掉：这是我们为了拍图把它挪开，不是用户不要了，
-            // 取消截图后还能按快捷键把它叫回来。
-            _popup?.StashPopup();
+            // 翻译窗口本身也可能是截图目标，和主窗口一样保留当前可见状态。
+            // 只收走划词小图标；截图完成或取消都不应改变用户的弹窗收起状态。
             HideSelectionIcon();
-            // 让上面两个窗口真的从屏幕上消失再抓图，否则会被拍进去
+            // 等划词图标真正消失再抓图，避免把它拍进去。
             await Task.Yield();
             await Dispatcher.Yield(DispatcherPriority.Render);
 

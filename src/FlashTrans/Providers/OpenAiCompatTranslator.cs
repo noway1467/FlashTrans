@@ -13,11 +13,10 @@ public sealed class OpenAiCompatTranslator(ProviderConfig cfg) : TranslatorBase(
     {
         get
         {
-            var url = Opt("baseUrl");
+            var url = BaseUrl;
             if (string.IsNullOrWhiteSpace(url)) return "请先填写「接口地址」";
-            if (!Uri.TryCreate(url.Trim(), UriKind.Absolute, out var uri) ||
-                (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
-                return "「接口地址」要以 http:// 或 https:// 开头";
+            try { ApiEndpoint(url, "chat/completions"); }
+            catch (ProviderException ex) { return ex.Message; }
             if (string.IsNullOrWhiteSpace(Opt("model"))) return "请先填写「模型」";
             return null;
         }
@@ -25,10 +24,82 @@ public sealed class OpenAiCompatTranslator(ProviderConfig cfg) : TranslatorBase(
 
     public bool StreamEnabled => Opt("stream", "true").Equals("true", StringComparison.OrdinalIgnoreCase);
 
-    string Endpoint()
+    // 显式清空地址时必须报错，不能让 Opt 的默认值把 Key 发给另一家服务。
+    string BaseUrl => Cfg.Options.GetValueOrDefault("baseUrl", "https://api.openai.com/v1");
+    string Endpoint() => ApiEndpoint(BaseUrl, "chat/completions");
+
+    internal static string ApiEndpoint(string baseUrl, string resource)
     {
-        var b = Opt("baseUrl", "https://api.openai.com/v1").TrimEnd('/');
-        return b.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase) ? b : b + "/chat/completions";
+        if (!Uri.TryCreate(baseUrl.Trim(), UriKind.Absolute, out var uri) ||
+            (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) ||
+            uri.UserInfo.Length > 0 || uri.Query.Length > 0 || uri.Fragment.Length > 0)
+            throw new ProviderException("接口地址须为 http:// 或 https:// API 地址，不含用户信息、查询参数或锚点");
+
+        var path = uri.AbsolutePath.TrimEnd('/');
+        // 兼容用户直接粘贴聊天接口；保留网关前缀及 /v4 等自定义版本路径。
+        foreach (var suffix in new[] { "/chat/completions", "/models" })
+            if (path.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+            {
+                path = path[..^suffix.Length];
+                break;
+            }
+        if (path.Length == 0) path = "/v1";
+        return uri.GetLeftPart(UriPartial.Authority) + path + "/" + resource;
+    }
+
+    /// <summary>显式拉取当前凭据可见的模型；不要求先填模型，也不发送翻译正文。</summary>
+    public async Task<IReadOnlyList<string>> ListModelsAsync(CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, ApiEndpoint(BaseUrl, "models"));
+        Auth(request);
+        Net.PreferHttp2(request);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(Math.Clamp(TimeoutMs, 800, 60000));
+        try
+        {
+            using var response = await Net.Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead,
+                timeout.Token).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                // 不展示服务返回的原始错误正文，网关可能在里面回显密钥。
+                var hint = (int)response.StatusCode switch
+                {
+                    401 => "请填写有效的 API Key",
+                    403 => "此 Key 没有模型列表权限，请更换凭据或手动填写模型",
+                    404 or 405 => "地址不正确或服务不支持模型列表，请检查地址或手动填写模型",
+                    429 => "请求过于频繁，请稍后重试",
+                    _ => "服务未能返回模型列表，请稍后重试或手动填写模型",
+                };
+                throw new ProviderException($"HTTP {(int)response.StatusCode} · {hint}");
+            }
+            // 为异常网关响应设上限，避免误填下载地址时把大文件读进内存。
+            await response.Content.LoadIntoBufferAsync(2 * 1024 * 1024, timeout.Token).ConfigureAwait(false);
+            var body = await response.Content.ReadAsStringAsync(timeout.Token).ConfigureAwait(false);
+            using var json = JsonDocument.Parse(body);
+            if (json.RootElement.ValueKind != JsonValueKind.Object ||
+                !json.RootElement.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Array)
+                throw new ProviderException("响应不是 OpenAI 兼容的模型列表，请检查接口地址或手动填写模型");
+            return data.EnumerateArray()
+                .Where(item => item.ValueKind == JsonValueKind.Object &&
+                    item.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String)
+                .Select(item => item.GetProperty("id").GetString()!.Trim())
+                .Where(id => id.Length > 0)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(id => id, StringComparer.Ordinal)
+                .ToArray();
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new ProviderException("拉取模型超时，请检查网络或增加该源的超时时间");
+        }
+        catch (JsonException)
+        {
+            throw new ProviderException("响应不是有效的模型列表 JSON，请检查接口地址或手动填写模型");
+        }
+        catch (HttpRequestException)
+        {
+            throw new ProviderException("无法读取模型列表，请检查网络、代理及接口地址（响应上限 2 MB）");
+        }
     }
 
     JsonObject BuildPayload(TranslateRequest req, bool stream)
@@ -48,7 +119,7 @@ public sealed class OpenAiCompatTranslator(ProviderConfig cfg) : TranslatorBase(
     void Auth(HttpRequestMessage r)
     {
         var key = Opt("apiKey");
-        if (!string.IsNullOrWhiteSpace(key)) Net.Bearer(r, key);
+        if (!string.IsNullOrWhiteSpace(key)) Net.Bearer(r, key.Trim());
     }
 
     protected override async Task<TranslateResult> DoTranslateAsync(TranslateRequest req, CancellationToken ct)

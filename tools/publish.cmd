@@ -1,5 +1,5 @@
 @echo off
-rem Versioned releases, with filesystem checks implemented entirely in PowerShell.
+rem In-place releases, with path checks and scoped process shutdown in PowerShell.
 setlocal
 set "MODE=%~1"
 if "%MODE%"=="" set "MODE=both"

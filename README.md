@@ -23,9 +23,13 @@ tools\publish.cmd fast   # 自包含包
 tools\publish.cmd small  # 依赖 .NET 9 Desktop Runtime
 ```
 
-产物在 `dist\FlashTrans-1.9.0-win-x64-fast/` 和 `dist\FlashTrans-1.9.0-win-x64-small/`（目录版本自动取自主工程）。`fast` 自带运行时，`small` 需要 .NET 9 Desktop Runtime。
+发布会**原位覆盖已有目录**，不随版本升级换路径。本工作区沿用 `dist\FlashTrans-1.9.0-win-x64-fast/` 和 `dist\FlashTrans-1.9.0-win-x64-small/`；目录中的历史版本字样不再代表程序版本，当前程序为 **1.9.1**。全新工作区没有产物时创建固定的 `dist\FlashTrans-win-x64-fast/` 和 `dist\FlashTrans-win-x64-small/`。`fast` 自带运行时，`small` 需要 .NET 9 Desktop Runtime。
 
-压缩执行 `powershell -NoProfile -File tools\pack-release.ps1 -Version 1.9.0`，包在 `dist\release\`。压缩包名和包内顶层目录都带版本号；发布和压缩脚本会核对 exe 版本，拒绝覆盖同名目录或包，也拒绝打包便携配置和日志。旧版目录不会被清理。
+发布先在临时目录完成构建和校验，再正常关闭目标目录内的程序实例；仍不退出时结束该实例并等待释放占用，然后覆盖程序文件。不会结束其他目录中的程序，也不会清空原目录的 `portable.txt`、`data/`、日志或额外用户文件。构建失败不覆盖；覆盖中失败会尝试回滚。多个同类型发布目录并存时会要求先明确目标，不擅自挑选或新增目录。
+
+压缩执行 `powershell -NoProfile -File tools\pack-release.ps1 -Version 1.9.1`，包在 `dist\release\`，同版本重复打包会替换同名包。包名标记新版本，**包内顶层目录沿用原目录名**，解压升级不会另建程序目录。打包只收录本次构建清单中的程序文件并校验 SHA256，跳过原目录保留的便携配置、日志及额外文件。
+
+发布脚本回归：先构建当前 Release 主工程，再运行 `powershell -NoProfile -File tests\FlashTrans.SelfTest\ReleaseScriptsProbe.ps1`。在临时工作区模拟构建产物，真实验证进程占用解除、原位覆盖、便携数据保留、同名 ZIP 替换和构建哈希检查，不改动实际发布目录。
 
 ## 默认快捷键
 
@@ -51,6 +55,10 @@ tools\publish.cmd small  # 依赖 .NET 9 Desktop Runtime
 - AI：OpenAI 兼容接口、Gemini、Claude。
 
 费用和额度按各家官方文档为准。设置里可以测试、复制、排序和切换默认源。
+
+**添加 AI 源**：在「设置 → 翻译源 → 添加源」最上方选择「AI 翻译（OpenAI 兼容）」，填写接口地址和 API Key，再点击模型旁的 **拉取模型**，从下拉列表选择或直接手填模型 ID。请求携带当前 Key；本地无鉴权服务可留空。仅填写域名时使用 `/v1/models`，填写 `/v1`、自定义网关路径或完整 `/chat/completions` 地址时保留对应 API 前缀。权限不足、不支持列表或返回为空都会提示，且不会清空已填写模型；列表中可能含非聊天模型，请选可用于文本翻译的模型。切换地址或 Key 后需重新拉取。AI 源徽标使用名称首个完整字符（英文字母大写），设置卡片与结果卡片保持一致。
+
+翻译源与截图状态可定向回归：先构建当前自测工程，再运行 `dotnet .\tests\FlashTrans.SelfTest\bin\Release\net9.0-windows10.0.19041.0\FlashTrans.SelfTest.dll --only-source-capture`。使用本机 HTTP 测试服务和隔离配置，覆盖模型鉴权、权限/超时/取消、深浅主题编辑、名称徽标、菜单顺序，以及真实截图蒙层内的弹窗保留；加 `--shot` 可输出设置界面预览到 `shots/`。
 
 ## 文件翻译
 
@@ -91,6 +99,7 @@ dotnet .\tests\FlashTrans.SelfTest\bin\Release\net9.0-windows10.0.19041.0\FlashT
 ## 截图和 OCR
 
 - `F1` 框选，`Esc` 取消，回车执行默认动作。
+- 在翻译结果窗口按截图快捷键时保留窗口，可直接截取译文；完成或取消截图均不自动收起窗口，原先手动收起的窗口也不会被展开。
 - 工具条里有标注、长截图、录制、识别、钉住、保存、复制。
 - 钉住后可以把截图贴在屏幕上；鼠标移到贴图上能复制、保存或销毁。
 - 截图按屏幕物理像素裁切，PNG 无损保存；普通钉住按原图像素显示，无原选区的长图按比例缩小到可见范围，不拉伸变形或放大小图。
