@@ -7,44 +7,93 @@ namespace FlashTrans.Interop;
 public static class SelectionReader
 {
     static readonly SemaphoreSlim Gate = new(1, 1);
+    public static bool IsCapturing { get; private set; }
+    public static uint InternalSequence { get; private set; }
+    public static string? LastError { get; private set; }
+    internal static string? LastAbortReason { get; private set; }
 
     public static async Task<string?> GetSelectedTextAsync(bool restoreClipboard, CancellationToken ct = default)
     {
         if (!await Gate.WaitAsync(1500, ct)) return null;
+        ClipboardSnapshot? backup = null;
+        uint copiedSequence = 0;
+        uint before = 0;
+        var target = Win32.GetForegroundWindow();
+        Win32.GetWindowThreadProcessId(target, out var targetPid);
+        var sent = false;
+        IsCapturing = true;
+        LastError = null;
+        LastAbortReason = null;
         try
         {
-            var backup = restoreClipboard ? ReadText() : null;
-            var before = Win32.GetClipboardSequenceNumber();
+            if (ApplicationExclusions.IsExcluded(target)) return null;
+            backup = restoreClipboard ? ClipboardSnapshot.Capture() : null;
+            before = backup?.Sequence ?? Win32.GetClipboardSequenceNumber();
 
             ReleaseModifiers();
             await Task.Delay(20, ct).ConfigureAwait(false);
+            if (Win32.GetForegroundWindow() != target) { LastAbortReason = "前台窗口在复制前改变"; return null; }
+            if (Win32.GetClipboardSequenceNumber() != before) { LastAbortReason = "剪贴板在复制前被更新"; return null; }
             SendCtrlC();
+            sent = true;
 
             string? text = null;
             // 只在序列号变了之后才去开剪贴板。OpenClipboard 是全局锁，
             // 空转着开开关关会把前台程序（尤其浏览器）一起拖住。
             for (int i = 0; i < 24; i++)
             {
-                await Task.Delay(i < 8 ? 12 : 25, ct).ConfigureAwait(false);
-                if (Win32.GetClipboardSequenceNumber() == before) continue;
-                text = ReadText();
+                // Ctrl+C 发出后先收尾，再响应取消，避免取消留下稍后到达的剪贴板写入。
+                await Task.Delay(i < 8 ? 12 : 25).ConfigureAwait(false);
+                if (!ClipboardSnapshot.Open()) continue;
+                try
+                {
+                    var sequence = Win32.GetClipboardSequenceNumber();
+                    if (sequence == before) continue;
+                    Win32.GetWindowThreadProcessId(ClipboardSnapshot.GetClipboardOwner(), out var ownerPid);
+                    if (ownerPid != targetPid) { LastAbortReason = "复制来源与目标进程不一致"; return null; }
+                    if (Win32.GetForegroundWindow() != target) { LastAbortReason = "前台窗口在复制后改变"; return null; }
+                    copiedSequence = InternalSequence = sequence;
+                    var h = Win32.GetClipboardData(Win32.CF_UNICODETEXT);
+                    var ptr = h == IntPtr.Zero ? IntPtr.Zero : Win32.GlobalLock(h);
+                    if (ptr != IntPtr.Zero)
+                    {
+                        try { text = Marshal.PtrToStringUni(ptr); }
+                        finally { Win32.GlobalUnlock(h); }
+                    }
+                }
+                finally { Win32.CloseClipboard(); }
                 if (!string.IsNullOrEmpty(text)) break;
             }
-
-            if (restoreClipboard && backup is not null && !string.IsNullOrEmpty(text))
-            {
-                await Task.Delay(30, ct).ConfigureAwait(false);
-                SetText(backup);
-            }
+            ct.ThrowIfCancellationRequested();
             return string.IsNullOrWhiteSpace(text) ? null : text;
         }
         catch (OperationCanceledException) { return null; }
         catch (Exception ex)
         {
+            LastError = ex.Message;
             Log.Warn("读取选中文本失败：" + ex.Message);
             return null;
         }
-        finally { Gate.Release(); }
+        finally
+        {
+            try
+            {
+                // 取消可能发生在 Ctrl+C 已发出、尚未读回之间，也必须尝试安全恢复。
+                if (backup is not null && sent)
+                {
+                    if (copiedSequence == 0)
+                    {
+                        Win32.GetWindowThreadProcessId(ClipboardSnapshot.GetClipboardOwner(), out var ownerPid);
+                        var sequence = Win32.GetClipboardSequenceNumber();
+                        if (ownerPid == targetPid && sequence != before) copiedSequence = sequence;
+                    }
+                    if (copiedSequence != 0 && backup.Restore(copiedSequence))
+                        InternalSequence = Win32.GetClipboardSequenceNumber();
+                }
+            }
+            catch (Exception ex) { LastError = "剪贴板还原失败：" + ex.Message; Log.Warn(LastError); }
+            finally { backup?.Dispose(); IsCapturing = false; Gate.Release(); }
+        }
     }
 
     /// <summary>读剪贴板文本。走原生 API，一次开关只做一件事，尽快释放全局锁。</summary>

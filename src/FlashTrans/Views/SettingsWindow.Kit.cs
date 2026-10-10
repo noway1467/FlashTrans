@@ -195,7 +195,7 @@ public sealed partial class SettingsWindow
         return tb;
     }
 
-    static void OpenUrl(string url)
+    internal static void OpenUrl(string url)
     {
         try
         {

@@ -1235,7 +1235,7 @@ static class UiProbe
             throw new InvalidOperationException("自定义截图热键被迁移改掉了");
     }
 
-    /// <summary>钉住窗的三个入口都必须真的接线，否则用户会被一张关不掉的图困住。</summary>
+    /// <summary>基础操作与新增的更多菜单都必须接线，尤其不能留下关不掉的贴图。</summary>
     static void PinnedShotProbe()
     {
         var image = new CapturedImage(8, 8, new byte[8 * 8 * 4]);
@@ -1248,12 +1248,17 @@ static class UiProbe
 
         Probe(win, close: false);
         var buttons = Descendants<Button>(win).ToDictionary(b => (string)(b.ToolTip ?? ""));
-        if (buttons.Count != 3)
-            throw new InvalidOperationException($"钉住工具条应有复制/保存/销毁 3 个按钮，实际 {buttons.Count}");
+        if (buttons.Count != 4)
+            throw new InvalidOperationException($"钉住工具条应有复制/保存/销毁/更多 4 个按钮，实际 {buttons.Count}");
 
         buttons["复制截图"].RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
         buttons["保存截图"].RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
         if (copy != 1 || save != 1) throw new InvalidOperationException($"复制/保存回调没触发：{copy}/{save}");
+
+        buttons["缩放、透明度、鼠标穿透"].RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+        if (!win.ContextMenu.IsOpen || win.ContextMenu.Items.Count != 7)
+            throw new InvalidOperationException("贴图更多菜单未打开或缺少操作");
+        win.ContextMenu.IsOpen = false;
 
         buttons["销毁钉住 (Esc / Delete)"].RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
         Pump();

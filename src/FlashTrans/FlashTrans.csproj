@@ -41,6 +41,9 @@
     <PackageReference Include="RapidOcrNet" Version="4.1.0" />
     <!-- 用语法树定位正文，避免改写 Markdown 代码、链接和元数据。 -->
     <PackageReference Include="Markdig" Version="0.41.3" />
+    <!-- PDF 仅在本机解析；输出正文重排版，不上传文件，也不使用商业转换服务。 -->
+    <PackageReference Include="PdfPig" Version="0.1.16" />
+    <PackageReference Include="PDFsharp-WPF" Version="6.2.4" />
   </ItemGroup>
 
   <ItemGroup>

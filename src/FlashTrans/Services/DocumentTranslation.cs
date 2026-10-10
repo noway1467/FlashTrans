@@ -10,13 +10,16 @@ namespace FlashTrans.Services;
 
 public sealed record DocumentProgress(int Completed, int Total, string Message);
 
-/// <summary>任务的内存快照；失败/取消可在当前窗口继续，不把正文写入设置或日志。</summary>
-public sealed class TranslationDocument
+/// <summary>任务内存快照；可选加密断点日志不与设置、历史元信息混存。</summary>
+public sealed partial class TranslationDocument
 {
     internal readonly List<DocumentUnit> Units = [];
     internal Action<Stream> Write = null!;
     internal Action<string>? Finish;
     internal string? RunIdentity;
+    internal string SourceHash = "";
+    internal string TargetLanguage = "";
+    public string? CheckpointWarning { get; internal set; }
     internal int BatchCharacters { get; set; } = DocumentTranslation.DefaultBatchCharacters;
     public string SourcePath { get; internal set; } = "";
     public List<string> Warnings { get; } = [];
@@ -25,7 +28,7 @@ public sealed class TranslationDocument
     public int CharacterCount => Units.Sum(u => u.Parts.Sum(p => p.Text.Length));
     public bool IsComplete => Count > 0 && Completed == Count;
 
-    public string SaveCopy(string? outputDirectory, string target, CancellationToken ct = default)
+    public string SaveCopy(string? outputDirectory, string target, CancellationToken ct = default, bool bilingual = false)
     {
         var directory = string.IsNullOrWhiteSpace(outputDirectory) ? Path.GetDirectoryName(SourcePath)! : outputDirectory.Trim();
         if (!Path.IsPathFullyQualified(directory) || !Directory.Exists(directory))
@@ -35,32 +38,33 @@ public sealed class TranslationDocument
         var language = Regex.Replace(target, @"[^a-zA-Z0-9-]", "");
         if (language.Length == 0) language = "translated";
         if (language.Length > 24) language = language[..24];
-        var extension = Path.GetExtension(SourcePath);
+        var extension = bilingual ? ".html" : Path.GetExtension(SourcePath);
         for (var i = 1; i <= 10000; i++)
         {
             ct.ThrowIfCancellationRequested();
-            var path = Path.Combine(directory, $"{stem}_译文_{language}{(i == 1 ? "" : $" ({i})")}{extension}");
+            var path = Path.Combine(directory, $"{stem}_{(bilingual ? "双语" : "译文")}_{language}{(i == 1 ? "" : $" ({i})")}{extension}");
             if (File.Exists(path) || Directory.Exists(path)) continue;
-            try { SaveAs(path, ct); return path; }
+            try { SaveAs(path, ct, bilingual); return path; }
             // 检查到写入之间可能有另一个任务创建同名文件，只对名称竞争重试。
             catch (IOException) when (File.Exists(path) || Directory.Exists(path)) { }
         }
         throw new IOException("同名译文过多，请更换输出目录。");
     }
 
-    public void SaveAs(string path, CancellationToken ct = default)
+    public void SaveAs(string path, CancellationToken ct = default, bool bilingual = false)
     {
         if (!IsComplete) throw new InvalidOperationException("尚未全部翻译完成，不能导出不完整的文档。可点击继续翻译。");
         path = Path.GetFullPath(path);
-        if (!string.Equals(Path.GetExtension(path), Path.GetExtension(SourcePath), StringComparison.OrdinalIgnoreCase))
-            throw new IOException("输出文件的扩展名必须与原文件一致。");
+        if (!string.Equals(Path.GetExtension(path), bilingual ? ".html" : Path.GetExtension(SourcePath), StringComparison.OrdinalIgnoreCase))
+            throw new IOException(bilingual ? "双语对照文件必须使用 .html 扩展名。" : "输出文件的扩展名必须与原文件一致。");
         if (string.Equals(path, SourcePath, StringComparison.OrdinalIgnoreCase) || File.Exists(path))
             throw new IOException("为保护原文件，不覆盖已有文件。请另选一个新文件名。");
         var temp = Path.Combine(Path.GetDirectoryName(path)!, ".flashtrans-" + Guid.NewGuid().ToString("N") + ".tmp");
         try
         {
             ct.ThrowIfCancellationRequested();
-            using (var stream = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None)) Write(stream);
+            using (var stream = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            { if (bilingual) WriteBilingual(stream); else Write(stream); }
             ct.ThrowIfCancellationRequested();
             // 同目录完成后再改名；失败、取消或目标被抢先创建时都不动原文件。
             File.Move(temp, path, overwrite: false);
@@ -77,8 +81,15 @@ internal sealed class DocumentUnit(List<DocumentPart> parts)
     internal string[]? Result;
     readonly string _tag = "FT" + Guid.NewGuid().ToString("N")[..8];
     string Marker(int i) => $"[{_tag}_{i}]";
-    internal string Input => Parts.Count == 1 ? Parts[0].Text
-        : string.Concat(Parts.Select((p, i) => Marker(i) + p.Text)) + Marker(Parts.Count);
+    internal string Input => BuildInput(text => text);
+    internal string BuildInput(Func<string, string> transform) => Parts.Count == 1 ? transform(Parts[0].Text)
+        : string.Concat(Parts.Select((p, i) => Marker(i) + transform(p.Text))) + Marker(Parts.Count);
+
+    internal string[] ValidateValues(string[]? values)
+    {
+        if (values is null || values.Length != Parts.Count) throw new InvalidDataException("续译进度的段落数量不匹配。");
+        return values.Select(Check).ToArray();
+    }
 
     internal string[] Validate(string text)
     {
@@ -136,45 +147,57 @@ public static class DocumentTranslation
     public const int MaxTimeoutSeconds = 600;
     public const int DefaultTimeoutSeconds = 180;
 
-    public const string FileFilter = "可翻译文件|*.epub;*.txt;*.md;*.markdown;*.docx|EPUB 电子书|*.epub|文本|*.txt|Markdown|*.md;*.markdown|Word 文档|*.docx";
-    public static bool Supports(string path) => Path.GetExtension(path).ToLowerInvariant() is ".epub" or ".txt" or ".md" or ".markdown" or ".docx";
+    public const string FileFilter = "可翻译文件|*.epub;*.txt;*.md;*.markdown;*.docx;*.pdf|EPUB 电子书|*.epub|文本|*.txt|Markdown|*.md;*.markdown|Word 文档|*.docx|PDF（文本层）|*.pdf";
+    public static bool Supports(string path) => Path.GetExtension(path).ToLowerInvariant() is ".epub" or ".txt" or ".md" or ".markdown" or ".docx" or ".pdf";
     public static TranslationDocument Load(string path, CancellationToken ct = default) => Load(path, DefaultBatchCharacters, ct);
     public static TranslationDocument Load(string path, int batchCharacters, CancellationToken ct = default)
         => DocumentFormats.Load(path, batchCharacters, ct);
 
     public static Task TranslateAsync(TranslationDocument document, ProviderConfig provider, string from, string target,
-        IProgress<DocumentProgress>? progress, CancellationToken ct, int timeoutSeconds = DefaultTimeoutSeconds, int requestDelayMs = DefaultRequestDelayMs)
+        IProgress<DocumentProgress>? progress, CancellationToken ct, int timeoutSeconds = DefaultTimeoutSeconds, int requestDelayMs = DefaultRequestDelayMs,
+        DocumentGlossary? glossary = null, DocumentCheckpointStore? checkpoints = null)
     {
         var snapshot = provider.Clone();
         snapshot.TimeoutMs = Math.Clamp(timeoutSeconds, 10, 600) * 1000;
         // 独立注册表和快照：不经过自动切源/聚合/历史缓存，设置页也不能改变在途任务。
         var translator = new ProviderRegistry().Get(snapshot);
         var identity = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(snapshot))));
-        return RunAsync(document, translator, from, target, identity, progress, ct, requestDelayMs);
+        return RunAsync(document, translator, from, target, identity, progress, ct, requestDelayMs, glossary, checkpoints);
     }
 
     internal static async Task RunAsync(TranslationDocument document, ITranslator translator, string from, string target,
-        string identity, IProgress<DocumentProgress>? progress, CancellationToken ct, int requestDelayMs = 0)
+        string identity, IProgress<DocumentProgress>? progress, CancellationToken ct, int requestDelayMs = 0,
+        DocumentGlossary? glossary = null, DocumentCheckpointStore? checkpoints = null)
     {
         if (document.Count == 0) throw new InvalidOperationException("文件没有可翻译的正文。");
         if (string.IsNullOrWhiteSpace(target) || target == Languages.Auto) throw new ArgumentException("请选择目标语言。");
         if (translator.ConfigError is { } error) throw new InvalidOperationException(error);
-        var runIdentity = identity + "|" + from + "|" + target;
+        glossary ??= DocumentGlossary.Empty;
+        var runIdentity = identity + "|" + from + "|" + target + "|" + glossary.Fingerprint;
         if (document.RunIdentity != runIdentity)
         {
             foreach (var unit in document.Units) unit.Reset();
             document.RunIdentity = runIdentity;
         }
-        progress?.Report(new(document.Completed, document.Count, "正在翻译"));
+        using var checkpoint = checkpoints?.Open(document, runIdentity);
+        progress?.Report(new(document.Completed, document.Count, document.CheckpointWarning ??
+            (document.Completed > 0 ? "已校验并恢复进度" : "正在翻译")));
         var firstRequest = true;
-        foreach (var unit in document.Units)
+        for (var unitIndex = 0; unitIndex < document.Units.Count; unitIndex++)
         {
+            var unit = document.Units[unitIndex];
             ct.ThrowIfCancellationRequested();
-            if (unit.Result is not null) continue;
+            if (unit.Result is { } existing)
+            {
+                // 用户在取消后才开启保存进度时，也补存已有的内存结果。
+                checkpoint?.Save(unitIndex, unit, existing);
+                continue;
+            }
             if (!firstRequest && requestDelayMs > 0)
                 await Task.Delay(Math.Clamp(requestDelayMs, 0, MaxRequestDelayMs), ct).ConfigureAwait(false);
             firstRequest = false;
             Exception? failure = null;
+            var protectedText = glossary.Protect(unit);
             for (var attempt = 0; attempt < 3; attempt++)
             {
                 ct.ThrowIfCancellationRequested();
@@ -182,14 +205,16 @@ public static class DocumentTranslation
                 {
                     var result = await translator.TranslateAsync(new TranslateRequest
                     {
-                        Text = unit.Input, From = from, Targets = [target], WantDictionary = false,
-                        Style = "Translate every text fragment. Keep every [FTxxxxxxxx_n] marker exactly once, unchanged and in the original order. " +
+                        Text = protectedText.Input, From = from, Targets = [target], WantDictionary = false,
+                        Style = "Translate every text fragment. Keep every [FTxxxxxxxx_n] and [GTxxxxxxxx_n] marker exactly once, unchanged and in the original order. " +
                                 "Markers delimit formatting spans in the same passage. Do not add explanations, Markdown fences, or new markers."
                     }, ct).ConfigureAwait(false);
                     ct.ThrowIfCancellationRequested();
                     if (!result.Ok || string.IsNullOrWhiteSpace(result.Get(target)))
                         throw new InvalidDataException(result.Error ?? "翻译源未返回目标语言译文。");
-                    unit.Apply(unit.Validate(result.Get(target)!));
+                    var values = unit.Validate(protectedText.Restore(result.Get(target)!));
+                    checkpoint?.Save(unitIndex, unit, values);
+                    unit.Apply(values);
                     failure = null;
                     break;
                 }
@@ -208,6 +233,7 @@ public static class DocumentTranslation
                 throw new InvalidOperationException($"第 {document.Completed + 1}/{document.Count} 段失败：{failure.Message} 已完成的段落保留在当前窗口，可继续翻译。", failure);
             progress?.Report(new(document.Completed, document.Count, document.IsComplete ? "翻译完成，可另存文件" : "正在翻译"));
         }
+        document.TargetLanguage = target;
         document.Finish?.Invoke(target);
     }
 }

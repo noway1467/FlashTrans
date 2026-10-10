@@ -27,6 +27,7 @@ public sealed class DocumentHistoryService
 {
     public const int Limit = 100;
     readonly string _path;
+    internal string DirectoryPath => Path.GetDirectoryName(_path)!;
     readonly object _gate = new();
     public string? LoadWarning { get; private set; }
     public DocumentHistoryService(string directory) => _path = Path.Combine(directory, "document-history.json");

@@ -16,6 +16,8 @@ static class Program
     [STAThread]
     static int Main(string[] args)
     {
+        if (args.Contains("--checkpoint-child")) return DocumentProbe.CheckpointChild(args);
+        if (args.Contains("--read-clipboard-child")) return ProtectionProbe.ReadClipboardChild();
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
 
         SettingsService.Instance.Load();
@@ -37,6 +39,12 @@ static class Program
             ThemeService.ApplyAccent(s.AccentColor);
         });
 
+        if (Array.IndexOf(args, "--feature-preview") is var previewIndex && previewIndex >= 0)
+        {
+            Step("新功能：生成本机样例与深浅主题预览", () => DocumentProbe.FeaturePreview(args[previewIndex + 1]));
+            app.Shutdown(); return _fail == 0 ? 0 : 1;
+        }
+
         if (args.Contains("--only-startup"))
         {
             WindowStartupProbe.RunAll(Step, args.Contains("--preload-startup"));
@@ -49,6 +57,12 @@ static class Program
             DocumentProbe.RunAll(Step);
             app.Shutdown();
             return _fail == 0 ? 0 : 1;
+        }
+
+        if (args.Contains("--only-protection"))
+        {
+            ProtectionProbe.RunAll(Step);
+            app.Shutdown(); return _fail == 0 ? 0 : 1;
         }
 
         if (args.Contains("--only-capture"))
@@ -101,6 +115,7 @@ static class Program
 
         SourceCaptureProbe.RunAll(Step);
         DocumentProbe.RunAll(Step);
+        ProtectionProbe.RunAll(Step);
         WindowStartupProbe.RunAll(Step);
         var host = new AppHost();
         UiProbe.RunAll(host, Step);

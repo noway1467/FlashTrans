@@ -56,13 +56,19 @@ public sealed class AppSettings
     public int Version { get; set; } = CurrentVersion;
 
     /// <summary>加新的默认源/字段时 +1，并在 Migrate 里补一段。</summary>
-    public const int CurrentVersion = 9;
+    public const int CurrentVersion = 10;
 
     // ------- 文件翻译 -------
     /// <summary>空字符串表示源文件目录；只保存用户显式设为默认的目录。</summary>
     public string DocumentOutputDirectory { get; set; } = "";
     /// <summary>文件翻译独立记住目标语言；尚未选择时沿用主窗口的目标语言。</summary>
     public string DocumentTargetLang { get; set; } = "";
+    public string DocumentSourceLang { get; set; } = "";
+    public string DocumentProviderId { get; set; } = "";
+    /// <summary>进度正文使用当前 Windows 账户加密，只有显式开启时写盘。</summary>
+    public bool DocumentRememberProgress { get; set; }
+    public bool DocumentBilingualOutput { get; set; }
+    public string DocumentGlossaryPath { get; set; } = "";
     /// <summary>每批原文上限；AI 接口可调低，减少上下文和输出超限。</summary>
     public int DocumentBatchCharacters { get; set; } = 600;
     /// <summary>相邻批次的请求间隔，用于降低频繁调用触发的限流。</summary>
@@ -136,6 +142,7 @@ public sealed class AppSettings
     public bool RestoreClipboard { get; set; } = true;
     public bool MonitorClipboard { get; set; }
     public bool SkipOwnWindow { get; set; } = true;
+    public List<string> ExcludedApplications { get; set; } = [];
     public int MaxSelectionChars { get; set; } = 5000;
     public PopupPlace PopupPlace { get; set; } = PopupPlace.NearMouse;
     public double PopupWidth { get; set; } = 420;

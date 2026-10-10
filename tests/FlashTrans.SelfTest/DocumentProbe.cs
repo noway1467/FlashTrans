@@ -17,7 +17,7 @@ using FlashTrans.Views;
 
 namespace FlashTrans.SelfTest;
 
-static class DocumentProbe
+static partial class DocumentProbe
 {
     static readonly UTF8Encoding Utf8 = new(false);
     static readonly XNamespace W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
@@ -25,6 +25,7 @@ static class DocumentProbe
 
     internal static void RunAll(Action<string, Action> step)
     {
+        RunFeatureProbes(step);
         step("文件：TXT 编码、换行、长段落和另存保护", () => InTemp(TextRoundtrip));
         step("文件：Markdown 正文翻译，代码/链接/表格/元数据不损坏", () => InTemp(MarkdownRoundtrip));
         step("文件：DOCX 表格/行内样式/页眉/脚注及媒体保留", () => InTemp(DocxRoundtrip));
@@ -634,7 +635,7 @@ static class DocumentProbe
         var settings = JsonSerializer.Deserialize("{\"version\":8}", SettingsJson.Default.AppSettings)!;
         Check(settings.DocumentBatchCharacters == 600 && settings.DocumentRequestDelayMs == 200 && settings.DocumentTimeoutSeconds == 180,
             "旧配置没有采用新的文件翻译默认值");
-        Check(SettingsService.Migrate(settings) && settings.Version == 9, "文件翻译参数迁移失败");
+        Check(SettingsService.Migrate(settings) && settings.Version == AppSettings.CurrentVersion, "文件翻译参数迁移失败");
         settings.DocumentBatchCharacters = 1; settings.DocumentRequestDelayMs = -1; settings.DocumentTimeoutSeconds = 1;
         SettingsService.Normalize(settings);
         Check(settings.DocumentBatchCharacters == 600 && settings.DocumentRequestDelayMs == 200 && settings.DocumentTimeoutSeconds == 180,

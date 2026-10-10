@@ -22,6 +22,9 @@ public sealed class PinnedShotWindow : Window
     int _pixelWidth;
     int _pixelHeight;
     bool _closing;
+    readonly System.Windows.Threading.DispatcherTimer _recover = new() { Interval = TimeSpan.FromMilliseconds(120) };
+    internal bool ClickThrough { get; private set; }
+    internal double Zoom => (double)_pixelWidth / _image.Width;
 
     public event Action? CopyRequested;
     public event Action? SaveRequested;
@@ -56,6 +59,20 @@ public sealed class PinnedShotWindow : Window
         grid.Children.Add(_picture);
         grid.Children.Add(_toolbar);
         Content = grid;
+        ToolTip = "滚轮缩放；Ctrl+滚轮调整透明度；右键更多操作";
+        PreviewMouseWheel += (_, e) =>
+        {
+            if ((Keyboard.Modifiers & ModifierKeys.Control) != 0) SetOpacity(Opacity + Math.Sign(e.Delta) * 0.05);
+            else SetZoom(Zoom * Math.Pow(1.1, Math.Sign(e.Delta)));
+            e.Handled = true;
+        };
+        ContextMenu = BuildMenu();
+        _recover.Tick += (_, _) =>
+        {
+            if ((Win32.GetAsyncKeyState(Win32.VK_CONTROL) & 0x8000) != 0 && (Win32.GetAsyncKeyState(Win32.VK_MENU) & 0x8000) != 0)
+                SetClickThrough(false);
+        };
+        Closed += (_, _) => _recover.Stop();
 
         MouseEnter += (_, _) => _toolbar.Visibility = Visibility.Visible;
         MouseLeave += (_, _) => _toolbar.Visibility = Visibility.Collapsed;
@@ -96,6 +113,9 @@ public sealed class PinnedShotWindow : Window
         row.Children.Add(UiKit.IconButton(UiKit.IconCopy, "复制截图", (_, _) => CopyRequested?.Invoke()));
         row.Children.Add(UiKit.IconButton(IconSave, "保存截图", (_, _) => SaveRequested?.Invoke()));
         row.Children.Add(UiKit.IconButton(UiKit.IconTrash, "销毁钉住 (Esc / Delete)", (_, _) => Destroy()));
+        var more = new Button { Content = "⋯", ToolTip = "缩放、透明度、鼠标穿透", Padding = new Thickness(5, 0, 5, 0) };
+        more.Click += (_, _) => { ContextMenu.PlacementTarget = more; ContextMenu.IsOpen = true; };
+        row.Children.Add(more);
 
         var border = new Border
         {
@@ -159,6 +179,52 @@ public sealed class PinnedShotWindow : Window
         // 跨 DPI 屏幕拖动时仍保持物理像素大小，不让 WPF 把截图当普通界面整体放大。
         Win32.SetWindowPos(hwnd, Win32.HWND_TOPMOST, 0, 0, _pixelWidth, _pixelHeight,
             Win32.SWP_NOMOVE | Win32.SWP_NOACTIVATE);
+    }
+
+    ContextMenu BuildMenu()
+    {
+        var menu = new ContextMenu();
+        void Add(string label, Action action)
+        {
+            var item = new MenuItem { Header = label };
+            item.Click += (_, _) => action(); menu.Items.Add(item);
+        }
+        Add("放大（滚轮向上）", () => SetZoom(Zoom * 1.1));
+        Add("缩小（滚轮向下）", () => SetZoom(Zoom / 1.1));
+        Add("恢复原图尺寸 100%", () => SetZoom(1));
+        Add("透明度 100%", () => SetOpacity(1));
+        Add("透明度 75%", () => SetOpacity(0.75));
+        Add("透明度 50%", () => SetOpacity(0.5));
+        Add("鼠标穿透（按住 Ctrl+Alt 解除）", () => SetClickThrough(true));
+        return menu;
+    }
+
+    internal void SetZoom(double zoom)
+    {
+        if (!double.IsFinite(zoom)) return;
+        zoom = Math.Clamp(zoom, Math.Min(0.1, 16000.0 / Math.Max(_image.Width, _image.Height)),
+            Math.Min(8, 16000.0 / Math.Max(_image.Width, _image.Height)));
+        _pixelWidth = Math.Max(1, (int)Math.Round(_image.Width * zoom));
+        _pixelHeight = Math.Max(1, (int)Math.Round(_image.Height * zoom));
+        RenderOptions.SetBitmapScalingMode(_picture, zoom == 1 ? BitmapScalingMode.NearestNeighbor : BitmapScalingMode.HighQuality);
+        KeepPixelSize();
+    }
+
+    internal void SetOpacity(double opacity)
+    {
+        if (double.IsFinite(opacity)) Opacity = Math.Clamp(opacity, 0.2, 1);
+    }
+
+    internal void SetClickThrough(bool enabled)
+    {
+        var hwnd = new System.Windows.Interop.WindowInteropHelper(this).EnsureHandle();
+        var style = Win32.GetWindowLong(hwnd, Win32.GWL_EXSTYLE);
+        Win32.SetWindowLong(hwnd, Win32.GWL_EXSTYLE, enabled
+            ? style | Win32.WS_EX_TRANSPARENT | Win32.WS_EX_NOACTIVATE
+            : style & ~(Win32.WS_EX_TRANSPARENT | Win32.WS_EX_NOACTIVATE));
+        ClickThrough = enabled;
+        _toolbar.Visibility = Visibility.Collapsed;
+        if (enabled) _recover.Start(); else _recover.Stop();
     }
 
     static (double X, double Y) DpiScale(Window w)

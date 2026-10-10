@@ -19,7 +19,7 @@ internal static partial class DocumentFormats
     internal static TranslationDocument Load(string path, int batchCharacters, CancellationToken ct)
     {
         path = Path.GetFullPath(path);
-        if (!DocumentTranslation.Supports(path)) throw new NotSupportedException("支持 EPUB、TXT、Markdown（.md/.markdown）和 DOCX；旧版 .doc 请先另存为 .docx。");
+        if (!DocumentTranslation.Supports(path)) throw new NotSupportedException("支持 EPUB、TXT、Markdown、DOCX 和文本层 PDF；旧版 .doc 请先另存为 .docx。");
         ct.ThrowIfCancellationRequested();
         // 打开后再核验长度，并限制读取；不因文件被替换或 ZIP 压缩比过高而耗尽内存。
         using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
@@ -29,12 +29,14 @@ internal static partial class DocumentFormats
         var document = new TranslationDocument
         {
             SourcePath = path,
+            SourceHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(data)),
             BatchCharacters = Math.Clamp(batchCharacters, DocumentTranslation.MinBatchCharacters, DocumentTranslation.MaxBatchCharacters)
         };
         switch (Path.GetExtension(path).ToLowerInvariant())
         {
             case ".txt": LoadText(document, DecodeText(document, data), false, ct); break;
             case ".md": case ".markdown": LoadText(document, DecodeText(document, data), true, ct); break;
+            case ".pdf": LoadPdf(document, data, ct); break;
             default: LoadPackage(document, data, ct); break;
         }
         if (document.Count > 20000 || document.CharacterCount > 2_000_000)

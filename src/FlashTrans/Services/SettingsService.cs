@@ -194,6 +194,13 @@ public sealed class SettingsService
             s.Version = 9;
             changed = true;
         }
+        if (s.Version < 10)
+        {
+            s.ExcludedApplications ??= [];
+            s.DocumentGlossaryPath ??= "";
+            s.Version = 10;
+            changed = true;
+        }
         return changed;
     }
 
@@ -204,6 +211,13 @@ public sealed class SettingsService
     /// </summary>
     public static void Normalize(AppSettings s)
     {
+        s.ExcludedApplications = Interop.ApplicationExclusions.Normalize(s.ExcludedApplications);
+        s.DocumentProviderId ??= "";
+        s.DocumentSourceLang = string.Equals(s.DocumentSourceLang?.Trim(), Languages.Auto, StringComparison.OrdinalIgnoreCase)
+            ? Languages.Auto : Languages.All.FirstOrDefault(l =>
+                string.Equals(l.Code, s.DocumentSourceLang?.Trim(), StringComparison.OrdinalIgnoreCase))?.Code ?? "";
+        s.DocumentGlossaryPath = (s.DocumentGlossaryPath ?? "").Trim();
+        if (s.DocumentGlossaryPath.Length > 0 && !Path.IsPathFullyQualified(s.DocumentGlossaryPath)) s.DocumentGlossaryPath = "";
         s.DocumentTargetLang = Languages.All.FirstOrDefault(l =>
             string.Equals(l.Code, s.DocumentTargetLang?.Trim(), StringComparison.OrdinalIgnoreCase))?.Code ?? "";
         if (s.DocumentBatchCharacters is < DocumentTranslation.MinBatchCharacters or > DocumentTranslation.MaxBatchCharacters)

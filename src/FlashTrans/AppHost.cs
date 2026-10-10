@@ -115,7 +115,7 @@ public sealed partial class AppHost : IDisposable
     void ApplyInputHooks(AppSettings s)
     {
         _mouseHook.RequiredModifier = s.SelectionModifier;
-        _mouseHook.ShouldIgnore = () => s.SkipOwnWindow && IsOwnWindowActive();
+        _mouseHook.ShouldIgnore = () => (s.SkipOwnWindow && IsOwnWindowActive()) || ApplicationExclusions.ForegroundExcluded;
 
         if (s.SelectionMode == SelectionMode.Off)
         {
@@ -161,7 +161,7 @@ public sealed partial class AppHost : IDisposable
     async Task HandleSelectionAsync(POINT pt)
     {
         var mode = S.SelectionMode;
-        if (mode == SelectionMode.Off) return;
+        if (mode == SelectionMode.Off || ApplicationExclusions.ForegroundExcluded) return;
 
         _selectionCts?.Cancel();
         var cts = new CancellationTokenSource();
@@ -170,7 +170,9 @@ public sealed partial class AppHost : IDisposable
         try
         {
             await Task.Delay(60, cts.Token);   // 等目标程序把选区确定下来
+            if (ApplicationExclusions.ForegroundExcluded) return;
             var text = await SelectionReader.GetSelectedTextAsync(S.RestoreClipboard, cts.Token);
+            if (SelectionReader.LastError is { } protectionError) { Toast(protectionError); return; }
             if (cts.IsCancellationRequested || string.IsNullOrWhiteSpace(text)) return;
             if (text!.Length > S.MaxSelectionChars) return;
 
@@ -184,10 +186,12 @@ public sealed partial class AppHost : IDisposable
 
     async Task TranslateSelectionAsync(bool fromHotkey)
     {
+        if (ApplicationExclusions.ForegroundExcluded) { if (fromHotkey) Toast("当前应用已排除划词翻译"); return; }
         var text = await SelectionReader.GetSelectedTextAsync(S.RestoreClipboard);
+        if (SelectionReader.LastError is { } protectionError) { Toast(protectionError); return; }
         if (string.IsNullOrWhiteSpace(text))
         {
-            if (fromHotkey) Toast("没有选中文本");
+            if (fromHotkey) Toast(SelectionReader.LastError ?? "没有选中文本");
             return;
         }
         Point? anchor = null;
@@ -226,6 +230,8 @@ public sealed partial class AppHost : IDisposable
         var seq = Win32.GetClipboardSequenceNumber();
         if (seq == _lastClipSeq) return;
         _lastClipSeq = seq;
+        if (SelectionReader.IsCapturing || seq == SelectionReader.InternalSequence) return;
+        if (ApplicationExclusions.ForegroundExcluded || ApplicationExclusions.IsExcluded(ClipboardSnapshot.GetClipboardOwner())) return;
         if (S.SkipOwnWindow && IsOwnWindowActive()) return;
 
         var text = SelectionReader.ReadText();

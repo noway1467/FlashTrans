@@ -34,15 +34,20 @@ public partial class DocumentTranslationWindow : Window
         ResetFolderHost.Content = UiKit.IconButton(UiKit.IconRefresh, "使用源文件目录", (_, _) => SetOutputDirectory(""));
         FromHost.Content = _from; ToHost.Content = _to;
         var settings = SettingsService.Instance.Current;
-        _from.SelectedCode = settings.SourceLang;
+        _from.SelectedCode = string.IsNullOrWhiteSpace(settings.DocumentSourceLang) ? settings.SourceLang : settings.DocumentSourceLang;
         _to.SelectedCode = string.IsNullOrWhiteSpace(settings.DocumentTargetLang) ? settings.TargetLang : settings.DocumentTargetLang;
-        _from.SelectionChanged += _ => InvalidateTranslation();
+        _from.SelectionChanged += code =>
+        {
+            SettingsService.Instance.Current.DocumentSourceLang = code;
+            SettingsService.Instance.Save(); InvalidateTranslation();
+        };
         _to.SelectionChanged += RememberTargetLanguage;
         _syncOptions = true;
         BatchCharactersBox.Text = settings.DocumentBatchCharacters.ToString();
         RequestDelayBox.Text = settings.DocumentRequestDelayMs.ToString();
         TimeoutBox.Text = settings.DocumentTimeoutSeconds.ToString();
         _syncOptions = false;
+        BuildDocumentFeatures();
         SetOutputDirectory(settings.DocumentOutputDirectory);
         RefreshProviders(); RefreshHistory(); UpdateButtons();
         Loaded += (_, _) =>
@@ -113,7 +118,13 @@ public partial class DocumentTranslationWindow : Window
         SettingsService.Instance.Save();
         SetStatus(DefaultFolder.IsChecked == true ? "已设为默认输出位置" : "默认恢复为源文件目录");
     }
-    void OnProviderChanged(object sender, SelectionChangedEventArgs e) { if (!IsInitialized) return; InvalidateTranslation(); UpdatePrivacy(); }
+    void OnProviderChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!IsInitialized) return;
+        if (SelectedProvider is { } source)
+        { SettingsService.Instance.Current.DocumentProviderId = source.Id; SettingsService.Instance.Save(); }
+        InvalidateTranslation(); UpdatePrivacy();
+    }
     void OnOptionChanged(object sender, TextChangedEventArgs e)
     {
         if (_syncOptions || !IsInitialized) return;
@@ -147,7 +158,8 @@ public partial class DocumentTranslationWindow : Window
     }
     void RefreshProviders()
     {
-        var id = SelectedProvider?.Id ?? SettingsService.Instance.Current.PrimaryProviderId;
+        var settings = SettingsService.Instance.Current;
+        var id = SelectedProvider?.Id ?? (settings.DocumentProviderId.Length > 0 ? settings.DocumentProviderId : settings.PrimaryProviderId);
         var sources = SettingsService.Instance.Current.EnabledProviders.Select(p => p.Clone()).ToArray();
         Providers.Items.Clear();
         foreach (var source in sources) Providers.Items.Add(new ComboBoxItem { Content = source.DisplayName, Tag = source });
@@ -220,6 +232,9 @@ public partial class DocumentTranslationWindow : Window
         var directory = _outputDirectory.Length == 0 ? Path.GetDirectoryName(_document.SourcePath)! : _outputDirectory;
         if (!Directory.Exists(directory)) { SetStatus("输出目录不可用，请重新选择文件夹。"); return; }
         var from = _from.SelectedCode; var target = _to.SelectedCode;
+        var bilingual = _bilingualOutput.IsChecked == true;
+        var checkpoints = _rememberProgress.IsChecked == true ? _checkpoints : null;
+        var glossaryPath = _glossaryPath;
         Begin(); _outputPath = "";
         if (!_readyToSave) _attempt = new DocumentHistoryEntry { SourcePath = _document.SourcePath, ProviderName = provider.DisplayName, SourceLanguage = from, TargetLanguage = target };
         var generation = _generation;
@@ -241,11 +256,13 @@ public partial class DocumentTranslationWindow : Window
                     _document = await Task.Run(() => DocumentTranslation.Load(source, batchCharacters, ct), ct);
                     _attempt = new DocumentHistoryEntry { SourcePath = source, ProviderName = provider.DisplayName, SourceLanguage = from, TargetLanguage = target };
                 }
-                await Task.Run(() => DocumentTranslation.TranslateAsync(_document, provider, from, target, progress, ct, timeoutSeconds, requestDelayMs), ct);
+                var glossary = await Task.Run(() => DocumentGlossary.Load(glossaryPath, from, target), ct);
+                await Task.Run(() => DocumentTranslation.TranslateAsync(_document, provider, from, target, progress, ct,
+                    timeoutSeconds, requestDelayMs, glossary, checkpoints), ct);
                 _readyToSave = true; _translatedTarget = target;
             }
             _saving = true; SetStatus("正在生成译文副本…"); Progress.IsIndeterminate = true;
-            _outputPath = await Task.Run(() => _document.SaveCopy(directory, _translatedTarget, ct), ct);
+            _outputPath = await Task.Run(() => _document.SaveCopy(directory, _translatedTarget, ct, bilingual), ct);
             _readyToSave = false;
             Progress.Maximum = Math.Max(1, _document.Count); Progress.Value = _document.Completed;
             SetStatus("已保存 · " + Path.GetFileName(_outputPath));
@@ -324,6 +341,9 @@ public partial class DocumentTranslationWindow : Window
         try { _history.Clear(); RefreshHistory(); }
         catch (Exception ex) { SetStatus("清空失败：" + ex.Message); }
     }
+    internal static bool IsOpenableResultPath(string path) => DocumentTranslation.Supports(path)
+        || Path.GetExtension(path).Equals(".html", StringComparison.OrdinalIgnoreCase);
+
     void OpenPath(string path, bool folder)
     {
         try
@@ -331,7 +351,8 @@ public partial class DocumentTranslationWindow : Window
             if (string.IsNullOrWhiteSpace(path) || !Path.IsPathFullyQualified(path)) throw new FileNotFoundException();
             var target = folder ? Path.GetDirectoryName(path)! : path;
             if (folder ? !Directory.Exists(target) : !File.Exists(target)) throw new FileNotFoundException();
-            if (!folder && !DocumentTranslation.Supports(target)) throw new InvalidDataException("不支持打开该类型。");
+            if (!folder && !IsOpenableResultPath(target))
+                throw new InvalidDataException("不支持打开该类型。");
             Process.Start(new ProcessStartInfo(target) { UseShellExecute = true });
         }
         catch (FileNotFoundException) { SetStatus("文件或目录已移动、删除，请重新选择。 "); }

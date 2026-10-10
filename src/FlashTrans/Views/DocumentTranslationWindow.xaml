@@ -119,7 +119,7 @@
                                     <TextBlock x:Name="FileTitle" Text="拖入文件，开始翻译" FontSize="18" FontWeight="SemiBold" HorizontalAlignment="Center"
                                                TextTrimming="CharacterEllipsis" MaxWidth="450" />
                                     <TextBlock x:Name="FileSummary" Text="或点击选择文件" FontSize="12" Foreground="{DynamicResource TextDim}" HorizontalAlignment="Center" Margin="0,7,0,10" />
-                                    <TextBlock Text="EPUB   /   TXT   /   Markdown   /   DOCX" FontSize="10.5" Foreground="{DynamicResource TextFaint}" HorizontalAlignment="Center" />
+                                    <TextBlock Text="EPUB / TXT / Markdown / DOCX / PDF（文本层）" FontSize="10.5" Foreground="{DynamicResource TextFaint}" HorizontalAlignment="Center" />
                                 </StackPanel>
                             </Button>
                             <Grid x:Name="Options" Margin="0,20,0,0">
@@ -154,6 +154,7 @@
                                         <ContentControl Grid.Column="2" x:Name="ResetFolderHost" Margin="6,0,0,0" VerticalAlignment="Center" />
                                     </Grid>
                                     <CheckBox x:Name="DefaultFolder" Content="设为默认输出位置" Margin="0,9,0,0" FontSize="11.5" Checked="OnDefaultFolderChanged" Unchecked="OnDefaultFolderChanged" />
+                                    <StackPanel x:Name="DocumentExtras" Margin="0,12,0,0" />
                                 </StackPanel>
                                 <TextBlock Grid.Row="3" x:Name="Privacy" FontSize="11" Foreground="{DynamicResource TextDim}" TextWrapping="Wrap" Margin="0,14,0,0" />
                                 <Expander Grid.Row="4" Header="选项与格式说明" FontSize="11" Foreground="{DynamicResource TextDim}" Margin="0,12,0,0">
@@ -176,7 +177,7 @@
                                             </StackPanel>
                                         </WrapPanel>
                                         <TextBlock x:Name="Warnings" TextWrapping="Wrap" Margin="0,10,0,0" FontSize="11" LineHeight="17" />
-                                        <TextBlock Text="单并发；失败重试 2 次。关闭窗口不保留续译进度。" TextWrapping="Wrap" Margin="0,6,0,0" FontSize="11" />
+                                        <TextBlock Text="单并发，失败重试 2 次。开启保存进度后，重新载入原文件并开始翻译即可校验恢复；更改文件、翻译源、语向或术语会重新翻译。" TextWrapping="Wrap" Margin="0,6,0,0" FontSize="11" />
                                     </StackPanel>
                                 </Expander>
                             </Grid>

@@ -52,10 +52,14 @@ public sealed partial class SettingsWindow
                 S.SelectionModifier.ToLowerInvariant(), v => S.SelectionModifier = v)),
             Check("双击 Ctrl 翻译选中文本", S.DoubleCtrlWake, on => S.DoubleCtrlWake = on),
             Check("翻译后还原剪贴板", S.RestoreClipboard, on => S.RestoreClipboard = on,
-                "取词要借用剪贴板"),
+                "保护文本、富文本、图片及文件列表；无法完整备份时不取词"),
             Check("忽略本程序窗口内的选择", S.SkipOwnWindow, on => S.SkipOwnWindow = on),
             Check("监听剪贴板，复制即翻译", S.MonitorClipboard, on => S.MonitorClipboard = on),
-            Field("最长取词字数", Number(S.MaxSelectionChars, 100, 20000, v => S.MaxSelectionChars = v, "字")));
+            Field("最长取词字数", Number(S.MaxSelectionChars, 100, 20000, v => S.MaxSelectionChars = v, "字")),
+            Field("排除应用", Input(string.Join("; ", S.ExcludedApplications),
+                v => S.ExcludedApplications = ApplicationExclusions.Normalize(v.Split([';', '；', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries)),
+                "例如 KeePass.exe; notepad.exe"),
+                "按进程名匹配，分号分隔。禁用这些应用的划词（含快捷键）及剪贴板自动翻译；不影响手动输入和截图。"));
 
         Section(page, "弹窗",
             Field("出现位置", Combo<PopupPlace>(
@@ -742,7 +746,7 @@ public sealed partial class SettingsWindow
         var ver = typeof(SettingsWindow).Assembly.GetName().Version?.ToString(3) ?? "1.0.0";
 
         Section(page, "闪译 FlashTrans",
-            UiKit.Text($"版本 {ver} · WPF / .NET 9 · 不依赖第三方库", 12.5, "Text"),
+            UiKit.Text($"版本 {ver} · WPF / .NET 9 · 本机 OCR / PDF 文本层处理", 12.5, "Text"),
             Hint("聚合免费与自带额度的翻译接口，标签页切换、失败自动降级、划词与快捷键唤出。"),
             Hint("配置文件：" + SettingsService.Instance.ConfigPath),
             Hint("API 密钥使用 Windows DPAPI 加密后保存，只有当前 Windows 账户能解开。"));
