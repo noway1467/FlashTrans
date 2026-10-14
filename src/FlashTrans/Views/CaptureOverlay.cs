@@ -67,8 +67,13 @@ public sealed partial class CaptureOverlay : Window
         return win._result;
     }
 
-    CaptureOverlay(CapturedImage shot, RECT screen)
+    internal CaptureOverlay(CapturedImage shot, RECT screen,
+        Func<CapturedImage, CancellationToken, Task<IReadOnlyList<OcrTextRegion>>>? recognizeRegions = null)
     {
+        var language = S.OcrLang;
+        var engine = S.OcrEngine;
+        _recognizeRegions = recognizeRegions
+            ?? ((image, ct) => OcrService.RecognizeRegionsAsync(image, language, ct, engine));
         _shot = shot;
         _screen = screen;
         // 趁自己还没显示出来先记下窗口，等 Show 之后就只看得见蒙层了
@@ -103,6 +108,7 @@ public sealed partial class CaptureOverlay : Window
         _canvas.Children.Add(_layer);
         _canvas.Children.Add(_toolbar);
         Content = _canvas;
+        InitializeRedaction();
 
         // 层要铺满整个画布。Canvas 不会自己撑孩子，得跟着尺寸走。
         SizeChanged += (_, _) =>
@@ -117,7 +123,7 @@ public sealed partial class CaptureOverlay : Window
         // 那时候就关等于刚弹出来就自己消失了。
         Activated += (_, _) => _everActive = true;
         Deactivated += (_, _) => { if (_everActive) CloseOnce(); };
-        Closing += (_, _) => _closing = true;
+        Closing += (_, _) => { _closing = true; CancelRedaction(); };
     }
 
     /// <summary>
@@ -145,6 +151,10 @@ public sealed partial class CaptureOverlay : Window
         if (action == CaptureAction.None) { CloseOnce(); return; }
         if (!_layer.HasSelection) return;
 
+        RefreshRedactionSelection();
+        if (!CanExportRedaction()) return;
+        CommitTextInput();
+
         var img = _layer.Export();
         if (img is null) return;
 
@@ -169,6 +179,7 @@ public sealed partial class CaptureOverlay : Window
     void FinishLongShot()
     {
         if (!_layer.HasSelection) return;
+        if (!CanLeaveRedaction()) return;
         _result = new CaptureOutcome(CaptureAction.None, null, SelectionInScreen()) { WantsLongShot = true };
         CloseOnce();
     }
@@ -183,6 +194,7 @@ public sealed partial class CaptureOverlay : Window
     void FinishRecord()
     {
         if (!_layer.HasSelection) return;
+        if (!CanLeaveRedaction()) return;
         _result = new CaptureOutcome(CaptureAction.None, null, SelectionInScreen()) { WantsRecord = true };
         CloseOnce();
     }

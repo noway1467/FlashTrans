@@ -181,6 +181,13 @@ public sealed class AppSettings
     public string CaptureSaveDir { get; set; } = "";
     /// <summary>点「保存」时弹另存为对话框，而不是直接存进上面那个目录。</summary>
     public bool CaptureSaveAsk { get; set; }
+    /// <summary>普通截图选区稳定后自动检测；旧配置和新配置均默认关闭。</summary>
+    public bool CaptureAutoRedact { get; set; }
+    /// <summary>分号分隔的本地敏感关键词。内存中明文，落盘时 DPAPI 加密。</summary>
+    public string CaptureRedactionKeywords { get; set; } = "";
+    /// <summary>解密失败的瞬态状态，与用户恰好输入 dpapi: 开头的关键词区分，不写入配置。</summary>
+    [JsonIgnore]
+    internal bool CaptureRedactionKeywordsLocked { get; set; }
     /// <summary>马赛克格子多大（图的像素）。</summary>
     public int CaptureMosaicBlock { get; set; } = 12;
     /// <summary>画笔粗细，也用于矩形、圆、箭头。</summary>
@@ -225,6 +232,8 @@ public sealed class AppSettings
     public string CkArrow { get; set; } = "A";
     public string CkPen { get; set; } = "P";
     public string CkMosaic { get; set; } = "M";
+    public string CkRedact { get; set; } = "";
+    public string CkAutoRedact { get; set; } = "Ctrl+Shift+M";
     public string CkText { get; set; } = "T";
     public string CkUndo { get; set; } = "Ctrl+Z";
     /// <summary>重做。撤销多按了一下时把那一笔接回来。</summary>

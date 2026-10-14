@@ -37,6 +37,7 @@ public sealed partial class CaptureOverlay
         "M2.5,3 H6 V6.5 H2.5 Z M9,3 H12.5 V6.5 H9 Z M6,6.5 H9.5 V10 H6 Z M2.5,10 H6 V13.5 H2.5 Z M9,10 H12.5 V13.5 H9 Z");
     static readonly Geometry IconUndo = Geometry.Parse(
         "M3,7 H9.5 C11.4,7 13,8.4 13,10.2 C13,12 11.4,13.4 9.5,13.4 H6 M3,7 L6,4 M3,7 L6,10");
+    static readonly Geometry IconRedact = Geometry.Parse("M8,2 L13,4 V8 C13,11 10,13 8,14 C6,13 3,11 3,8 V4 Z M5,8 H11");
     // 重做就是把撤销那条路径左右翻过来（每个 x 换成 16-x），两个并排才像一对
     static readonly Geometry IconRedo = Geometry.Parse(
         "M13,7 H6.5 C4.6,7 3,8.4 3,10.2 C3,12 4.6,13.4 6.5,13.4 H10 M13,7 L10,4 M13,7 L10,10");
@@ -136,12 +137,13 @@ public sealed partial class CaptureOverlay
 
     Border BuildToolbar()
     {
-        var row = new StackPanel
+        var row = new WrapPanel
         {
             Orientation = Orientation.Horizontal,
             Margin = new Thickness(6, 0, 6, 0),
-            Height = BarHeight,
+            MinHeight = BarHeight,
         };
+        _actionRow = row;
 
         foreach (var (tool, icon, tip) in new[]
                  {
@@ -150,6 +152,7 @@ public sealed partial class CaptureOverlay
                      (CaptureTool.Arrow, IconArrow, Tip("箭头", S.CkArrow)),
                      (CaptureTool.Pen, IconPen, Tip("画笔", S.CkPen)),
                      (CaptureTool.Mosaic, IconMosaic, Tip("马赛克", S.CkMosaic)),
+                     (CaptureTool.Redact, IconRedact, Tip("实心遮挡（手动补漏）", S.CkRedact)),
                      (CaptureTool.Text, null, Tip("文字", S.CkText)),
                  })
         {
@@ -170,6 +173,8 @@ public sealed partial class CaptureOverlay
         row.Children.Add(_redoBtn);
         row.Children.Add(Sep());
 
+        row.Children.Add(ActionBtn("自动打码", Tip("本地识别敏感文字并实心遮挡，仍需人工核对", S.CkAutoRedact),
+            () => _ = RedactAsync()));
         row.Children.Add(ActionBtn("长截图", Tip("往下滚动接着截", S.CkLongShot), FinishLongShot, IconLong));
         row.Children.Add(ActionBtn("录制", Tip("把这块区域录成动图", S.CkRecord), FinishRecord, IconRecord));
         row.Children.Add(Sep());
@@ -209,6 +214,7 @@ public sealed partial class CaptureOverlay
         var stack = new StackPanel();
         stack.Children.Add(row);
         stack.Children.Add(_styleRowHost);
+        stack.Children.Add(BuildRedactionStatus());
 
         return new Border
         {
@@ -370,6 +376,7 @@ public sealed partial class CaptureOverlay
         {
             CaptureTool.Text => StyleCtx.Font,
             CaptureTool.Mosaic => StyleCtx.Mosaic,
+            CaptureTool.Redact => StyleCtx.None,
             CaptureTool.None => StyleCtx.None,
             _ => StyleCtx.Width,
         };
@@ -630,6 +637,7 @@ public sealed partial class CaptureOverlay
     /// </summary>
     void OnSelectionChanged()
     {
+        RefreshRedactionSelection();
         if (!_layer.HasSelection)
         {
             _toolbar.Visibility = Visibility.Collapsed;
@@ -650,7 +658,8 @@ public sealed partial class CaptureOverlay
     {
         if (!_layer.HasSelection) return;
 
-        _toolbar.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        _toolbar.MaxWidth = Math.Max(1, _canvas.ActualWidth - 16);
+        _toolbar.Measure(new Size(_toolbar.MaxWidth, double.PositiveInfinity));
         var w = _toolbar.DesiredSize.Width;
         var h = _toolbar.DesiredSize.Height;
         var sel = _layer.Selection;
@@ -767,6 +776,12 @@ public sealed partial class CaptureOverlay
 
     void OnKey(object sender, KeyEventArgs e)
     {
+        if (_redactionState == RedactionState.Scanning)
+        {
+            e.Handled = true;
+            if (RealKey(e) == Key.Escape) CloseOnce();
+            return;
+        }
         // 焦点在输入框里时只让它自己处理，不然打个 R 就切成矩形工具了
         if (_textBox is not null && _textBox.IsKeyboardFocusWithin) return;
 
@@ -866,6 +881,8 @@ public sealed partial class CaptureOverlay
         yield return (HotkeySpec.Parse(S.CkArrow), () => ToggleTool(CaptureTool.Arrow));
         yield return (HotkeySpec.Parse(S.CkPen), () => ToggleTool(CaptureTool.Pen));
         yield return (HotkeySpec.Parse(S.CkMosaic), () => ToggleTool(CaptureTool.Mosaic));
+        yield return (HotkeySpec.Parse(S.CkRedact), () => ToggleTool(CaptureTool.Redact));
+        yield return (HotkeySpec.Parse(S.CkAutoRedact), () => _ = RedactAsync());
         yield return (HotkeySpec.Parse(S.CkText), () => ToggleTool(CaptureTool.Text));
     }
 
@@ -971,6 +988,8 @@ public sealed partial class CaptureOverlay
     {
         // 底图用不着，随便给一小块；构造函数只拿它建选区层
         var win = new CaptureOverlay(new CapturedImage(8, 8, new byte[8 * 8 * 4]), default);
+        // 这是离屏排版，不应因用户开启自动检测而启动 OCR 或留下 DispatcherTimer。
+        win._redactionRequested = false;
         win._layer.Tool = tool;
         // B / I 按下去的样子也得看一眼：亮起来之后那个字面还认不认得出
         win._layer.TextBold = bold;

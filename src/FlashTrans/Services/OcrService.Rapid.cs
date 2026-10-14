@@ -93,6 +93,15 @@ public static partial class OcrService
     /// </summary>
     static async Task<string> RecognizeRapidAsync(CapturedImage image, CancellationToken ct)
     {
+        var tokens = await RecognizeRapidTokensAsync(image, ct).ConfigureAwait(false);
+        if (tokens.Count == 0) return "";
+        return NormalizeOcrText(CleanCandidate(LayoutTokens(tokens, cjk: true, rightToLeft: false)));
+    }
+
+    static readonly SemaphoreSlim RapidRecognitionGate = new(1, 1);
+
+    static async Task<List<Token>> RecognizeRapidTokensAsync(CapturedImage image, CancellationToken ct)
+    {
         ct.ThrowIfCancellationRequested();
         var engine = RapidEngine();
         if (engine is null)
@@ -100,11 +109,18 @@ public static partial class OcrService
                 "RapidOCR 模型没就位：" + (RapidModelsHint() ?? "初始化失败") +
                 "。去「设置 → 文字识别」改回系统 OCR，或补上模型文件。");
 
-        using var bmp = ToSkiaBitmap(image);
         ct.ThrowIfCancellationRequested();
         // Detect 是 CPU 密集的同步调用，挪到线程池免得卡住界面线程。
-        var result = await Task.Run(() => engine.Detect(bmp, RapidOcrOptions.PPOCRv6), ct)
-            .ConfigureAwait(false);
+        // 取消不会中断已进入的原生推理，真正结束后才释放共享引擎，避免下一次截图并发访问。
+        await RapidRecognitionGate.WaitAsync(ct).ConfigureAwait(false);
+        RapidOcrNet.OcrResult result;
+        try
+        {
+            using var bmp = ToSkiaBitmap(image);
+            result = await Task.Run(() => engine.Detect(bmp, RapidOcrOptions.PPOCRv6), ct)
+                .ConfigureAwait(false);
+        }
+        finally { RapidRecognitionGate.Release(); }
         ct.ThrowIfCancellationRequested();
 
         var tokens = new List<Token>();
@@ -120,10 +136,7 @@ public static partial class OcrService
             tokens.Add(new Token(text, left, top,
                 Math.Max(1, right - left), Math.Max(1, bottom - top), tokens.Count));
         }
-        if (tokens.Count == 0) return "";
-
-        // 识别框已经是整行级别，直接用坐标重组段落（空行、缩进和间距与系统 OCR 一致）。
-        return NormalizeOcrText(CleanCandidate(LayoutTokens(tokens, cjk: true, rightToLeft: false)));
+        return tokens;
     }
 
     /// <summary>把 BGRA32 像素搬进 SKBitmap（SkiaSharp 原生 BGRA 序，行宽一致直接拷）。</summary>

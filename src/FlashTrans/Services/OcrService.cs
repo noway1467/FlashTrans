@@ -1,12 +1,17 @@
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Windows;
+using System.Windows.Media;
 using FlashTrans.Interop;
 using Windows.Globalization;
 using Windows.Graphics.Imaging;
 using Windows.Media.Ocr;
 
 namespace FlashTrans.Services;
+
+/// <summary>未经文字纠偏的 OCR 文本及其在输入图片中的物理像素范围。</summary>
+internal sealed record OcrTextRegion(string Text, Rect Bounds);
 
 /// <summary>
 /// 文字识别，走系统自带的 Windows.Media.Ocr——不需要联网，也不用额外装东西。
@@ -188,6 +193,64 @@ public static partial class OcrService
         if (candidates.Count == 0) return "";
         var best = candidates.OrderByDescending(c => Score(c.Text, c.Language)).First();
         return NormalizeOcrText(MergeSymbols(best.Text, candidates.Select(c => c.Text)));
+    }
+
+    /// <summary>
+    /// 隐私检测保留原文与像素对应关系，不复用会纠偏、拼接和旋转候选的纯文本结果。
+    /// 返回整行/整块框，不能按字符数量均分框来猜敏感子串的位置。
+    /// </summary>
+    internal static async Task<IReadOnlyList<OcrTextRegion>> RecognizeRegionsAsync(
+        CapturedImage image, string? preferred, CancellationToken ct = default, string? engine = null)
+    {
+        ct.ThrowIfCancellationRequested();
+        var useRapid = engine switch
+        {
+            not null when engine.Equals("system", StringComparison.OrdinalIgnoreCase) => false,
+            not null when engine.Equals("rapid", StringComparison.OrdinalIgnoreCase) => true,
+            _ => RapidEngine() is not null,
+        };
+        if (useRapid)
+            return (await RecognizeRapidTokensAsync(image, ct).ConfigureAwait(false))
+                .Select(t => new OcrTextRegion(t.Text, new Rect(t.Left, t.Top, t.Width, t.Height))).ToArray();
+
+        var engines = RecognitionLanguages(preferred).Select(EngineFor).Where(e => e is not null).ToArray();
+        if (engines.Length == 0) throw new InvalidOperationException(NoEngineHint());
+        var scaled = image.ScaleUpForOcr(640, 8, (int)OcrEngine.MaxImageDimension);
+        if (scaled.Width > OcrEngine.MaxImageDimension || scaled.Height > OcrEngine.MaxImageDimension)
+            throw new InvalidOperationException("截图超出系统 OCR 尺寸上限，请缩小选区或手动遮挡。");
+        var regions = new List<OcrTextRegion>();
+        foreach (var ocr in engines)
+        {
+            ct.ThrowIfCancellationRequested();
+            using var bitmap = ToSoftwareBitmap(scaled);
+            var result = await ocr!.RecognizeAsync(bitmap).AsTask(ct).ConfigureAwait(false);
+            foreach (var line in result.Lines)
+            {
+                if (string.IsNullOrWhiteSpace(line.Text)) continue;
+                if (line.Words.Count == 0)
+                    throw new InvalidOperationException("OCR 返回了没有位置的文字，无法可靠打码，请手动遮挡。");
+                var bounds = Rect.Empty;
+                foreach (var word in line.Words)
+                {
+                    var r = word.BoundingRect;
+                    bounds.Union(new Rect(r.X, r.Y, r.Width, r.Height));
+                }
+                regions.Add(new OcrTextRegion(string.Join(" ", line.Words.Select(w => w.Text)),
+                    MapOcrBounds(bounds, result.TextAngle ?? 0, scaled.Width, scaled.Height,
+                        image.Width, image.Height)));
+            }
+        }
+        ct.ThrowIfCancellationRequested();
+        return regions;
+    }
+
+    internal static Rect MapOcrBounds(Rect bounds, double angle, int sourceWidth, int sourceHeight,
+                                      int targetWidth, int targetHeight)
+    {
+        // Windows 的框属于校正后的文字平面；按官方示例绕图心旋回原图，再撤销放大。
+        var rotated = new RotateTransform(angle, sourceWidth / 2d, sourceHeight / 2d).TransformBounds(bounds);
+        return new Rect(rotated.X * targetWidth / sourceWidth, rotated.Y * targetHeight / sourceHeight,
+            rotated.Width * targetWidth / sourceWidth, rotated.Height * targetHeight / sourceHeight);
     }
 
     static bool IsAutomaticLanguage(string? preferred) =>

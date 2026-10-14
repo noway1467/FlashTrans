@@ -65,6 +65,13 @@ static class Program
             app.Shutdown(); return _fail == 0 ? 0 : 1;
         }
 
+        if (args.Contains("--only-redaction"))
+        {
+            RedactionProbe.RunAll(Step);
+            app.Shutdown();
+            return _fail == 0 ? 0 : 1;
+        }
+
         if (args.Contains("--only-capture"))
         {
             CaptureQualityProbe.RunAll(Step);
@@ -120,6 +127,7 @@ static class Program
         var host = new AppHost();
         UiProbe.RunAll(host, Step);
         CaptureQualityProbe.RunAll(Step);
+        RedactionProbe.RunAll(Step);
         OcrProbe.RunAll(Step);
         LongShotProbe.RunAll(Step);
         RecordProbe.RunAll(Step);

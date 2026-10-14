@@ -15,6 +15,7 @@ public enum CaptureTool
     Pen,
     Mosaic,
     Text,
+    Redact,
 }
 
 /// <summary>
@@ -309,6 +310,16 @@ sealed class MosaicAnnotation : BoundsAnnotation
         dc.DrawImage(ctx.Mosaic, ctx.ImageBounds);
         dc.Pop();
     }
+}
+
+/// <summary>安全遮挡不接受颜色/透明度；导出时还会直接覆写像素，避免抗锯齿漏边。</summary>
+sealed class RedactionAnnotation : BoundsAnnotation
+{
+    public override bool Styleable => false;
+    public override Rect Extent => Bounds;
+    public override bool HitTest(Point p, double tol) => Rect.Inflate(Bounds, tol, tol).Contains(p);
+    public override void Draw(DrawingContext dc, AnnotationCtx ctx) =>
+        dc.DrawRectangle(Brushes.Black, null, ctx.Map(Bounds));
 }
 
 sealed class TextAnnotation : Annotation

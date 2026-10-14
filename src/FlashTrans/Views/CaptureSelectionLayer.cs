@@ -104,6 +104,7 @@ sealed class CaptureSelectionLayer : FrameworkElement
     {
         TextAnnotation => CaptureTool.Text,
         MosaicAnnotation => CaptureTool.Mosaic,
+        RedactionAnnotation => CaptureTool.Redact,
         RectAnnotation => CaptureTool.Rect,
         EllipseAnnotation => CaptureTool.Ellipse,
         ArrowAnnotation => CaptureTool.Arrow,
@@ -156,6 +157,7 @@ sealed class CaptureSelectionLayer : FrameworkElement
     public bool CanUndo => _items.Count > 0;
     public bool CanRedo => _undone.Count > 0;
     public int AnnotationCount => _items.Count;
+    internal bool HasRedactions => _items.Any(a => a is RedactionAnnotation);
 
     /// <summary>
     /// 图上这些笔的先后顺序。给自测用：重做要把删掉的那一笔放回原来的层，
@@ -245,6 +247,23 @@ sealed class CaptureSelectionLayer : FrameworkElement
         InvalidateVisual();
     }
 
+    internal int AddRedactions(IEnumerable<Rect> regions)
+    {
+        var (sx, sy) = Scale();
+        var origin = SelectionPixels;
+        var count = 0;
+        foreach (var area in regions)
+        {
+            var bounds = new Rect((area.Left + origin.Left) / sx, (area.Top + origin.Top) / sy,
+                area.Width / sx, area.Height / sy);
+            if (_items.OfType<RedactionAnnotation>().Any(a => a.Bounds.Contains(bounds))) continue;
+            AddAnnotation(new RedactionAnnotation { Bounds = bounds });
+            count++;
+        }
+        SetActive(null);
+        return count;
+    }
+
     /// <summary>
     /// 把当前的颜色、粗细、文字样式套到刚画完的那一笔上。
     /// 返回有没有真的改到东西——工具条据此决定要不要重画。
@@ -299,6 +318,9 @@ sealed class CaptureSelectionLayer : FrameworkElement
     /// <summary>点在哪一笔上。从上往下找——后画的盖在前面画的上头，先问它。</summary>
     Annotation? HitAnnotation(Point p)
     {
+        // 遮挡始终显示在最上层，命中测试也必须遵守同样顺序。
+        for (var i = _items.Count - 1; i >= 0; i--)
+            if (_items[i] is RedactionAnnotation && _items[i].HitTest(p, AnnoHit)) return _items[i];
         for (var i = _items.Count - 1; i >= 0; i--)
             if (_items[i].HitTest(p, AnnoHit)) return _items[i];
         return null;
@@ -367,6 +389,22 @@ sealed class CaptureSelectionLayer : FrameworkElement
         // 渲染出来的 alpha 是 255（底图不透明），但保险起见铺一遍：
         // OCR 收到半透明图会认不出字
         for (var i = 3; i < buf.Length; i += 4) buf[i] = 0xFF;
+        // 在所有标注（包括读取原底图的马赛克）之后覆写整像素。不能仅靠 UI 上的一层黑色。
+        foreach (var redaction in _items.OfType<RedactionAnnotation>())
+        {
+            var b = redaction.Bounds;
+            var left = (int)Math.Clamp(Math.Floor(b.Left * sx - px), 0, cropped.Width);
+            var top = (int)Math.Clamp(Math.Floor(b.Top * sy - py), 0, cropped.Height);
+            var right = (int)Math.Clamp(Math.Ceiling(b.Right * sx - px), 0, cropped.Width);
+            var bottom = (int)Math.Clamp(Math.Ceiling(b.Bottom * sy - py), 0, cropped.Height);
+            for (var y = top; y < bottom; y++)
+                for (var x = left; x < right; x++)
+                {
+                    var index = (y * cropped.Width + x) * 4;
+                    buf[index] = buf[index + 1] = buf[index + 2] = 0;
+                    buf[index + 3] = 255;
+                }
+        }
         return new CapturedImage(cropped.Width, cropped.Height, buf);
     }
 
@@ -570,6 +608,7 @@ sealed class CaptureSelectionLayer : FrameworkElement
             CaptureTool.Arrow => new ArrowAnnotation { From = p, To = p, Color = PenColor, Width = PenWidth },
             CaptureTool.Pen => Pen0(p),
             CaptureTool.Mosaic => new MosaicAnnotation { Bounds = new Rect(p, p) },
+            CaptureTool.Redact => new RedactionAnnotation { Bounds = new Rect(p, p) },
             _ => null,
         };
     }
@@ -773,6 +812,7 @@ sealed class CaptureSelectionLayer : FrameworkElement
         var ctx = new AnnotationCtx { Scale = 1, Mosaic = _mosaicNeeded() ? MosaicImage() : null, ImageBounds = full };
         foreach (var a in _items) a.Draw(dc, ctx);
         _drawing?.Draw(dc, ctx);
+        foreach (var a in _items.OfType<RedactionAnnotation>()) a.Draw(dc, ctx);
         dc.Pop();
 
         // 选中框画在裁剪外面：贴着选区边的那一笔，框会有一半在选区外，

@@ -125,6 +125,23 @@ public sealed partial class SettingsWindow
             Check("点保存时先问存到哪儿", S.CaptureSaveAsk, on => S.CaptureSaveAsk = on),
             LeftRow(SmallButton("试一下", () => _ = TryCaptureAsync())));
 
+        var unreadableKeywords = S.CaptureRedactionKeywordsLocked;
+        var keywords = Input(unreadableKeywords ? "" : S.CaptureRedactionKeywords,
+            v => { S.CaptureRedactionKeywords = v; S.CaptureRedactionKeywordsLocked = false; }, "多个关键词用分号分隔");
+        keywords.MaxLength = SensitiveContentDetector.MaxKeywordsLength;
+        Section(page, "敏感内容打码",
+            Hint("仅普通静态截图。本地识别手机号、邮箱、身份证、常见银行卡和带明确标签的密码/密钥；按整行或整块实心遮挡，仍需人工补漏。不识别人脸、二维码，不保护长截图或录制。"),
+            Check("框选后自动检测敏感内容", S.CaptureAutoRedact, on => S.CaptureAutoRedact = on,
+                "默认关闭；也可随时点击截图工具条的「自动打码」。检测失败会阻止导出，直到重试或明确改为手动检查。"),
+            Field("自定义关键词", keywords,
+                unreadableKeywords ? "关键词无法解密，请重新填写或点击下方清空；在处理前自动检测不会放行。"
+                    : "最多 4096 字符，分号分隔、忽略英文大小写；保存在本机配置时加密，换 Windows 账户后需重填。"),
+            LeftRow(SmallButton("清空关键词", () =>
+            {
+                S.CaptureRedactionKeywords = ""; S.CaptureRedactionKeywordsLocked = false;
+                keywords.Text = ""; Save();
+            })));
+
         Section(page, "录制动图",
             Hint($"录的是实时画面，最高 60 fps；实际帧率会随选区大小和机器性能变化。高流畅场景优先选 WebP / MP4，部分 GIF 播放器会限速。标注不会进去。`Esc` 停下并保存，`{RecordHud.PauseHotkey}` 暂停，`{RecordHud.CancelHotkey}` 取消（录制和编码中都能按，不留文件）。"),
             Field("格式", Combo(new (string, RecordFormat)[]
@@ -167,6 +184,8 @@ public sealed partial class SettingsWindow
             CaptureKeyField("箭头", S.CkArrow, v => S.CkArrow = v),
             CaptureKeyField("画笔", S.CkPen, v => S.CkPen = v),
             CaptureKeyField("马赛克", S.CkMosaic, v => S.CkMosaic = v),
+            CaptureKeyField("实心遮挡", S.CkRedact, v => S.CkRedact = v),
+            CaptureKeyField("自动打码", S.CkAutoRedact, v => S.CkAutoRedact = v),
             CaptureKeyField("文字", S.CkText, v => S.CkText = v),
             CaptureKeyField("撤销", S.CkUndo, v => S.CkUndo = v),
             CaptureKeyField("重做", S.CkRedo, v => S.CkRedo = v),

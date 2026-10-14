@@ -71,6 +71,7 @@ public sealed class SettingsService
             var copy = JsonSerializer.Deserialize(
                 JsonSerializer.Serialize(Current, SettingsJson.Default.AppSettings),
                 SettingsJson.Default.AppSettings)!;
+            copy.CaptureRedactionKeywordsLocked = Current.CaptureRedactionKeywordsLocked;
             Encrypt(copy);
             var tmp = ConfigPath + ".tmp";
             File.WriteAllText(tmp, JsonSerializer.Serialize(copy, SettingsJson.Default.AppSettings));
@@ -264,6 +265,7 @@ public sealed class SettingsService
         s.CapturePenWidth = CaptureLimits.ClampPenWidth(s.CapturePenWidth);
         s.CaptureFontSize = CaptureLimits.ClampFontSize(s.CaptureFontSize);
         s.CaptureMosaicBlock = CaptureLimits.ClampMosaicBlock(s.CaptureMosaicBlock);
+        s.CaptureRedactionKeywords ??= "";
         s.RecordFps = RecordService.ClampFps(s.RecordFps);
         s.RecordMaxSeconds = RecordService.ClampSeconds(s.RecordMaxSeconds);
     }
@@ -273,6 +275,8 @@ public sealed class SettingsService
 
     static void Encrypt(AppSettings s)
     {
+        if (!s.CaptureRedactionKeywordsLocked)
+            s.CaptureRedactionKeywords = ProtectRedactionKeywords(s.CaptureRedactionKeywords);
         foreach (var p in s.Providers)
             foreach (var key in p.Options.Keys.ToList())
                 if (ProviderMeta.IsSecret(key) && !string.IsNullOrEmpty(p.Options[key]))
@@ -281,10 +285,39 @@ public sealed class SettingsService
 
     static void Decrypt(AppSettings s)
     {
+        var storedKeywords = s.CaptureRedactionKeywords;
+        s.CaptureRedactionKeywords = UnprotectRedactionKeywords(storedKeywords);
+        s.CaptureRedactionKeywordsLocked = storedKeywords?.StartsWith("dpapi:", StringComparison.Ordinal) == true
+            && s.CaptureRedactionKeywords == storedKeywords;
         foreach (var p in s.Providers)
             foreach (var key in p.Options.Keys.ToList())
                 if (ProviderMeta.IsSecret(key) && !string.IsNullOrEmpty(p.Options[key]))
                     p.Options[key] = Dpapi.Unprotect(p.Options[key]);
+    }
+
+    internal static string ProtectRedactionKeywords(string? text)
+    {
+        if (string.IsNullOrEmpty(text)) return "";
+        var encrypted = Dpapi.Protect(JsonSerializer.Serialize(text));
+        // 原有 Protect 有明文回退；关键词可能包含秘密，必须拒绝这个回退且不覆盖旧配置。
+        if (!encrypted.StartsWith("dpapi:", StringComparison.Ordinal))
+            throw new InvalidOperationException("自定义打码关键词加密失败，未保存设置。");
+        return encrypted;
+    }
+
+    internal static string UnprotectRedactionKeywords(string? stored)
+    {
+        if (string.IsNullOrEmpty(stored)) return "";
+        if (!stored.StartsWith("dpapi:", StringComparison.Ordinal)) return stored;
+        try
+        {
+            return JsonSerializer.Deserialize<string>(Dpapi.Unprotect(stored)) ?? stored;
+        }
+        catch
+        {
+            // 保留不可读密文，检测时明确报错。不能静默清空规则，也不损坏其他设置。
+            return stored;
+        }
     }
 
     void TryBackupBroken()
