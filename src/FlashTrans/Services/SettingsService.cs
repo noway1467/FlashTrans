@@ -202,6 +202,14 @@ public sealed class SettingsService
             s.Version = 10;
             changed = true;
         }
+        if (s.Version < 11)
+        {
+            // 新增的默认组合键遇到旧配置自定义键时，旧功能优先；用户仍可从托盘进入。
+            if (Interop.HotkeyManager.FindConflict(s, Interop.HotkeyAction.QuickLaunch, s.HkQuickLaunch) is not null)
+                s.HkQuickLaunch = "";
+            s.Version = 11;
+            changed = true;
+        }
         return changed;
     }
 
@@ -212,6 +220,8 @@ public sealed class SettingsService
     /// </summary>
     public static void Normalize(AppSettings s)
     {
+        s.QuickLaunchItems = QuickLaunchService.Normalize(s.QuickLaunchItems);
+        s.HkQuickLaunch ??= "";
         s.ExcludedApplications = Interop.ApplicationExclusions.Normalize(s.ExcludedApplications);
         s.DocumentProviderId ??= "";
         s.DocumentSourceLang = string.Equals(s.DocumentSourceLang?.Trim(), Languages.Auto, StringComparison.OrdinalIgnoreCase)

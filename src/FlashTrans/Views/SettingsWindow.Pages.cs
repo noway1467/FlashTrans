@@ -490,13 +490,14 @@ public sealed partial class SettingsWindow
 
         Section(page, "全局快捷键",
             Hint("点输入框后直接按组合键，Backspace 清除。普通键至少要带一个 Ctrl / Alt / Shift / Win；F1 到 F12 可以单独使用。"),
-            HotkeyField("翻译选中文本", S.HkTranslateSelection, v => S.HkTranslateSelection = v),
-            HotkeyField("显示 / 隐藏主窗口", S.HkToggleWindow, v => S.HkToggleWindow = v),
-            HotkeyField("翻译剪贴板内容", S.HkTranslateClipboard, v => S.HkTranslateClipboard = v),
-            HotkeyField("开关划词翻译", S.HkToggleSelection, v => S.HkToggleSelection = v),
-            HotkeyField("切换到下一个源", S.HkNextProvider, v => S.HkNextProvider = v),
-            HotkeyField("截图", S.HkCaptureOcr, v => S.HkCaptureOcr = v),
-            HotkeyField("收起 / 叫回翻译弹窗", S.HkTogglePopup, v => S.HkTogglePopup = v));
+            HotkeyField("翻译选中文本", S.HkTranslateSelection, v => S.HkTranslateSelection = v, HotkeyAction.TranslateSelection),
+            HotkeyField("显示 / 隐藏主窗口", S.HkToggleWindow, v => S.HkToggleWindow = v, HotkeyAction.ToggleWindow),
+            HotkeyField("翻译剪贴板内容", S.HkTranslateClipboard, v => S.HkTranslateClipboard = v, HotkeyAction.TranslateClipboard),
+            HotkeyField("开关划词翻译", S.HkToggleSelection, v => S.HkToggleSelection = v, HotkeyAction.ToggleSelection),
+            HotkeyField("切换到下一个源", S.HkNextProvider, v => S.HkNextProvider = v, HotkeyAction.NextProvider),
+            HotkeyField("截图", S.HkCaptureOcr, v => S.HkCaptureOcr = v, HotkeyAction.CaptureOcr),
+            HotkeyField("收起 / 叫回翻译弹窗", S.HkTogglePopup, v => S.HkTogglePopup = v, HotkeyAction.TogglePopup),
+            HotkeyField("呼出 / 隐藏快速启动", S.HkQuickLaunch, v => S.HkQuickLaunch = v, HotkeyAction.QuickLaunch));
 
         Section(page, "框选时的键",
             Hint("矩形、画笔、马赛克那些键在「截图」一栏里配。"),
@@ -519,7 +520,7 @@ public sealed partial class SettingsWindow
         return page;
     }
 
-    UIElement HotkeyField(string label, string current, Action<string> onChange)
+    UIElement HotkeyField(string label, string current, Action<string> onChange, HotkeyAction action)
     {
         var box = new TextBox
         {
@@ -533,7 +534,21 @@ public sealed partial class SettingsWindow
             VerticalContentAlignment = VerticalAlignment.Center,
             Padding = new Thickness(7, 0, 7, 0),
             ToolTip = "点这里然后按组合键",
+            Name = "Hotkey" + action,
         };
+
+        void Record(HotkeySpec spec)
+        {
+            if (!_host.TryChangeHotkey(action, spec.ToString(), out var error))
+            {
+                Toast(error ?? "快捷键不可用，请更换");
+                return;
+            }
+            box.Text = spec.ToString();
+            onChange(spec.ToString());
+            Save();
+        }
+        box.Tag = (Action<HotkeySpec>)Record;
 
         box.PreviewKeyDown += (_, e) =>
         {
@@ -557,13 +572,19 @@ public sealed partial class SettingsWindow
                     Toast("请至少加一个 Ctrl / Alt / Shift / Win");
                 return;
             }
-            box.Text = spec.ToString();
-            onChange(spec.ToString());
-            Save();
+            Record(spec);
         };
         box.GotFocus += (_, _) => box.SelectAll();
 
         return Field(label, box);
+    }
+
+    internal bool TryRecordHotkey(HotkeySpec spec)
+    {
+        if (!IsActive || Keyboard.FocusedElement is not TextBox { Tag: Action<HotkeySpec> record } box
+            || !ReferenceEquals(Window.GetWindow(box), this)) return false;
+        record(spec);
+        return true;
     }
 
     /// <summary>
@@ -586,6 +607,24 @@ public sealed partial class SettingsWindow
             Padding = new Thickness(7, 0, 7, 0),
             ToolTip = "点这里然后按键，可以不带 Ctrl / Alt",
         };
+
+        void Record(HotkeySpec spec)
+        {
+            if (spec.Key is Key.Escape or Key.Enter or Key.Space or Key.Tab)
+            {
+                Toast("Esc / 回车 / 空格 / Tab 在框选时另有用途，不能改");
+                return;
+            }
+            if (spec == HotkeySpec.Parse(S.HkQuickLaunch))
+            {
+                Toast("与快速启动的全局快捷键重复，请更换");
+                return;
+            }
+            box.Text = spec.ToString();
+            onChange(spec.ToString());
+            Save();
+        }
+        box.Tag = (Action<HotkeySpec>)Record;
 
         box.PreviewKeyDown += (_, e) =>
         {
@@ -611,9 +650,7 @@ public sealed partial class SettingsWindow
                 or Key.None or Key.ImeProcessed) return;
 
             var spec = new HotkeySpec(Keyboard.Modifiers, key);
-            box.Text = spec.ToString();
-            onChange(spec.ToString());
-            Save();
+            Record(spec);
         };
         box.GotFocus += (_, _) => box.SelectAll();
 

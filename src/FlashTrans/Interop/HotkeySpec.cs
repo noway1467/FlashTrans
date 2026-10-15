@@ -47,7 +47,13 @@ public sealed record HotkeySpec(ModifierKeys Modifiers, Key Key)
         return key == Key.None ? None : new HotkeySpec(mods, key);
     }
 
-    static string Normalize(string s) => s.Length == 1 && char.IsDigit(s[0]) ? "D" + s : s;
+    static string Normalize(string s) => s.Length == 1 && char.IsDigit(s[0]) ? "D" + s : s switch
+    {
+        "\u0060" => nameof(Key.Oem3), "-" => nameof(Key.OemMinus), "=" => nameof(Key.OemPlus),
+        "," => nameof(Key.OemComma), "." => nameof(Key.OemPeriod), "/" => nameof(Key.OemQuestion),
+        ";" => nameof(Key.OemSemicolon), "'" => nameof(Key.OemQuotes), "[" => nameof(Key.OemOpenBrackets),
+        "]" => nameof(Key.Oem6), "\\" => nameof(Key.Oem5), _ => s
+    };
 
     public override string ToString()
     {

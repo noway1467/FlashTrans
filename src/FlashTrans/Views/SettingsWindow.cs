@@ -55,6 +55,7 @@ public sealed partial class SettingsWindow : Window
         _pages.Add(("sources", NavButton("翻译源"), BuildSourcesPage));
         _pages.Add(("languages", NavButton("语言"), BuildLanguagesPage));
         _pages.Add(("capture", NavButton("截图"), BuildCapturePage));
+        _pages.Add(("quicklaunch", NavButton("快速启动"), BuildQuickLaunchPage));
         _pages.Add(("hotkeys", NavButton("快捷键"), BuildHotkeyPage));
         _pages.Add(("appearance", NavButton("外观与词典"), BuildAppearancePage));
         _pages.Add(("about", NavButton("关于"), BuildAboutPage));

@@ -120,6 +120,18 @@ public sealed partial class AppHost
 
     // ------------------------------------------------------------- 设置窗口
 
+    public void ToggleQuickLaunch()
+    {
+        if (_quickLaunch is { IsVisible: true }) { _quickLaunch.Hide(); return; }
+        if (_quickLaunch is null)
+        {
+            _quickLaunch = new QuickLaunchWindow(() => ShowSettings("quicklaunch"));
+            _quickLaunch.Closed += (_, _) => _quickLaunch = null;
+        }
+        HideSelectionIcon();
+        _quickLaunch.ShowPanel();
+    }
+
     public void ShowSettings(string? tab = null)
     {
         if (_settings is { IsLoaded: true })
@@ -159,6 +171,7 @@ public sealed partial class AppHost
         }));
         menu.Items.Add(Item("截图", HotkeySpec.Parse(S.HkCaptureOcr).ToString(),
             () => _ = CaptureAsync()));
+        menu.Items.Add(Item("快速启动", HotkeySpec.Parse(S.HkQuickLaunch).ToString(), ToggleQuickLaunch));
         menu.Items.Add(new Separator());
 
         var selection = new MenuItem

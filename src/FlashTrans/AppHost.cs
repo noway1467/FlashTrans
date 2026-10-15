@@ -21,6 +21,7 @@ public sealed partial class AppHost : IDisposable
     PopupWindow? _popup;
     SelectionIcon? _icon;
     SettingsWindow? _settings;
+    QuickLaunchWindow? _quickLaunch;
 
     uint _lastClipSeq;
     bool _clipboardHooked;
@@ -81,6 +82,9 @@ public sealed partial class AppHost : IDisposable
 
     void OnHotkey(HotkeyAction action)
     {
+        // RegisterHotKey 会把已注册组合发成 WM_HOTKEY，而非普通按键。
+        // 设置页正在录键时仍走校验，不能顺手把截图/启动面板等功能触发出来。
+        if (_hotkeys?.GetBinding(action) is { } spec && _settings?.TryRecordHotkey(spec) == true) return;
         switch (action)
         {
             case HotkeyAction.TranslateSelection:
@@ -106,6 +110,9 @@ public sealed partial class AppHost : IDisposable
                 break;
             case HotkeyAction.TogglePopup:
                 TogglePopupWindow();
+                break;
+            case HotkeyAction.QuickLaunch:
+                ToggleQuickLaunch();
                 break;
         }
     }
@@ -264,7 +271,16 @@ public sealed partial class AppHost : IDisposable
     void ReportHotkeyFailures()
     {
         if (_hotkeys.Failures.Count > 0)
-            Toast(string.Join("；", _hotkeys.Failures));
+            Toast(string.Join("；", _hotkeys.Failures), () => ShowSettings("hotkeys"));
+    }
+
+    public bool TryChangeHotkey(HotkeyAction action, string text, out string? error)
+    {
+        if (_hotkeys is not null && !_diagnosticMode) return _hotkeys.TryChange(S, action, text, out error);
+        // 独立设置窗口/诊断宿主不长期注册全局键，但仍真实检查系统占用。
+        using var message = new MessageWindow("FlashTrans.HotkeyCheck");
+        using var check = new HotkeyManager(message.Handle);
+        return check.TryChange(S, action, text, out error);
     }
 
     void OnSettingsChanged(AppSettings s)
@@ -279,6 +295,7 @@ public sealed partial class AppHost : IDisposable
         _tray.UpdateTip(TrayTip());
         _main?.OnSettingsChanged();
         _popup?.OnSettingsChanged();
+        _quickLaunch?.Refresh();
         // 「重置为默认设置」这类不经过那个复选框的改动也要跟着落地
         if (!_diagnosticMode) StartupService.Sync(s.RunAtStartup);
     }
@@ -358,6 +375,7 @@ public sealed partial class AppHost : IDisposable
         _tray?.Dispose();
         _icon?.Close();
         _popup?.Close();
+        _quickLaunch?.Close();
         ToastWindow.Shutdown();
         _main?.PersistGeometry();
         SettingsService.Instance.Save();

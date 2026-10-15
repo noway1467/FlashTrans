@@ -50,13 +50,23 @@ public enum RecordFormat
     Mp4,
 }
 
+public sealed class QuickLaunchEntry
+{
+    public string Name { get; set; } = "";
+    public string Path { get; set; } = "";
+    public bool IsFolder { get; set; }
+}
+
 public sealed class AppSettings
 {
     /// <summary>配置结构版本，用于升级时补默认值，见 SettingsService.Migrate。</summary>
     public int Version { get; set; } = CurrentVersion;
 
     /// <summary>加新的默认源/字段时 +1，并在 Migrate 里补一段。</summary>
-    public const int CurrentVersion = 10;
+    public const int CurrentVersion = 11;
+
+    // 只保存用户选择的路径，不扫描磁盘或自动收集已安装程序。
+    public List<QuickLaunchEntry> QuickLaunchItems { get; set; } = [];
 
     // ------- 文件翻译 -------
     /// <summary>空字符串表示源文件目录；只保存用户显式设为默认的目录。</summary>
@@ -173,6 +183,7 @@ public sealed class AppSettings
     public string HkCaptureOcr { get; set; } = "F1";
     /// <summary>把翻译弹窗临时收起 / 再叫回来（内容留着，不重译）。</summary>
     public string HkTogglePopup { get; set; } = "Ctrl+Alt+H";
+    public string HkQuickLaunch { get; set; } = "Ctrl+Alt+Space";
 
     // ------- 截图 -------
     /// <summary>选好区域按回车（或双击选区）做什么。工具条上每个动作另有自己的快捷键。</summary>

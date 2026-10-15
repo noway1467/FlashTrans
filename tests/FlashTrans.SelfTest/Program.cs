@@ -16,6 +16,8 @@ static class Program
     [STAThread]
     static int Main(string[] args)
     {
+        if (args.Length > 0 && args[0] is "--quick-launch-child" or "--quick-launch-hotkey-child")
+            return QuickLaunchProbe.Child(args);
         if (args.Contains("--checkpoint-child")) return DocumentProbe.CheckpointChild(args);
         if (args.Contains("--read-clipboard-child")) return ProtectionProbe.ReadClipboardChild();
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
@@ -48,6 +50,14 @@ static class Program
         if (args.Contains("--only-startup"))
         {
             WindowStartupProbe.RunAll(Step, args.Contains("--preload-startup"));
+            app.Shutdown();
+            return _fail == 0 ? 0 : 1;
+        }
+
+        if (args.Contains("--only-quicklaunch"))
+        {
+            var index = Array.IndexOf(args, "--preview-dir");
+            QuickLaunchProbe.RunAll(Step, index >= 0 && index + 1 < args.Length ? args[index + 1] : null);
             app.Shutdown();
             return _fail == 0 ? 0 : 1;
         }
@@ -124,6 +134,7 @@ static class Program
         DocumentProbe.RunAll(Step);
         ProtectionProbe.RunAll(Step);
         WindowStartupProbe.RunAll(Step);
+        QuickLaunchProbe.RunAll(Step);
         var host = new AppHost();
         UiProbe.RunAll(host, Step);
         CaptureQualityProbe.RunAll(Step);
