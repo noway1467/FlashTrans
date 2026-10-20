@@ -27,6 +27,10 @@ static class RecordProbe
         step("录制：实测帧率按帧间隔算", EffectiveFpsProbe);
         step("录制：动图 GIF 能解回来，帧数和尺寸都对", GifRoundTripProbe);
         step("录制：每帧画面对得上，没有错位或重复", GifFrameOrderProbe);
+        step("录制：重复帧复用编码但仍保留逐帧画面和延时", RepeatedFramesProbe);
+        step("录制：GIF 编码并行度有 CPU 和内存上限", GifParallelismProbe);
+        step("录制：WebP 只合并完全相同的连续帧并累计时长", WebpRepeatedFramesProbe);
+        step("录制：GIF/WebP 编码失败不破坏旧文件、不留半成品", AnimationFailureProbe);
         step("录制：写了循环标记，不会只播一遍", GifLoopProbe);
         step("录制：每帧都带延时，且等于设定帧率", GifDelayProbe);
         step("录制：不是 GIF 的字节不会被当成帧解析", GifJunkProbe);
@@ -49,6 +53,7 @@ static class RecordProbe
         step("录制：取消之后 Esc 和点浮条都翻不回「保存」", CancelWinsProbe);
         step("录制：取消会立刻收摊，帧不交付、临时目录删干净", CancelDiscardProbe);
         step("录制：编码中途取消，不留半成品文件", CancelEncodeProbe);
+        step("录制：真实 WebP 编码进程可取消且退出后清理半成品", CancelWebpProcessProbe);
         step("录制：真编 MP4，容器和时长都对", Mp4RealProbe);
         step("录制：MP4 从 WPF 界面线程也能编", Mp4UiProbe);
         step("录制：MP4 失败不留下空文件或额外 WebP", Mp4FailureCleanupProbe);
@@ -63,6 +68,151 @@ static class RecordProbe
     static void Need(bool ok, string what)
     {
         if (!ok) throw new InvalidOperationException(what);
+    }
+
+    delegate Task<AnimResult> BenchmarkSave(IReadOnlyList<string> frames, string path, int fps, RecordFormat format);
+
+    public static void Benchmark()
+    {
+        var versions = new List<(string Name, BenchmarkSave Save)>
+        {
+            ("optimized", (frames, path, fps, format) => AnimEncoder.SaveAsync(frames, path, fps, format)),
+        };
+        System.Runtime.Loader.AssemblyLoadContext? baseline = null;
+        try
+        {
+            var args = Environment.GetCommandLineArgs();
+            var index = Array.IndexOf(args, "--baseline-assembly");
+            if (index >= 0 && index + 1 < args.Length)
+            {
+                baseline = new System.Runtime.Loader.AssemblyLoadContext("record-baseline", isCollectible: true);
+                var assembly = baseline.LoadFromAssemblyPath(Path.GetFullPath(args[index + 1]));
+                var method = assembly.GetType("FlashTrans.Services.AnimEncoder")!.GetMethod("SaveAsync")!;
+                var formatType = assembly.GetType("FlashTrans.Core.RecordFormat")!;
+                versions.Insert(0, ("baseline", async (frames, path, fps, format) =>
+                {
+                    var task = (Task)method.Invoke(null,
+                        [frames, path, fps, Enum.Parse(formatType, format.ToString()), null, CancellationToken.None])!;
+                    await task.ConfigureAwait(false);
+                    var result = task.GetType().GetProperty("Result")!.GetValue(task)!;
+                    return new AnimResult((string)result.GetType().GetProperty("Path")!.GetValue(result)!, format,
+                        (long)result.GetType().GetProperty("Bytes")!.GetValue(result)!);
+                }));
+            }
+
+            var (warmDir, warmFrames) = WriteFrames(2);
+            try
+            {
+                foreach (var version in versions)
+                    foreach (var format in new[] { RecordFormat.Gif, RecordFormat.Webp })
+                    {
+                        if (format == RecordFormat.Webp && !AnimEncoder.WebpAvailable) continue;
+                        Task.Run(() => version.Save(warmFrames, Path.Combine(warmDir, "warm-" + version.Name), 12, format))
+                            .GetAwaiter().GetResult();
+                    }
+            }
+            finally { Wipe(warmDir); }
+
+            foreach (var moving in new[] { false, true })
+            {
+                var (dir, paths) = WriteDetailedFrames(24, 1024, 576, moving);
+                try
+                {
+                    foreach (var format in new[] { RecordFormat.Gif, RecordFormat.Webp })
+                    {
+                        if (format == RecordFormat.Webp && !AnimEncoder.WebpAvailable) continue;
+                        var milliseconds = versions.ToDictionary(v => v.Name, _ => new List<double>());
+                        var outputs = new Dictionary<string, AnimResult>();
+                        for (var trial = 0; trial < 3; trial++)
+                            foreach (var version in trial % 2 == 0 ? versions.AsEnumerable() : versions.AsEnumerable().Reverse())
+                            {
+                                var timer = System.Diagnostics.Stopwatch.StartNew();
+                                var result = Task.Run(() => version.Save(paths,
+                                    Path.Combine(dir, $"{version.Name}-{format}-{trial}"), 12, format)).GetAwaiter().GetResult();
+                                milliseconds[version.Name].Add(timer.Elapsed.TotalMilliseconds);
+                                outputs[version.Name] = result;
+                                Need(FlipCheck.Load(result.Path).PixelWidth == 1024, "基准编码改变了原始分辨率");
+                                if (format == RecordFormat.Gif)
+                                {
+                                    var (delays, images) = WalkGif(File.ReadAllBytes(result.Path));
+                                    Need(images == paths.Count && delays.Sum() == 200, "基准 GIF 丢帧或改变播放时长");
+                                }
+                            }
+                        if (format == RecordFormat.Gif && outputs.TryGetValue("baseline", out var original))
+                            Need(File.ReadAllBytes(original.Path).AsSpan().SequenceEqual(File.ReadAllBytes(outputs["optimized"].Path)),
+                                "优化 GIF 与原编码结果不是逐字节一致");
+                        foreach (var version in versions)
+                            Console.WriteLine("BENCH " + System.Text.Json.JsonSerializer.Serialize(new
+                            {
+                                Version = version.Name, Scenario = moving ? "moving-ui" : "static-ui", Format = format.ToString(),
+                                Width = 1024, Height = 576, Frames = paths.Count, Fps = 12,
+                                MedianMs = Math.Round(milliseconds[version.Name].Order().ElementAt(1), 1), Bytes = outputs[version.Name].Bytes,
+                                FirstFramePsnrDb = Psnr(FlipCheck.Load(paths[0]), FlipCheck.Load(outputs[version.Name].Path)),
+                            }));
+                    }
+                }
+                finally { Wipe(dir); }
+            }
+        }
+        finally { baseline?.Unload(); }
+    }
+
+    static double? Psnr(BitmapSource source, BitmapSource decoded)
+    {
+        Need(source.PixelWidth == decoded.PixelWidth && source.PixelHeight == decoded.PixelHeight, "质量比较尺寸不一致");
+        var stride = source.PixelWidth * 4;
+        var before = new byte[stride * source.PixelHeight];
+        var after = new byte[before.Length];
+        new FormatConvertedBitmap(source, PixelFormats.Bgra32, null, 0).CopyPixels(before, stride, 0);
+        new FormatConvertedBitmap(decoded, PixelFormats.Bgra32, null, 0).CopyPixels(after, stride, 0);
+        double error = 0;
+        for (var i = 0; i < before.Length; i++)
+            if ((i & 3) != 3) error += (before[i] - after[i]) * (before[i] - after[i]);
+        return error == 0 ? null : Math.Round(10 * Math.Log10(255.0 * 255 * (before.Length / 4 * 3) / error), 2);
+    }
+
+    static (string Dir, List<string> Paths) WriteDetailedFrames(int count, int width, int height, bool moving)
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "FlashTrans.recprobe." + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var paths = new List<string>();
+            for (var frame = 0; frame < count; frame++)
+            {
+                var path = Path.Combine(dir, $"detail{frame:D5}.png");
+                if (!moving && frame > 0) File.Copy(paths[0], path);
+                else
+                {
+                    var visual = new DrawingVisual();
+                    using (var drawing = visual.RenderOpen())
+                    {
+                        drawing.DrawRectangle(Brushes.WhiteSmoke, null, new System.Windows.Rect(0, 0, width, height));
+                        drawing.DrawRectangle(Brushes.SteelBlue, null, new System.Windows.Rect(0, 0, width, 44));
+                        for (var row = 0; row < height / 24; row++)
+                        {
+                            var label = new FormattedText(
+                                $"FlashTrans  {row + (moving ? frame : 0):D4}  // pixel-perfect screen recording, ABC abc 0123456789",
+                                System.Globalization.CultureInfo.InvariantCulture, System.Windows.FlowDirection.LeftToRight,
+                                new Typeface("Consolas"), 14, Brushes.Black, 1);
+                            drawing.DrawText(label, new System.Windows.Point(16, 50 + row * 24));
+                        }
+                        if (moving)
+                            drawing.DrawRectangle(Brushes.OrangeRed, null,
+                                new System.Windows.Rect(width - 100, 60 + frame * 9 % Math.Max(1, height - 100), 64, 24));
+                    }
+                    var bitmap = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
+                    bitmap.Render(visual);
+                    var encoder = new PngBitmapEncoder();
+                    encoder.Frames.Add(BitmapFrame.Create(bitmap));
+                    using var output = File.Create(path);
+                    encoder.Save(output);
+                }
+                paths.Add(path);
+            }
+            return (dir, paths);
+        }
+        catch { Wipe(dir); throw; }
     }
 
     // ------------------------------------------------------------- 造帧
@@ -313,6 +463,150 @@ static class RecordProbe
             Need(found, "没写 NETSCAPE2.0，动图只会播一遍");
         }
         finally { Wipe(dir); }
+    }
+
+    static void RepeatedFramesProbe()
+    {
+        var (dir, source) = WriteFrames(3);
+        try
+        {
+            var order = new[] { 0, 0, 0, 1, 1, 2, 0, 0, 2, 2, 2, 1 };
+            var paths = order.Select(i => source[i]).ToArray();
+            var result = Task.Run(() => AnimEncoder.SaveAsync(paths, Path.Combine(dir, "repeated"), 12, RecordFormat.Gif))
+                .GetAwaiter().GetResult();
+            var frames = DecodeGif(result.Path);
+            var (delays, count) = WalkGif(File.ReadAllBytes(result.Path));
+            Need(frames.Length == order.Length && count == order.Length && delays.Sum() == 100, "重复 GIF 帧被丢弃或播放变速");
+            for (var i = 0; i < order.Length; i++)
+            {
+                var color = Center(frames[i]);
+                var expected = Colors[order[i]];
+                Need(Math.Abs(color.R - expected.R) <= 8 && Math.Abs(color.G - expected.G) <= 8 && Math.Abs(color.B - expected.B) <= 8,
+                    $"并行编码后第 {i} 帧画面顺序错误");
+            }
+        }
+        finally { Wipe(dir); }
+    }
+
+    static void GifParallelismProbe()
+    {
+        foreach (var (width, height) in new[] { (64, 48), (1024, 576), (1920, 1080), (3840, 2160), (7680, 4320) })
+        {
+            var parallelism = AnimEncoder.GifEncodingParallelism(width, height);
+            Need(parallelism is >= 1 and <= 4 && parallelism <= Math.Max(1, Environment.ProcessorCount / 2), "GIF 编码并行度超过 CPU 上限");
+            Need(parallelism == 1 || (long)width * height * 16 * parallelism <= 96L * 1024 * 1024, "大帧编码超过并行内存预算");
+        }
+    }
+
+    static void WebpRepeatedFramesProbe()
+    {
+        var (dir, source) = WriteFrames(2);
+        try
+        {
+            var paths = new[] { source[0], source[0], source[0], source[1], source[1], source[0] };
+            var grouped = AnimEncoder.WebpFrames(paths, 10);
+            Need(grouped.Count == 3 && grouped.Select(f => f.DurationMs).SequenceEqual(new[] { 300, 200, 100 }), "WebP 连续重复帧的停留时长错误");
+            Need(grouped.Select(f => f.Path).SequenceEqual(new[] { source[0], source[1], source[0] }), "WebP 错误合并了不连续的相同画面");
+            if (!AnimEncoder.WebpAvailable) return;
+            var result = Task.Run(() => AnimEncoder.SaveAsync(paths, Path.Combine(dir, "grouped"), 10, RecordFormat.Webp))
+                .GetAwaiter().GetResult();
+            var (animation, loop, durations) = WalkWebp(File.ReadAllBytes(result.Path));
+            Need(animation && loop == 0 && durations.SequenceEqual(new[] { 300, 200, 100 }), "实际 WebP 容器丢失了累计帧时长");
+        }
+        finally { Wipe(dir); }
+    }
+
+    static void AnimationFailureProbe()
+    {
+        var (dir, paths) = WriteFrames(2);
+        try
+        {
+            var missing = Path.Combine(dir, "missing.png");
+            var corrupt = Path.Combine(dir, "corrupt.png");
+            File.WriteAllText(corrupt, "not a bitmap");
+            foreach (var format in new[] { RecordFormat.Gif, RecordFormat.Webp })
+            {
+                if (format == RecordFormat.Webp && !AnimEncoder.WebpAvailable) continue;
+                var outputDir = Path.Combine(dir, format.ToString());
+                Directory.CreateDirectory(outputDir);
+                var target = Path.Combine(outputDir, "existing." + format.ToString().ToLowerInvariant());
+                var original = new byte[] { 1, 2, 3, 4 };
+                File.WriteAllBytes(target, original);
+                foreach (var invalid in new[] { missing, corrupt })
+                {
+                    var failed = false;
+                    try
+                    {
+                        Task.Run(() => AnimEncoder.SaveAsync([.. paths, invalid], Path.Combine(outputDir, "existing"), 10, format))
+                            .GetAwaiter().GetResult();
+                    }
+                    catch (Exception ex) when (ex is FileNotFoundException or FileFormatException or NotSupportedException or InvalidOperationException)
+                    {
+                        failed = true;
+                    }
+                    Need(failed, "无效输入帧却没有报告失败");
+                    Need(File.ReadAllBytes(target).AsSpan().SequenceEqual(original), "失败编码覆盖了原有目标文件");
+                    Need(Directory.GetFiles(outputDir).Length == 1, "失败编码留下了半成品");
+                }
+            }
+        }
+        finally { Wipe(dir); }
+    }
+
+    static void CancelWebpProcessProbe()
+    {
+        if (!AnimEncoder.WebpAvailable) return;
+        var (dir, paths) = WriteDetailedFrames(60, 768, 432, moving: true);
+        using var cancel = new CancellationTokenSource();
+        Task<AnimResult>? pending = null;
+        try
+        {
+            var output = Path.Combine(dir, "output");
+            Directory.CreateDirectory(output);
+            var before = EncoderProcesses();
+            pending = Task.Run(() => AnimEncoder.SaveAsync(paths, Path.Combine(output, "cancelled"), 30,
+                RecordFormat.Webp, ct: cancel.Token));
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            var children = new HashSet<int>();
+            while (!pending.IsCompleted && DateTime.UtcNow < deadline)
+            {
+                children = EncoderProcesses(); children.ExceptWith(before);
+                if (children.Count > 0) break;
+                Thread.Sleep(5);
+            }
+            Need(children.Count > 0 && !pending.IsCompleted, "未观察到实际运行中的 WebP 编码进程");
+            cancel.Cancel();
+            var cancelled = false;
+            try { pending.GetAwaiter().GetResult(); }
+            catch (OperationCanceledException) { cancelled = true; }
+            Need(cancelled, "WebP 编码没有传播用户取消");
+            Need(Directory.GetFiles(output).Length == 0, "WebP 取消后仍留有半成品");
+            Need(!EncoderProcesses().Overlaps(children), "WebP 取消完成后编码进程仍在运行");
+        }
+        finally
+        {
+            cancel.Cancel();
+            try { pending?.GetAwaiter().GetResult(); } catch { }
+            Wipe(dir);
+        }
+    }
+
+    static HashSet<int> EncoderProcesses()
+    {
+        var ids = new HashSet<int>();
+        foreach (var process in System.Diagnostics.Process.GetProcessesByName("img2webp"))
+        {
+            using (process)
+            {
+                try
+                {
+                    if (string.Equals(process.MainModule?.FileName, AnimEncoder.FindImg2Webp(), StringComparison.OrdinalIgnoreCase))
+                        ids.Add(process.Id);
+                }
+                catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException) { }
+            }
+        }
+        return ids;
     }
 
     /// <summary>

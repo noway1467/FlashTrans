@@ -41,6 +41,13 @@ static class Program
             ThemeService.ApplyAccent(s.AccentColor);
         });
 
+        if (args.Contains("--record-benchmark"))
+        {
+            Step("录制：保存速度基准（合成屏幕内容，不读取用户窗口）", RecordProbe.Benchmark);
+            app.Shutdown();
+            return _fail == 0 ? 0 : 1;
+        }
+
         if (Array.IndexOf(args, "--feature-preview") is var previewIndex && previewIndex >= 0)
         {
             Step("新功能：生成本机样例与深浅主题预览", () => DocumentProbe.FeaturePreview(args[previewIndex + 1]));
@@ -101,6 +108,13 @@ static class Program
         SettingsProbe.RunAll(Step);
         HttpVersionProbe.RunAll(Step);
 
+        if (args.Contains("--only-translation"))
+        {
+            TranslationProbe.RunAll(Step);
+            app.Shutdown();
+            return _fail == 0 ? 0 : 1;
+        }
+
         if (args.Contains("--only-clipboard"))
         {
             UiProbe.RunClipboardProbes(Step);
@@ -111,6 +125,13 @@ static class Program
         if (args.Contains("--only-longshot"))
         {
             LongShotProbe.RunAll(Step);
+            app.Shutdown();
+            return _fail == 0 ? 0 : 1;
+        }
+
+        if (args.Contains("--only-record"))
+        {
+            RecordProbe.RunAll(Step);
             app.Shutdown();
             return _fail == 0 ? 0 : 1;
         }
@@ -130,6 +151,7 @@ static class Program
             return _fail == 0 ? 0 : 1;
         }
 
+        TranslationProbe.RunAll(Step);
         SourceCaptureProbe.RunAll(Step);
         DocumentProbe.RunAll(Step);
         ProtectionProbe.RunAll(Step);

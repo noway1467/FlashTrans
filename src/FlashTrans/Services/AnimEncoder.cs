@@ -136,6 +136,8 @@ public static class AnimEncoder
     static async Task<AnimResult> SaveWebpAsync(
         string tool, IReadOnlyList<string> frames, string outPath, int fps, CancellationToken ct)
     {
+        outPath = Path.GetFullPath(outPath);
+        var temporary = outPath + ".part-" + Guid.NewGuid().ToString("N") + ".webp";
         var work = Path.GetDirectoryName(frames[0]) ?? AppContext.BaseDirectory;
 
         var psi = new ProcessStartInfo
@@ -149,14 +151,25 @@ public static class AnimEncoder
         };
         psi.ArgumentList.Add("-loop");
         psi.ArgumentList.Add("0");            // 0 = 一直循环
-        psi.ArgumentList.Add("-d");
-        psi.ArgumentList.Add(DelayMillis(fps).ToString());
         psi.ArgumentList.Add("-lossy");
         psi.ArgumentList.Add("-q");
         psi.ArgumentList.Add("80");
+        // 保持画质参数、帧率和原始尺寸，只减少编码器为压缩体积所做的搜索。
+        psi.ArgumentList.Add("-m");
+        psi.ArgumentList.Add("1");
         psi.ArgumentList.Add("-o");
-        psi.ArgumentList.Add(outPath);
-        foreach (var f in frames) psi.ArgumentList.Add(Path.GetFileName(f));
+        psi.ArgumentList.Add(temporary);
+        var duration = -1;
+        foreach (var frame in WebpFrames(frames, fps, ct))
+        {
+            if (frame.DurationMs != duration)
+            {
+                duration = frame.DurationMs;
+                psi.ArgumentList.Add("-d");
+                psi.ArgumentList.Add(duration.ToString());
+            }
+            psi.ArgumentList.Add(Path.GetFileName(frame.Path));
+        }
 
         using var proc = Process.Start(psi)
             ?? throw new InvalidOperationException("启动 img2webp 失败。");
@@ -169,45 +182,79 @@ public static class AnimEncoder
         kill.CancelAfter(TimeSpan.FromMinutes(3));
         try
         {
-            await proc.WaitForExitAsync(kill.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            try { proc.Kill(entireProcessTree: true); } catch { }
-            // 半成品不能留在用户的截图目录里。进程刚被杀，文件句柄可能还没放开，
-            // 删不掉也不要紧——反正扩展名是 .webp 的残文件比一个假动图好解释。
-            try { if (File.Exists(outPath)) File.Delete(outPath); }
-            catch (Exception ex) { Log.Warn("删 WebP 半成品失败：" + ex.Message); }
+            try { await proc.WaitForExitAsync(kill.Token); }
+            catch (OperationCanceledException)
+            {
+                try { proc.Kill(entireProcessTree: true); } catch { }
+                // 必须等进程释放文件句柄后再清理，否则取消时可能遗留半成品。
+                await proc.WaitForExitAsync();
+                await Task.WhenAll(errTask, outTask);
+                ct.ThrowIfCancellationRequested();
+                throw new InvalidOperationException("img2webp 跑太久了，已经中断。");
+            }
 
-            // 用户按的取消跟「跑太久」要分开报：前者不是错误。
+            var err = (await errTask).Trim();
+            _ = await outTask;
+            if (proc.ExitCode != 0 || !File.Exists(temporary))
+                throw new InvalidOperationException(
+                    $"img2webp 失败（退出码 {proc.ExitCode}）{(err.Length > 0 ? "：" + err : "")}");
+
             ct.ThrowIfCancellationRequested();
-            throw new InvalidOperationException("img2webp 跑太久了，已经中断。");
+            File.Move(temporary, outPath, overwrite: true);
+            return new AnimResult(outPath, RecordFormat.Webp, new FileInfo(outPath).Length);
         }
-
-        var err = (await errTask).Trim();
-        _ = await outTask;
-        if (proc.ExitCode != 0 || !File.Exists(outPath))
-            throw new InvalidOperationException(
-                $"img2webp 失败（退出码 {proc.ExitCode}）{(err.Length > 0 ? "：" + err : "")}");
-
-        return new AnimResult(outPath, RecordFormat.Webp, new FileInfo(outPath).Length);
+        finally { DeleteTemporary(temporary); }
     }
 
     static async Task<AnimResult> SaveGifAsync(
         IReadOnlyList<string> frames, string outPath, int fps, CancellationToken ct)
     {
+        var temporary = outPath + ".part-" + Guid.NewGuid().ToString("N") + ".gif";
         try
         {
-            await Task.Run(() => BuildGif(frames, outPath, fps, ct), ct);
+            await Task.Run(() => BuildGif(frames, temporary, fps, ct), ct);
+            ct.ThrowIfCancellationRequested();
+            File.Move(temporary, outPath, overwrite: true);
         }
-        catch (OperationCanceledException)
-        {
-            // 文件流在 BuildGif 里已经 using 掉了，这儿删得掉。
-            try { if (File.Exists(outPath)) File.Delete(outPath); }
-            catch (Exception ex) { Log.Warn("删 GIF 半成品失败：" + ex.Message); }
-            throw;
-        }
+        finally { DeleteTemporary(temporary); }
         return new AnimResult(outPath, RecordFormat.Gif, new FileInfo(outPath).Length);
+    }
+
+    static void DeleteTemporary(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); }
+        catch (Exception ex) { Log.Warn("删动图临时文件失败：" + ex.Message); }
+    }
+
+    internal static List<(string Path, int DurationMs)> WebpFrames(
+        IReadOnlyList<string> frames, int fps, CancellationToken ct = default)
+    {
+        var result = new List<(string Path, int DurationMs)>();
+        var delay = DelayMillis(fps);
+        long previousLength = -1;
+        byte[]? previousBytes = null;
+        foreach (var path in frames)
+        {
+            ct.ThrowIfCancellationRequested();
+            var length = new FileInfo(path).Length;
+            byte[]? bytes = null;
+            var same = false;
+            if (length == previousLength && result.Count > 0)
+            {
+                previousBytes ??= File.ReadAllBytes(result[^1].Path);
+                bytes = File.ReadAllBytes(path);
+                same = bytes.AsSpan().SequenceEqual(previousBytes);
+            }
+            // 只合并逐字节相同的连续帧，累计其停留时间；不合并相似画面，不改变播放速度。
+            if (same) result[^1] = (result[^1].Path, checked(result[^1].DurationMs + delay));
+            else
+            {
+                result.Add((path, delay));
+                previousLength = length;
+                previousBytes = bytes;
+            }
+        }
+        return result;
     }
 
     /// <summary>
@@ -216,37 +263,74 @@ public static class AnimEncoder
     /// 为什么不把所有帧交给一个 GifBitmapEncoder：它要等 Save 时才写，
     /// 在那之前全部帧都得在内存里。录一块 2560×1440 的区域、300 帧，
     /// 光源位图就是 4GB 出头，直接 OOM。
-    /// 这里改成每帧单独编成一张单帧 GIF，把它的调色板和 LZW 码流抠出来接到
-    /// 输出流上，内存里同时只有一帧。
+    /// 每帧单独编码后顺序写入；仅保留有界的待写队列，不会把整段录制解码进内存。
     /// 附带的好处是每帧带自己的局部调色板（WIC 按这一帧的实际颜色挑），
     /// 比所有帧共用一个全局调色板少很多色带。
     /// </summary>
     internal static void BuildGif(
         IReadOnlyList<string> frames, string outPath, int fps, CancellationToken ct = default)
     {
+        if (frames.Count == 0) throw new InvalidOperationException("没有帧可以编码。");
+        ct.ThrowIfCancellationRequested();
+        var previousBytes = File.ReadAllBytes(frames[0]);
+        var first = EncodeGifFrame(previousBytes, ct);
+        var parallelism = GifEncodingParallelism(first.Width, first.Height);
+        using var workers = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var pending = new Queue<Task<GifFrameParts>>();
+        var previousTask = Task.FromResult(first);
+        var next = 1;
+        var frameIndex = 1;
         using var fs = File.Create(outPath);
-        var started = false;
-        var frameIndex = 0;
+        WriteGifHeader(fs, first.Width, first.Height);
+        WriteGifFrame(fs, first, GifDelayCentis(fps, 0));
 
-        foreach (var path in frames)
+        try
         {
-            // 每帧查一次。单帧的量化加 LZW 是毫秒级的，取消最多等一帧，
-            // 比等几百帧编完再放手强得多。
-            ct.ThrowIfCancellationRequested();
-
-            var one = SplitSingleGif(EncodeSingleGif(path));
-            if (one is null) continue;
-
-            if (!started)
+            while (next < frames.Count || pending.Count > 0)
             {
-                WriteGifHeader(fs, one.Width, one.Height);
-                started = true;
-            }
-            WriteGifFrame(fs, one, GifDelayCentis(fps, frameIndex++));
-        }
+                while (next < frames.Count && pending.Count < parallelism)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    var bytes = File.ReadAllBytes(frames[next++]);
+                    // 完全相同的 PNG 复用量化/LZW 结果，但照常写帧和延时，绝不快放或丢帧。
+                    if (!bytes.AsSpan().SequenceEqual(previousBytes))
+                        previousTask = Task.Run(() => EncodeGifFrame(bytes, workers.Token), workers.Token);
+                    previousBytes = bytes;
+                    pending.Enqueue(previousTask);
+                }
 
-        if (!started) throw new InvalidOperationException("一帧都没能编码。");
-        fs.WriteByte(0x3B);   // Trailer
+                var one = pending.Dequeue().GetAwaiter().GetResult();
+                ct.ThrowIfCancellationRequested();
+                if (one.Width != first.Width || one.Height != first.Height)
+                    throw new InvalidOperationException("录制帧尺寸不一致，无法保存动图。");
+                WriteGifFrame(fs, one, GifDelayCentis(fps, frameIndex++));
+            }
+            fs.WriteByte(0x3B);
+        }
+        finally
+        {
+            workers.Cancel();
+            // 出错或取消时也等在途 WIC 编码释放位图，避免后台任务和临时帧泄漏。
+            try { Task.WhenAll(pending).GetAwaiter().GetResult(); }
+            catch { /* 原始错误由消费队列的调用保留。 */ }
+        }
+    }
+
+    internal static int GifEncodingParallelism(int width, int height)
+    {
+        var cpu = Math.Clamp(Environment.ProcessorCount / 2, 1, 4);
+        // WIC 解码、调色板及编码工作区都需要内存；4K 帧不会同时铺开多个大位图。
+        var perFrame = Math.Max(1, (long)width * height * 16);
+        return Math.Max(1, (int)Math.Min(cpu, 96L * 1024 * 1024 / perFrame));
+    }
+
+    static GifFrameParts EncodeGifFrame(byte[] bytes, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        var frame = SplitSingleGif(EncodeSingleGif(bytes))
+            ?? throw new InvalidOperationException("录制帧未能编码为有效 GIF。");
+        ct.ThrowIfCancellationRequested();
+        return frame;
     }
 
     /// <summary>从一张单帧 GIF 里抠出来的东西：调色板加 LZW 码流，能直接接到动图里去。</summary>
@@ -257,10 +341,12 @@ public static class AnimEncoder
     /// 把一张 PNG 编成单帧 GIF。量化和 LZW 都是 WIC 干的——
     /// 自己写 LZW 没有意义，而颜色量化写不好就是一脸色带。
     /// </summary>
-    static byte[] EncodeSingleGif(string pngPath)
+    static byte[] EncodeSingleGif(byte[] bytes)
     {
+        using var input = new MemoryStream(bytes, writable: false);
+        var bitmap = BitmapDecoder.Create(input, BitmapCreateOptions.None, BitmapCacheOption.OnLoad).Frames[0];
         var enc = new GifBitmapEncoder();
-        enc.Frames.Add(BitmapFrame.Create(LoadFrame(pngPath)));
+        enc.Frames.Add(BitmapFrame.Create(bitmap));
         using var ms = new MemoryStream();
         enc.Save(ms);
         return ms.ToArray();

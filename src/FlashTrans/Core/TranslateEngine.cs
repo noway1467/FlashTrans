@@ -16,14 +16,25 @@ public sealed class TranslateEngine
     {
         var s0 = SettingsService.Instance.Current;
         Cache = new TransCache(s0.CacheEnabled ? s0.CacheSize : 0, TimeSpan.FromHours(s0.CacheTtlHours));
+        var providerSignatures = Signatures(s0);
         SettingsService.Instance.Changed += s =>
         {
+            var next = Signatures(s);
+            // 只在源配置变化时失效，置顶、主题和语言切换仍可复用已有语向缓存。
+            // Clear 同时推进缓存代次，阻止仍在执行的旧配置请求回写。
+            if (next.Count != providerSignatures.Count || next.Any(p =>
+                    !providerSignatures.TryGetValue(p.Key, out var signature) || signature != p.Value))
+                Cache.Clear();
+            providerSignatures = next;
             Registry.Invalidate();
             Cache.Capacity = s.CacheEnabled ? s.CacheSize : 0;
             if (!s.CacheEnabled) Cache.Clear();
             else Cache.Ttl = TimeSpan.FromHours(s.CacheTtlHours);   // setter 顺带清掉按新时限已过期的
         };
     }
+
+    static Dictionary<string, string> Signatures(AppSettings s) => s.Providers.ToDictionary(
+        p => p.Id, ProviderRegistry.Signature, StringComparer.Ordinal);
 
     // ---------------------------------------------------------------- 语言解析
 
@@ -67,6 +78,7 @@ public sealed class TranslateEngine
         Action<TranslateResult>? onResult = null)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
+        var textVersion = Cache.TextVersion(text);
         var (from, targets) = Resolve(text);
         var batch = new TranslateBatch { SourceText = text, From = from, Targets = targets };
 
@@ -87,7 +99,7 @@ public sealed class TranslateEngine
             await gate.WaitAsync(ct);
             try
             {
-                var r = await RunOneAsync(cfg, text, from, targets, false, ct);
+                var r = await RunOneAsync(cfg, text, from, targets, false, textVersion, ct);
                 onResult?.Invoke(r);   // 谁先回来谁先显示，不等别人
                 return r;
             }
@@ -107,12 +119,13 @@ public sealed class TranslateEngine
                                                   CancellationToken ct)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
+        var textVersion = Cache.TextVersion(text);
         var (from, targets) = Resolve(text);
         var batch = new TranslateBatch { SourceText = text, From = from, Targets = targets };
 
         foreach (var cfg in BuildChain(providerId))
         {
-            var r = await RunOneAsync(cfg, text, from, targets, perParagraph, ct);
+            var r = await RunOneAsync(cfg, text, from, targets, perParagraph, textVersion, ct);
             batch.Results.Add(r);
             if (r.Ok)
             {
@@ -159,15 +172,14 @@ public sealed class TranslateEngine
     // ---------------------------------------------------------------- 执行
 
     async Task<TranslateResult> RunOneAsync(ProviderConfig cfg, string text, string from,
-                                            List<string> targets, bool perParagraph, CancellationToken ct)
+                                            List<string> targets, bool perParagraph, long textVersion,
+                                            CancellationToken ct)
     {
         var impl = Registry.Get(cfg);
         if (impl.ConfigError is { } cfgErr)
             return TranslateResult.Failed(impl, cfgErr);
 
-        // 强制翻译会使同一原文的缓存版本递增；记住请求开始时的版本，
-        // 这样被取消的旧请求即使晚一步返回，也不能把旧译文写回缓存。
-        var textVersion = Cache.TextVersion(text);
+        // 缓存代次在整批请求开始时读取；排队和降级中的旧请求也不能污染新配置缓存。
         var result = new TranslateResult { ProviderId = impl.Id, ProviderName = impl.Name };
         var missing = new List<string>();
 
@@ -217,26 +229,29 @@ public sealed class TranslateEngine
 
         ct.ThrowIfCancellationRequested();
 
-        if (result.Texts.Count == 0)
+        var untranslated = targets.Where(t => string.IsNullOrWhiteSpace(result.Get(t))).ToList();
+        if (untranslated.Count > 0)
+            errors.Add($"未返回{string.Join("、", untranslated.Select(Languages.NameOf))}译文");
+
+        if (errors.Count > 0)
         {
-            result.Error = errors.Count > 0 ? string.Join("；", errors.Distinct()) : "接口未返回译文";
+            result.Error = string.Join("；", errors.Distinct());
             Health.Failure(impl.Id, result.Error);
         }
-        else
-        {
-            Health.Success(impl.Id, result.ElapsedMs);
-            if (errors.Count > 0) result.Error = null;
-            if (S.CacheEnabled)
-                foreach (var (lang, value) in result.Texts)
-                    Cache.Set(impl.Id, from, lang, text, value, result.Phonetic, result.Dict, wantDict, textVersion);
-        }
+        else Health.Success(impl.Id, result.ElapsedMs);
+
+        // 部分失败仍保留成功目标的缓存，下次只重试缺失项，不能把整批标成成功。
+        if (S.CacheEnabled)
+            foreach (var (lang, value) in result.Texts)
+                Cache.Set(impl.Id, from, lang, text, value, result.Phonetic, result.Dict, wantDict, textVersion);
         return result;
     }
 
     static void Merge(TranslateResult into, TranslateResult from, List<string> errors)
     {
         if (from.Error is not null) { errors.Add(from.Error); return; }
-        foreach (var (k, v) in from.Texts) into.Texts[k] = v;
+        foreach (var (k, v) in from.Texts)
+            if (!string.IsNullOrWhiteSpace(v)) into.Texts[k] = v;
         into.Phonetic ??= from.Phonetic;
         into.Dict ??= from.Dict;
         into.DetectedFrom ??= from.DetectedFrom;

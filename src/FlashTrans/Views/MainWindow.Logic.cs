@@ -356,7 +356,10 @@ public partial class MainWindow
                 _result.AppendStream(piece);
             }
 
+            cts.Token.ThrowIfCancellationRequested();
             var final = AiPrompt.Cleanup(buffer.ToString());
+            // 正常结束的空流也属于失败，必须走下面与异常相同的普通重试和降级链。
+            if (final.Length == 0) throw new ProviderException("模型未返回译文");
             var batch = new TranslateBatch
             {
                 SourceText = text, From = from, Targets = [.. targets],
@@ -367,18 +370,16 @@ public partial class MainWindow
                 ProviderId = cfg.Id, ProviderName = cfg.DisplayName,
                 ElapsedMs = sw.ElapsedMilliseconds,
             };
-            if (final.Length > 0) r.Texts[targets[0]] = final;
-            else r.Error = "模型未返回译文";
+            r.Texts[targets[0]] = final;
             batch.Results.Add(r);
 
             _batch = batch;
-            if (r.Ok) Engine.Health.Success(cfg.Id, r.ElapsedMs);
-            else Engine.Health.Failure(cfg.Id, r.Error!);
+            Engine.Health.Success(cfg.Id, r.ElapsedMs);
 
             _result.ShowBatch(batch, aggregate: false);
             UpdateStatus(batch);
         }
-        catch (OperationCanceledException) { /* 用户改了输入 */ }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested) { /* 用户改了输入 */ }
         catch (Exception ex)
         {
             Engine.Health.Failure(cfg.Id, ex.Message);
@@ -389,10 +390,25 @@ public partial class MainWindow
                 if (cts.IsCancellationRequested) return;
                 _batch = fallback;
                 _result.ShowBatch(fallback, aggregate: false);
-                UpdateStatus(fallback);
                 SyncTabToResult(fallback);
+                UpdateStatus(fallback);
             }
-            else _result.ShowMessage("翻译失败：" + ex.Message, dim: false);
+            else
+            {
+                var failed = new TranslateBatch
+                {
+                    SourceText = text, From = from, Targets = [.. targets],
+                    TotalMs = sw.ElapsedMilliseconds,
+                };
+                failed.Results.Add(TranslateResult.Failed(ai, ex.Message, sw.ElapsedMilliseconds));
+                _batch = failed;
+                _result.ShowBatch(failed, aggregate: false);
+                UpdateStatus(failed);
+            }
+        }
+        finally
+        {
+            if (!cts.IsCancellationRequested) RefreshTabDots();
         }
     }
 

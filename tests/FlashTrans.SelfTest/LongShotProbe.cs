@@ -1,5 +1,11 @@
+using System.IO;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using FlashTrans.Interop;
 using FlashTrans.Services;
+using FlashTrans.Views;
 
 namespace FlashTrans.SelfTest;
 
@@ -23,6 +29,10 @@ static class LongShotProbe
         step("长截图：滚动距离超过初始窄带也能对齐", LargeShiftProbe);
         step("长截图：动态刷新和回弹期间不反向滚、不拼半帧", DynamicRefreshProbe);
         step("长截图：滚动事件延迟时不会提前判定到底", DelayedScrollProbe);
+        step("长截图：100% 预览在不同 DPI 下保持物理像素一比一", PreviewDpiProbe);
+        step("长截图：超长图分片虚拟化，缩放和滚到底后仍保留原像素", PreviewTilesProbe);
+        step("长截图：无损 PNG 往返不缩图、不改细线像素", LosslessExportProbe);
+        step("长截图：真实 WPF 滚动、GDI 抓屏和拼接保持原像素", RealScrollPixelsProbe);
     }
 
     // ------------------------------------------------------------- 造图
@@ -356,5 +366,210 @@ static class LongShotProbe
         var fixedBottom = LongShotService.FindFixedBottom(prev, next, 90);
         if (fixedBottom != 0)
             throw new InvalidOperationException($"单行巧合被误裁成 {fixedBottom} 行固定底栏");
+    }
+
+    static void PreviewDpiProbe()
+    {
+        foreach (var height in new[] { 1, 1023, 1024, 1025, 40017 })
+        {
+            var total = 0;
+            for (var index = 0; index < (height + LongShotWindow.PreviewTileHeight - 1) / LongShotWindow.PreviewTileHeight; index++)
+            {
+                var rows = LongShotWindow.PreviewTileRows(height, index);
+                Check(rows.Top == total && rows.Height is > 0 and <= LongShotWindow.PreviewTileHeight, "分片行范围缺失、重叠或超过纹理上限");
+                total += rows.Height;
+            }
+            Check(total == height, "分片没有覆盖完整原图");
+        }
+        foreach (var scale in new[] { 1.0, 1.25, 1.5, 2.0 })
+        {
+            var dpi = new DpiScale(scale, scale);
+            var size = LongShotWindow.PreviewSize(1921, 1024, 1024, 1, dpi);
+            Check(Math.Abs(size.Width * scale - 1921) < 0.001, "100% 预览宽度被 DPI 放大");
+            Check(Math.Abs(size.Height * scale - 1024) < 0.001, "100% 预览高度被 DPI 放大");
+            var total = Enumerable.Range(0, 31).Sum(index =>
+                LongShotWindow.PreviewSize(1921, index * 1024, 1024, 0.37, dpi).Height * scale);
+            Check(Math.Abs(total - Math.Round(31 * 1024 * 0.37)) < 0.001, "分片缩放累计出空隙或重复行");
+        }
+    }
+
+    static CapturedImage DetailedPage(int width, int height)
+    {
+        var pixels = new byte[width * height * 4];
+        for (var y = 0; y < height; y++)
+            for (var x = 0; x < width; x++)
+            {
+                var at = (y * width + x) * 4;
+                var line = y % 17 == 0 || x % 13 == 0;
+                pixels[at] = line ? (byte)0 : (byte)245;
+                pixels[at + 1] = (byte)(line ? 0 : 220 + (y / 17 % 30));
+                pixels[at + 2] = (byte)(line ? 0 : 220 + (x / 13 % 30));
+                pixels[at + 3] = 255;
+            }
+        return new CapturedImage(width, height, pixels);
+    }
+
+    static void PreviewTilesProbe()
+    {
+        var page = DetailedPage(513, 40017);
+        var window = new LongShotWindow(page, "原始像素测试")
+        {
+            WindowStartupLocation = WindowStartupLocation.Manual,
+            Left = -4000, Top = -4000, Width = 420, Height = 480,
+            ShowInTaskbar = false, ShowActivated = false,
+        };
+        try
+        {
+            window.Show(); Layout(window);
+            var list = Descendants<ListBox>(window).Single(l => l.Name == "LongShotPreview");
+            var scroll = Descendants<ScrollViewer>(list).First();
+            var dpi = VisualTreeHelper.GetDpi(window);
+
+            void VerifyTiles()
+            {
+                var images = Descendants<Image>(list).Where(i => i.Source is BitmapSource b && b.PixelWidth == page.Width).ToList();
+                Check(images.Count > 0 && images.Count < list.Items.Count, "预览未分片或一次性创建了整张超长图");
+                foreach (var image in images)
+                {
+                    var bitmap = (BitmapSource)image.Source;
+                    var container = ItemsControl.ContainerFromElement(list, image);
+                    var index = list.ItemContainerGenerator.IndexFromContainer(container);
+                    Check(index >= 0 && bitmap.PixelHeight <= LongShotWindow.PreviewTileHeight, "分片仍超出纹理安全高度");
+                    var bytes = new byte[bitmap.PixelWidth * bitmap.PixelHeight * 4];
+                    bitmap.CopyPixels(bytes, page.Stride, 0);
+                    var top = LongShotWindow.PreviewTileRows(page.Height, index).Top;
+                    Check(bytes.AsSpan().SequenceEqual(page.Pixels.AsSpan(top * page.Stride, bytes.Length)),
+                        "预览分片改变了原图像素或行序");
+                }
+            }
+
+            VerifyTiles();
+            Check(scroll.ExtentWidth > scroll.ViewportWidth, "原始大小预览没有提供横向滚动");
+            foreach (var image in Descendants<Image>(list).Where(i => i.Source is BitmapSource b && b.PixelWidth == page.Width))
+                Check(Math.Abs(image.ActualWidth * dpi.DpiScaleX - page.Width) <= 1, "实际布局不是原像素 100% 显示");
+            scroll.ScrollToEnd(); Layout(window); VerifyTiles();
+            Check(scroll.VerticalOffset > 30000 / dpi.DpiScaleY,
+                $"无法滚到原图底部：offset={scroll.VerticalOffset:0.##}, extent={scroll.ExtentHeight:0.##}, viewport={scroll.ViewportHeight:0.##}, dpi={dpi.DpiScaleY:0.##}");
+            window.SetPreviewZoom(0.5); Layout(window); VerifyTiles();
+            var fit = Descendants<Button>(window).Single(b => b.Content is "适应宽度");
+            fit.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Layout(window); VerifyTiles();
+            Check(scroll.ExtentWidth <= scroll.ViewportWidth + 2, "适应宽度后仍被横向裁切");
+            window.Width = 380; Layout(window); VerifyTiles();
+            Check(scroll.ExtentWidth <= scroll.ViewportWidth + 2, "调整窗口宽度后没有重新适应");
+            window.SetPreviewZoom(1); Layout(window); VerifyTiles();
+
+            var args = Environment.GetCommandLineArgs();
+            var preview = Array.IndexOf(args, "--preview-dir");
+            if (preview >= 0 && preview + 1 < args.Length)
+            {
+                Directory.CreateDirectory(args[preview + 1]);
+                scroll.ScrollToTop(); Layout(window);
+                var bitmap = new RenderTargetBitmap((int)Math.Ceiling(window.ActualWidth * dpi.DpiScaleX),
+                    (int)Math.Ceiling(window.ActualHeight * dpi.DpiScaleY), 96 * dpi.DpiScaleX, 96 * dpi.DpiScaleY, PixelFormats.Pbgra32);
+                bitmap.Render(window);
+                var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap));
+                using var output = File.Create(Path.Combine(args[preview + 1], "longshot-preview.png"));
+                encoder.Save(output);
+            }
+        }
+        finally { window.Close(); }
+    }
+
+    static void LosslessExportProbe()
+    {
+        var dir = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "FlashTrans.longshot." + Guid.NewGuid().ToString("N")));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var page = DetailedPage(257, 17001);
+            var path = Path.Combine(dir, "detail.png");
+            page.SavePng(path);
+            var decoded = AnimEncoder.LoadFrame(path);
+            Check(decoded.PixelWidth == page.Width && decoded.PixelHeight == page.Height, "PNG 导出改变了原始尺寸");
+            var pixels = new byte[page.Pixels.Length];
+            new FormatConvertedBitmap(decoded, PixelFormats.Bgra32, null, 0).CopyPixels(pixels, page.Stride, 0);
+            Check(pixels.AsSpan().SequenceEqual(page.Pixels), "PNG 导出改写了细线、文字边缘或颜色");
+        }
+        finally
+        {
+            if (!dir.StartsWith(Path.GetFullPath(Path.GetTempPath()), StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("临时路径越界");
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    static void RealScrollPixelsProbe()
+    {
+        var page = Page(900);
+        var picture = new Image { Source = page.ToBitmap(), Stretch = Stretch.Fill, SnapsToDevicePixels = true };
+        RenderOptions.SetBitmapScalingMode(picture, BitmapScalingMode.NearestNeighbor);
+        var scroll = new ScrollViewer
+        {
+            Content = picture, CanContentScroll = false,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Hidden,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Hidden,
+        };
+        var border = new Border { Background = Brushes.White, Child = scroll };
+        var window = new Window
+        {
+            Content = border, WindowStyle = WindowStyle.None, ResizeMode = ResizeMode.NoResize,
+            UseLayoutRounding = true, ShowInTaskbar = false, ShowActivated = false, Topmost = true,
+            WindowStartupLocation = WindowStartupLocation.Manual, Left = 80, Top = 80, Width = 300, Height = 360,
+        };
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        try
+        {
+            window.Show(); Layout(window);
+            var dpi = VisualTreeHelper.GetDpi(window);
+            picture.Width = page.Width / dpi.DpiScaleX;
+            picture.Height = page.Height / dpi.DpiScaleY;
+            scroll.Width = W / dpi.DpiScaleX;
+            scroll.Height = H / dpi.DpiScaleY;
+            border.Padding = new Thickness(12 / dpi.DpiScaleX, 12 / dpi.DpiScaleY, 12 / dpi.DpiScaleX, 12 / dpi.DpiScaleY);
+            window.Width = (W + 24) / dpi.DpiScaleX;
+            window.Height = (H + 24) / dpi.DpiScaleY;
+            Layout(window);
+            var origin = scroll.PointToScreen(new Point(0, 0));
+            var region = new RECT { Left = (int)Math.Round(origin.X), Top = (int)Math.Round(origin.Y) };
+            region.Right = region.Left + W;
+            region.Bottom = region.Top + H;
+            using var capture = ScreenCaptureSession.Open(region.Left, region.Top, W, H)
+                ?? throw new InvalidOperationException("真实滚动自测无法创建抓屏会话");
+            var offset = 0;
+            var task = Task.Run(() => LongShotService.RunForTestAsync(region, _ => capture.Grab(),
+                _ => window.Dispatcher.Invoke(() => scroll.ScrollToVerticalOffset((offset = Math.Min(600, offset + 90)) / dpi.DpiScaleY)),
+                cancelled: () => stop.IsCancellationRequested,
+                delay: _ => Task.Delay(15)));
+            while (!task.IsCompleted) { Layout(window); Thread.Sleep(5); }
+            var result = task.GetAwaiter().GetResult();
+            Check(result.Stopped == LongShotStop.Bottom && result.Image is not null && result.Frames > 1,
+                $"真实滚动未完成：{result.Stopped}，{result.Frames} 屏");
+            Check(result.Image!.Width == page.Width && result.Image.Height == page.Height, "真实滚动拼接丢失了原始尺寸");
+            Check(result.Image.Pixels.AsSpan().SequenceEqual(page.Pixels), "真实抓屏或拼接发生缩放、模糊或像素错位");
+        }
+        finally { stop.Cancel(); window.Close(); }
+    }
+
+    static void Check(bool condition, string message)
+    {
+        if (!condition) throw new InvalidOperationException(message);
+    }
+
+    static void Layout(Window window)
+    {
+        for (var i = 0; i < 3; i++)
+        {
+            var frame = new System.Windows.Threading.DispatcherFrame();
+            System.Windows.Threading.Dispatcher.CurrentDispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background,
+                new Action(() => frame.Continue = false));
+            System.Windows.Threading.Dispatcher.PushFrame(frame);
+            window.UpdateLayout();
+        }
+    }
+
+    static IEnumerable<T> Descendants<T>(DependencyObject root) where T : DependencyObject
+    {
+        if (root is T match) yield return match;
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+            foreach (var child in Descendants<T>(VisualTreeHelper.GetChild(root, i))) yield return child;
     }
 }

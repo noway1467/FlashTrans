@@ -25,11 +25,13 @@ public sealed class ProviderRegistry
         lock (_gate) _cache.Clear();
     }
 
-    static string Signature(ProviderConfig cfg)
+    internal static string Signature(ProviderConfig cfg)
     {
-        var opts = string.Join(';', cfg.Options.OrderBy(k => k.Key, StringComparer.Ordinal)
-                                              .Select(k => k.Key + '=' + k.Value));
-        return $"{cfg.Kind}|{cfg.Name}|{cfg.TimeoutMs}|{opts}";
+        var values = new[] { cfg.Kind.ToString(), cfg.Name, cfg.TimeoutMs.ToString() }
+            .Concat(cfg.Options.OrderBy(k => k.Key, StringComparer.Ordinal)
+                .SelectMany(k => new[] { k.Key, k.Value }));
+        // 提示词可以包含任意分隔符，长度前缀避免两套不同配置拼出同一个签名。
+        return string.Concat(values.Select(value => $"{value?.Length ?? 0}:{value}"));
     }
 
     static ITranslator Create(ProviderConfig cfg) => cfg.Kind switch

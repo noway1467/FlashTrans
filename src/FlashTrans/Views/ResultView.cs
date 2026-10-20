@@ -364,7 +364,7 @@ public sealed class ResultView : ScrollViewer
                 n.Margin = new Thickness(0, 4, 0, 0);
                 panel.Children.Add(n);
             }
-            return panel;
+            if (r.Texts.Count == 0) return panel;
         }
 
         foreach (var lang in batch.Targets)
@@ -433,12 +433,12 @@ public sealed class ResultView : ScrollViewer
         head.Children.Add(name);
 
         var right = new StackPanel { Orientation = Orientation.Horizontal };
-        if (S.ShowLatency && r.Ok)
+        if (S.ShowLatency && r.Texts.Count > 0)
         {
             var ms = r.FromCache ? "缓存" : r.ElapsedMs + " ms";
             right.Children.Add(UiKit.Text(ms, S.FontSize - 3.5, "TextFaint"));
         }
-        if (r.Ok)
+        if (r.Texts.Count > 0)
         {
             if (S.Bilingual)
             {
@@ -475,7 +475,7 @@ public sealed class ResultView : ScrollViewer
         head.Children.Add(right);
 
         var body = new StackPanel { Margin = new Thickness(0, 6, 0, 0) };
-        if (r.Ok)
+        if (r.Texts.Count > 0)
         {
             foreach (var lang in batch.Targets)
             {
@@ -486,7 +486,7 @@ public sealed class ResultView : ScrollViewer
             }
             if (S.ShowDictionary) AppendDictionary(body, r);
         }
-        else body.Children.Add(ErrorRow(r));
+        if (!r.Ok) body.Children.Add(ErrorRow(r));
 
         var stack = new StackPanel();
         stack.Children.Add(head);
@@ -722,14 +722,15 @@ public sealed class ResultView : ScrollViewer
     public static string AllText(TranslateBatch batch)
     {
         var sb = new System.Text.StringBuilder();
-        foreach (var r in batch.Results.Where(x => x.Ok))
+        var visible = batch.Results.Where(x => x.Texts.Count > 0).ToList();
+        foreach (var r in visible)
         {
             foreach (var lang in batch.Targets)
             {
                 if (r.Get(lang) is not { } t) continue;
-                if (batch.Results.Count(x => x.Ok) > 1 || batch.Targets.Count > 1)
+                if (visible.Count > 1 || batch.Targets.Count > 1)
                     sb.Append('[').Append(r.ProviderName);
-                if (batch.Results.Count(x => x.Ok) > 1 || batch.Targets.Count > 1) sb.Append("] ");
+                if (visible.Count > 1 || batch.Targets.Count > 1) sb.Append("] ");
                 sb.AppendLine(t);
             }
         }
