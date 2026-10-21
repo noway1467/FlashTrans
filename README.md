@@ -1,12 +1,10 @@
 # FlashTrans
 
-[![Release](https://img.shields.io/github/v/release/noway1467/FlashTrans?label=release&color=0088cc)](https://github.com/noway1467/FlashTrans/releases/latest)
-
 Windows 划词翻译、文件翻译与截图工具。
 
-## 下载安装
+## 下载安装 [![Release](https://img.shields.io/badge/release-v1.9.3-0088cc)](https://github.com/noway1467/FlashTrans/releases/latest)
 
-前往 [最新 Release](https://github.com/noway1467/FlashTrans/releases/latest) 下载，解压后运行 `FlashTrans.exe`。默认启用免费翻译源，无需填写 API Key。
+点击上方版本徽章下载，解压后运行 `FlashTrans.exe`。默认启用免费翻译源，无需填写 API Key。
 
 | 版本 | 运行要求 |
 | --- | --- |
