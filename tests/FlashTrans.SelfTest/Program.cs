@@ -92,6 +92,7 @@ static class Program
         if (args.Contains("--only-capture"))
         {
             CaptureQualityProbe.RunAll(Step);
+            CaptureInteractionProbe.RunAll(Step);
             UiProbe.RunClipboardProbes(Step);
             app.Shutdown();
             return _fail == 0 ? 0 : 1;
@@ -160,6 +161,7 @@ static class Program
         var host = new AppHost();
         UiProbe.RunAll(host, Step);
         CaptureQualityProbe.RunAll(Step);
+        CaptureInteractionProbe.RunAll(Step);
         RedactionProbe.RunAll(Step);
         OcrProbe.RunAll(Step);
         LongShotProbe.RunAll(Step);

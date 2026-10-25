@@ -294,8 +294,14 @@ public static partial class OcrService
     static string CleanCandidate(string text)
     {
         // 代码可能只截取了一部分；没有像素证据就不能补括号或猜改 Id、sha1sum 等标识符。
-        return LooksLikeIdentifierBlock(text) ? text : NormalizeConfusables(text);
+        return LooksLikeIdentifierBlock(text) ? text : string.Join('\n', text.Split('\n')
+            .Select(line => LooksLikeMath(line) ? line : NormalizeConfusables(line)));
     }
+
+    // 公式中的 a1bc、I、l 可以是合法变量；没有像素证据不能按英文单词猜改。
+    static bool LooksLikeMath(string text) => text.Any(c =>
+        char.GetUnicodeCategory(c) == UnicodeCategory.MathSymbol || c is '^' or '²' or '³'
+        || c is >= '\u2070' and <= '\u209F');
 
     static bool LooksLikeIdentifierBlock(string text)
     {
@@ -370,6 +376,8 @@ public static partial class OcrService
             for (var i = 0; i < lines.Length; i++)
             {
                 var candidate = candidates[i];
+                // 运算符不是可随意补齐的装饰，不能把另一通道的加减号并进公式。
+                if (LooksLikeMath(lines[i]) || LooksLikeMath(candidate)) continue;
                 var skeleton = Skeleton(candidate);
                 if (skeleton.Length == 0) continue;
                 if (!string.Equals(Skeleton(lines[i]), skeleton, StringComparison.Ordinal)
@@ -413,14 +421,13 @@ public static partial class OcrService
             .Replace('\u2019', '\'')
             .Replace('\u201C', '"')
             .Replace('\u201D', '"')
-            .Replace('\u2215', '/')
-            .Replace('\u2044', '/')
             .ReplaceLineEndings("\n")
             .Split('\n');
 
         for (var i = 0; i < lines.Length; i++)
         {
             var line = lines[i].TrimEnd();
+            if (LooksLikeMath(line)) { lines[i] = line; continue; }
             line = Regex.Replace(line, @"(?<=\d)[ \t]*[.][ \t]*(?=\d)", ".");
             line = Regex.Replace(line, @"(?<=\d)[ \t]+(?=%)", "");
             line = Regex.Replace(line, @"(?<=\d)[ \t]+([KMGT])[ \t]+B\b", " $1B");
@@ -442,7 +449,8 @@ public static partial class OcrService
     static string Skeleton(string text) => Regex.Replace(new string(text
         .Where(c => char.IsLetterOrDigit(c) || char.IsWhiteSpace(c)).ToArray()), @"\s+", " ").Trim();
     static int SymbolScore(string text) => text.Count(IsMeaningfulSymbol);
-    static bool IsMeaningfulSymbol(char c) => c is
+    static bool IsMeaningfulSymbol(char c) => char.GetUnicodeCategory(c) == UnicodeCategory.MathSymbol
+        || c is >= '\u2070' and <= '\u209F' || c is '²' or '³' or '\u2044' || c is
         '{' or '}' or '[' or ']' or '(' or ')' or '<' or '>' or ':' or ';' or ',' or '.' or
         '_' or '-' or '+' or '=' or '*' or '/' or '\\' or '|' or '&' or '@' or '#' or '$' or
         '%' or '^' or '~' or '!' or '?' or '…' or '→' or '←' or '↑' or '↓' or '≤' or '≥' or

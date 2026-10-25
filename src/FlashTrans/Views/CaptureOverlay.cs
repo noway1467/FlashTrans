@@ -109,6 +109,7 @@ public sealed partial class CaptureOverlay : Window
         _canvas.Children.Add(_toolbar);
         Content = _canvas;
         InitializeRedaction();
+        InitializeColorPicker();
 
         // 层要铺满整个画布。Canvas 不会自己撑孩子，得跟着尺寸走。
         SizeChanged += (_, _) =>

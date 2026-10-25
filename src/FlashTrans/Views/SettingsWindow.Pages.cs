@@ -208,7 +208,7 @@ public sealed partial class SettingsWindow
         {
             ("自动（优先用 RapidOCR，缺模型时退回系统 OCR）", "auto"),
             ("系统 OCR（Windows 语言包）", "system"),
-            ("RapidOCR（本地模型，中英日韩）", "rapid"),
+            ("RapidOCR（本地模型，中英日）", "rapid"),
         };
         var rows = new List<UIElement>
         {
@@ -227,14 +227,15 @@ public sealed partial class SettingsWindow
         {
             var langs = new List<(string, string)> { ("自动检测（尝试已安装语言）", "") };
             langs.AddRange(OcrService.AvailableLanguages.Select(t => (OcrService.DisplayName(t), t)));
-            rows.Add(Field("识别语言", Combo(langs, S.OcrLang, v => S.OcrLang = v, width: 230)));
+            rows.Add(Field("系统 OCR 语言", Combo(langs, S.OcrLang, v => S.OcrLang = v, width: 230)));
         }
         else
         {
-            rows.Add(Hint("没有系统 OCR 语言包；语言选择只对系统 OCR 生效，RapidOCR 自动识别中英日韩。"));
+            rows.Add(Hint("没有系统 OCR 语言包；RapidOCR 自动识别中英日及拉丁语系，不需要安装日语语言包。"));
         }
 
-        rows.Add(Hint("自动模式会比较系统已安装的 OCR 语言包；RapidOCR 用随程序分发的本地模型，不联网、中英日韩一次识别；括号、箭头等必须是字体字符，纯图标无法可靠还原。"));
+        rows.Add(Hint("自动引擎优先使用 RapidOCR small 本地识别模型（中英日及拉丁语系），缺模型才回退系统 OCR；语言选项仅对系统 OCR 生效。韩语等其他语言请使用对应的 Windows OCR 语言包。截图不上传。"));
+        rows.Add(Hint("数学字符和上下标按普通文字识别并保留，结果需核对；复杂分式、矩阵、手写公式及转 LaTeX 尚不支持。不会通过猜改变量或补运算符伪造公式。"));
         rows.Add(Check("「识别并翻译」时把原文也复制到剪贴板", S.OcrCopyText, on => S.OcrCopyText = on));
         rows.Add(Check("按「识别文字」快捷键后直接复制并关闭", S.OcrCopyAndClose, on => S.OcrCopyAndClose = on));
         return rows.ToArray();

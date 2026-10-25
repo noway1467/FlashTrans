@@ -1,0 +1,2 @@
+# Keep the downloaded model dictionary byte-identical for SHA256 verification.
+src/FlashTrans/models/v6/ppocrv6_small_dict.txt -text

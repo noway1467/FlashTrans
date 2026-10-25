@@ -99,6 +99,9 @@ static class OcrProbe
 
         step("OCR：认出自己画上去的字", RoundTrip);
         step("OCR：RapidOCR 模型就位且认出画出的字", RapidRoundTrip);
+        step("OCR：日语假名、助词与圈号由真实像素区分", JapaneseRoundTrip);
+        step("OCR：常见数学符号、上下标与变量真实识别", MathRoundTrip);
+        step("OCR：公式后处理不猜改变量、分数线与运算符", MathSafetyProbe);
         step("OCR：只在上下文明确时修正 l/1", ConfusableProbe);
         step("OCR：新开关能存下来", OcrSettingProbe);
         step("OCR：快捷复制开关只改变快捷键动作", OcrShortcutProbe);
@@ -896,6 +899,59 @@ static class OcrProbe
             throw new InvalidOperationException("合法代码标识符被纠偏破坏");
     }
 
+    static void JapaneseRoundTrip()
+    {
+        var dictionary = System.IO.File.ReadAllLines(System.IO.Path.Combine(AppContext.BaseDirectory,
+            "models", "v6", "ppocrv6_small_dict.txt")).ToHashSet();
+        foreach (var c in "あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをんアイウエオカタナ")
+            if (!dictionary.Contains(c.ToString())) throw new InvalidOperationException("识别词表缺少日语字符：" + c);
+
+        foreach (var text in new[]
+        {
+            "私の本です。これは日本語のテストです。",
+            "ひらがな カタカナ の を ぬ め",
+            "1. 名词 + の + 名词（表示所有、所属、属性）",
+            "① ② ③ の 的",
+        })
+            RecognizeExactly(text, "Yu Gothic");
+    }
+
+    static void MathRoundTrip()
+    {
+        foreach (var text in new[]
+        {
+            "x² + y² = z²", "a ≤ b ≥ c ≠ d ± e × f ÷ g", "∫ f(x) dx = F(x) + C",
+            "√2 ≈ 1.414   π ≈ 3.14159", "x₁ + x₂ = 10", "a1bc + b1cd = 2",
+        })
+            RecognizeExactly(text, "Yu Gothic");
+    }
+
+    static void RecognizeExactly(string expected, string font)
+    {
+        var text = OcrService.RecognizeAsync(Render(expected, 1100, 120, 30, font), null, engine: "rapid")
+            .GetAwaiter().GetResult();
+        Console.WriteLine($"       「{expected}」→「{text.ReplaceLineEndings(" / ")}」");
+        static string Comparable(string value) => new(OcrService.NormalizeOcrText(value).Where(c => !char.IsWhiteSpace(c)).ToArray());
+        if (Comparable(text) != Comparable(expected))
+            throw new InvalidOperationException("真实识别与真值不符（仅忽略空白和全角 ASCII）");
+    }
+
+    static void MathSafetyProbe()
+    {
+        var clean = typeof(OcrService).GetMethod("CleanCandidate",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+        foreach (var text in new[] { "a1bc + b1cd = 2", "12l4 × I = 4", "x₁² + y₂³ ≤ √2", "1⁄2 + 3∕4 = 1.25", "① の ② 的" })
+        {
+            if (OcrService.NormalizeOcrText(text) != text || (string)clean.Invoke(null, [text])! != text)
+                throw new InvalidOperationException("数学或日语文本被猜改：" + text);
+        }
+        foreach (var (primary, alternative) in new[] { ("x = 1", "x = -1"), ("x y = z", "x + y = z"), ("a ≤ b", "a < b") })
+            if (OcrService.MergeSymbols(primary, [alternative]) != primary)
+                throw new InvalidOperationException("公式通道合并改变了语义：" + primary);
+        if (OcrService.LanguageScoreForTest("√∫∑∞≈", "en") <= OcrService.LanguageScoreForTest("�����", "en"))
+            throw new InvalidOperationException("数学字符被当作噪声降分");
+    }
+
     static void OcrSettingProbe()
     {
         var s = AppSettings.CreateDefault();
@@ -1078,7 +1134,7 @@ static class OcrProbe
         {
             dc.DrawRectangle(Brushes.White, null, new Rect(0, 0, width, height));
             var ft = new FormattedText(text, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
-                new Typeface(font), fontSize, Brushes.Black, 96);
+                new Typeface(font), fontSize, Brushes.Black, 1);
             dc.DrawText(ft, new Point(20, (height - ft.Height) / 2));
         }
         var rtb = new System.Windows.Media.Imaging.RenderTargetBitmap(

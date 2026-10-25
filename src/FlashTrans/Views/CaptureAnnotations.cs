@@ -16,6 +16,7 @@ public enum CaptureTool
     Mosaic,
     Text,
     Redact,
+    ColorPicker,
 }
 
 /// <summary>

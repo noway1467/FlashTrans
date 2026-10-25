@@ -38,6 +38,7 @@ public sealed partial class CaptureOverlay
     static readonly Geometry IconUndo = Geometry.Parse(
         "M3,7 H9.5 C11.4,7 13,8.4 13,10.2 C13,12 11.4,13.4 9.5,13.4 H6 M3,7 L6,4 M3,7 L6,10");
     static readonly Geometry IconRedact = Geometry.Parse("M8,2 L13,4 V8 C13,11 10,13 8,14 C6,13 3,11 3,8 V4 Z M5,8 H11");
+    static readonly Geometry IconColorPicker = Geometry.Parse("M3,11 L9,5 L11,7 L5,13 H3 Z M8,3 L13,8 M10,5 L12,3 L14,5 L12,7");
     // 重做就是把撤销那条路径左右翻过来（每个 x 换成 16-x），两个并排才像一对
     static readonly Geometry IconRedo = Geometry.Parse(
         "M13,7 H6.5 C4.6,7 3,8.4 3,10.2 C3,12 4.6,13.4 6.5,13.4 H10 M13,7 L10,4 M13,7 L10,10");
@@ -154,6 +155,7 @@ public sealed partial class CaptureOverlay
                      (CaptureTool.Mosaic, IconMosaic, Tip("马赛克", S.CkMosaic)),
                      (CaptureTool.Redact, IconRedact, Tip("实心遮挡（手动补漏）", S.CkRedact)),
                      (CaptureTool.Text, null, Tip("文字", S.CkText)),
+                     (CaptureTool.ColorPicker, IconColorPicker, "原图取色：单击复制 HEX，Shift+单击复制 RGB；右键或 Esc 返回"),
                  })
         {
             var b = icon is null
@@ -377,6 +379,7 @@ public sealed partial class CaptureOverlay
             CaptureTool.Text => StyleCtx.Font,
             CaptureTool.Mosaic => StyleCtx.Mosaic,
             CaptureTool.Redact => StyleCtx.None,
+            CaptureTool.ColorPicker => StyleCtx.None,
             CaptureTool.None => StyleCtx.None,
             _ => StyleCtx.Width,
         };
@@ -618,7 +621,8 @@ public sealed partial class CaptureOverlay
         }
         Enable(_undoBtn, _layer.CanUndo);
         Enable(_redoBtn, _layer.CanRedo);
-        _layer.Cursor = _layer.Tool == CaptureTool.None ? Cursors.Cross : Cursors.Pen;
+        _layer.Cursor = _layer.Tool is CaptureTool.None or CaptureTool.ColorPicker ? Cursors.Cross : Cursors.Pen;
+        if (_layer.Tool != CaptureTool.ColorPicker) HideColorPreview();
 
         // 参数那一行换没换内容。换了要重新摆位置——行显出来或收起来时
         // 工具条会高一截或矮一截，原来那个 y 就可能把它顶到屏幕外面去。
@@ -686,7 +690,7 @@ public sealed partial class CaptureOverlay
         var box = new TextBox
         {
             MinWidth = 60,
-            MaxWidth = Math.Max(80, _layer.Selection.Right - at.X),
+            MaxWidth = Math.Max(60, _layer.Selection.Width - 12),
             Background = new SolidColorBrush(Color.FromArgb(0x66, 0, 0, 0)),
             Foreground = new SolidColorBrush(_layer.PenColor),
             CaretBrush = Brushes.White,
@@ -695,6 +699,7 @@ public sealed partial class CaptureOverlay
             FontFamily = new FontFamily("Microsoft YaHei UI"),
             AcceptsReturn = false,
             Padding = new Thickness(2, 0, 2, 0),
+            Cursor = Cursors.IBeam,
         };
         box.KeyDown += (_, e) =>
         {
@@ -713,16 +718,66 @@ public sealed partial class CaptureOverlay
             else if (rk == Key.I) { e.Handled = true; ToggleItalic(); }
         };
 
-        Canvas.SetLeft(box, at.X);
-        Canvas.SetTop(box, at.Y);
-        _canvas.Children.Add(box);
+        // 输入区继续选字，外围留出真实可拖的命中区，不让 TextBox 吞掉边缘拖动。
+        var frame = new Border
+        {
+            Child = box, Padding = new Thickness(5), BorderThickness = new Thickness(1),
+            BorderBrush = OnBack, Background = Brushes.Transparent, Cursor = Cursors.SizeAll,
+        };
+        _textFrame = frame;
+        frame.PreviewMouseLeftButtonDown += (_, e) =>
+        {
+            if (!IsTextFrameEdge(e.GetPosition(frame), frame.RenderSize)) return;
+            _textDragFrom = e.GetPosition(_canvas);
+            _textFrameStart = new Point(Canvas.GetLeft(frame), Canvas.GetTop(frame));
+            _draggingText = frame.CaptureMouse();
+            e.Handled = true;
+        };
+        frame.MouseMove += (_, e) =>
+        {
+            if (!_draggingText) return;
+            if (e.LeftButton != MouseButtonState.Pressed) { frame.ReleaseMouseCapture(); return; }
+            PositionTextFrame(_textFrameStart + (e.GetPosition(_canvas) - _textDragFrom));
+            e.Handled = true;
+        };
+        frame.MouseLeftButtonUp += (_, e) =>
+        {
+            if (!_draggingText) return;
+            PositionTextFrame(_textFrameStart + (e.GetPosition(_canvas) - _textDragFrom));
+            frame.ReleaseMouseCapture();
+            box.Focus();
+            e.Handled = true;
+        };
+        frame.LostMouseCapture += (_, _) => _draggingText = false;
+        frame.SizeChanged += (_, _) => PositionTextFrame(new Point(Canvas.GetLeft(frame), Canvas.GetTop(frame)));
+        Canvas.SetLeft(frame, at.X);
+        Canvas.SetTop(frame, at.Y);
+        _canvas.Children.Add(frame);
         _textBox = box;
-        _textAt = at;
+        _textAt = at + new Vector(6, 6);
         SyncTextBoxStyle();
         box.Focus();
     }
 
     Point _textAt;
+    Border? _textFrame;
+    bool _draggingText;
+    Point _textDragFrom;
+    Point _textFrameStart;
+
+    internal static bool IsTextFrameEdge(Point at, Size size) =>
+        new Rect(size).Contains(at) && (at.X < 6 || at.Y < 6 || at.X >= size.Width - 6 || at.Y >= size.Height - 6);
+
+    void PositionTextFrame(Point at)
+    {
+        if (_textFrame is not { } frame) return;
+        var selection = _layer.Selection;
+        var x = Math.Clamp(at.X, selection.Left, Math.Max(selection.Left, selection.Right - frame.ActualWidth));
+        var y = Math.Clamp(at.Y, selection.Top, Math.Max(selection.Top, selection.Bottom - frame.ActualHeight));
+        Canvas.SetLeft(frame, x);
+        Canvas.SetTop(frame, y);
+        _textAt = new Point(x + 6, y + 6);
+    }
 
     /// <summary>
     /// 输入框的样子跟落到图上的一致，所见即所得。
@@ -742,7 +797,12 @@ public sealed partial class CaptureOverlay
     {
         if (_textBox is null) return;
         var text = _textBox.Text;
-        _canvas.Children.Remove(_textBox);
+        if (_textFrame is { } frame)
+        {
+            if (frame.IsMouseCaptured) frame.ReleaseMouseCapture();
+            _canvas.Children.Remove(frame);
+        }
+        _textFrame = null;
         _textBox = null;
 
         if (!string.IsNullOrWhiteSpace(text))

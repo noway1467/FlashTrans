@@ -175,6 +175,9 @@ sealed class CaptureSelectionLayer : FrameworkElement
     public event Action? SelectionChanged;
     /// <summary>文字工具点了某处，宿主窗口该在这儿摆一个输入框。</summary>
     public event Action<Point>? TextRequested;
+    public event Action<Point>? ColorHovered;
+    public event Action<Point>? ColorPicked;
+    public event Action? ColorPickingCancelled;
     public event Action? Cancelled;
     /// <summary>双击选区里面，等于「就用这块」。</summary>
     public event Action? Committed;
@@ -415,6 +418,13 @@ sealed class CaptureSelectionLayer : FrameworkElement
         Focus();
         var p = e.GetPosition(this);
 
+        if (Tool == CaptureTool.ColorPicker)
+        {
+            ColorPicked?.Invoke(p);
+            e.Handled = true;
+            return;
+        }
+
         // 双击选区里面 = 确认，跟按回车一样
         if (e.ClickCount == 2 && HasSelection && _sel.Contains(p) && Tool == CaptureTool.None)
         {
@@ -436,7 +446,8 @@ sealed class CaptureSelectionLayer : FrameworkElement
 
         if (Tool == CaptureTool.Text)
         {
-            TextRequested?.Invoke(p);
+            if (HitAnnotation(p) is TextAnnotation text) BeginMove(text, p);
+            else if (_sel.Contains(p)) TextRequested?.Invoke(p);
             return;
         }
 
@@ -471,14 +482,7 @@ sealed class CaptureSelectionLayer : FrameworkElement
             var hit = HitAnnotation(p);
             if (hit is not null)
             {
-                _grip = Grip.None;
-                SetActive(hit);
-                _moving = hit;
-                _moveFrom = p;
-                _moveExtent = hit.Extent;
-                _moved = default;
-                CaptureMouse();
-                InvalidateVisual();
+                BeginMove(hit, p);
                 return;
             }
             // 点在空处：手头那一笔不再选中，虚线框收掉
@@ -494,6 +498,13 @@ sealed class CaptureSelectionLayer : FrameworkElement
     protected override void OnMouseMove(MouseEventArgs e)
     {
         var p = e.GetPosition(this);
+
+        if (Tool == CaptureTool.ColorPicker)
+        {
+            Cursor = Cursors.Cross;
+            ColorHovered?.Invoke(p);
+            return;
+        }
 
         if (_creating)
         {
@@ -543,7 +554,8 @@ sealed class CaptureSelectionLayer : FrameworkElement
 
         // 没在拖：光标跟着底下是什么变，让人知道能拉还是能挪。
         // 顺序跟按下时的判断一致，否则光标显的是一回事、点下去做的是另一回事。
-        Cursor = Tool != CaptureTool.None ? Cursors.Pen
+        Cursor = Tool == CaptureTool.Text && HitAnnotation(p) is TextAnnotation ? Cursors.SizeAll
+            : Tool != CaptureTool.None ? Cursors.Pen
             : !HasSelection ? Cursors.Cross
             : _active is not null && HitHandle(_active, p) is { } hh ? HandleCursor(_active, hh)
             : HitAnnotation(p) is not null ? Cursors.SizeAll
@@ -582,10 +594,44 @@ sealed class CaptureSelectionLayer : FrameworkElement
 
     protected override void OnMouseRightButtonUp(MouseButtonEventArgs e)
     {
+        if (Tool == CaptureTool.ColorPicker)
+        {
+            ColorPickingCancelled?.Invoke();
+            e.Handled = true;
+            return;
+        }
         // 有标注先撤一笔，有选区就退回没选区，都没有才退出——右键当「后退一步」
         if (_items.Count > 0) Undo();
         else if (HasSelection) { _hasSel = false; _sel = default; SelectionChanged?.Invoke(); InvalidateVisual(); }
         else Cancelled?.Invoke();
+    }
+
+    void BeginMove(Annotation annotation, Point at)
+    {
+        _grip = Grip.None;
+        SetActive(annotation);
+        _moving = annotation;
+        _moveFrom = at;
+        _moveExtent = annotation.Extent;
+        _moved = default;
+        Cursor = Cursors.SizeAll;
+        CaptureMouse();
+        InvalidateVisual();
+    }
+
+    internal bool TrySampleColor(Point at, out Color color, out Point pixel)
+    {
+        color = default;
+        pixel = default;
+        if (at.X < 0 || at.Y < 0 || at.X >= ActualWidth || at.Y >= ActualHeight) return false;
+        var (sx, sy) = Scale();
+        var x = Math.Clamp((int)Math.Floor(at.X * sx), 0, _shot.Width - 1);
+        var y = Math.Clamp((int)Math.Floor(at.Y * sy), 0, _shot.Height - 1);
+        var offset = y * _shot.Stride + x * 4;
+        // 从冻结的截图取像素，不把蒙层、标注和取色提示自身混进颜色。
+        color = Color.FromRgb(_shot.Pixels[offset + 2], _shot.Pixels[offset + 1], _shot.Pixels[offset]);
+        pixel = new Point(x, y);
+        return true;
     }
 
     /// <summary>形状类标注的起点，拖动时一直拿它当对角。</summary>
@@ -817,7 +863,8 @@ sealed class CaptureSelectionLayer : FrameworkElement
 
         // 选中框画在裁剪外面：贴着选区边的那一笔，框会有一半在选区外，
         // 裁掉的话就只剩两条边，看着像画坏了。
-        if (Tool == CaptureTool.None && _drawing is null) DrawActiveFrame(dc);
+        if (_drawing is null && (Tool == CaptureTool.None || Tool == CaptureTool.Text && _active is TextAnnotation))
+            DrawActiveFrame(dc);
 
         dc.DrawRectangle(null, Edge, _sel);
         if (_creating) DrawGuides(dc, _sel, full);

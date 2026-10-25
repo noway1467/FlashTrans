@@ -10,8 +10,7 @@ public static partial class OcrService
 {
     // ---- RapidOCR（本地 ONNX 模型）----
     // 模型文件放在 exe 同目录 models\v6\ 下，随发布包分发（Apache-2.0）。
-    // PP-OCRv6 tiny：检测 1.7MB + 方向 1MB + 识别 4.3MB + 词表。实测一张
-    // 1449x678 截图约 1.8s（首次含加载），中英混排质量明显好于系统 OCR。
+    // tiny 识别词表不含日语假名；保留轻量检测器，识别必须搭配 small 及其原始词表。
     const string RapidModelsRoot = "models";
     const string RapidModelsVersion = "v6";
 
@@ -19,8 +18,8 @@ public static partial class OcrService
     [
         "PP-OCRv6_det_tiny.onnx",
         "ch_PP-LCNet_x0_25_textline_ori_cls_mobile.onnx",
-        "PP-OCRv6_rec_tiny.onnx",
-        "ppocrv6_tiny_dict.txt",
+        "PP-OCRv6_rec_small.onnx",
+        "ppocrv6_small_dict.txt",
     ];
 
     static readonly object RapidGate = new();
@@ -72,8 +71,8 @@ public static partial class OcrService
                 {
                     DetModelPath = Path.Combine(dir, "PP-OCRv6_det_tiny.onnx"),
                     ClsModelPath = Path.Combine(dir, "ch_PP-LCNet_x0_25_textline_ori_cls_mobile.onnx"),
-                    RecModelPath = Path.Combine(dir, "PP-OCRv6_rec_tiny.onnx"),
-                    KeysPath = Path.Combine(dir, "ppocrv6_tiny_dict.txt"),
+                    RecModelPath = Path.Combine(dir, "PP-OCRv6_rec_small.onnx"),
+                    KeysPath = Path.Combine(dir, "ppocrv6_small_dict.txt"),
                     DetMean = [127.5F, 127.5F, 127.5F],
                     DetStd = [127.5F, 127.5F, 127.5F],
                 });
@@ -89,7 +88,7 @@ public static partial class OcrService
 
     /// <summary>
     /// RapidOCR 识别路径：像素进 ONNX，按检测框坐标重组行，再走与系统 OCR
-    /// 相同的归一化后处理。多语言模型一次出中英日韩，不按 preferred 选语言。
+    /// 相同的归一化后处理。多语言模型识别中英日及拉丁语系，不按 preferred 选语言。
     /// </summary>
     static async Task<string> RecognizeRapidAsync(CapturedImage image, CancellationToken ct)
     {
