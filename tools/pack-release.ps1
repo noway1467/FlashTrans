@@ -1,5 +1,5 @@
 ﻿# 从最近一次构建清单打包，跳过原目录里保留的用户数据；允许替换同版本压缩包。
-param([string]$Version = '1.9.4')
+param([string]$Version = '1.9.5')
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'release-common.ps1')
 if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw '版本格式必须是 x.y.z。' }

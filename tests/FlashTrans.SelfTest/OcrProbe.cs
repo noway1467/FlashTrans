@@ -104,10 +104,15 @@ static class OcrProbe
         step("OCR：公式后处理不猜改变量、分数线与运算符", MathSafetyProbe);
         step("OCR：只在上下文明确时修正 l/1", ConfusableProbe);
         step("OCR：新开关能存下来", OcrSettingProbe);
+        step("设置：OCR 独立分类、即时保存与深浅主题布局", UiProbe.OcrSettingsPageProbe);
         step("OCR：快捷复制开关只改变快捷键动作", OcrShortcutProbe);
         step("OCR：按坐标保留列表换行与缩进", OcrLayoutProbe);
         step("OCR：多通道合并特殊符号但不污染正文", OcrSymbolMergeProbe);
         step("OCR：按文字脚本选择匹配的语言包", OcrLanguageScoreProbe);
+        step("OCR：RapidOCR 回退仅选择已安装的匹配脚本", OcrFallbackRoutingProbe);
+        step("OCR：自动回退调度、非空误读及取消（模拟识别输出）", OcrFallbackSelectionProbe);
+        step("OCR：非拉丁语言用真实系统包自动回退（缺包明确列出）", OcrFallbackRoundTrip);
+        step("OCR：指定未安装的回退语言不冒用其他语言包", OcrMissingFallbackProbe);
         step("OCR：Unicode、数字和单位归一化", OcrUnicodeProbe);
         step("OCR：空白截图不是缺少语言包", OcrBlankProbe);
         step("OCR：保留合法标点、单位和 Unicode 语义", OcrTextSafetyProbe);
@@ -842,7 +847,7 @@ static class OcrProbe
                                   : ja ? ("翻訳 OCR 1234", new[] { "翻訳", "OCR", "1234" }, "Yu Gothic")
                                        : ("Trans OCR 1234", new[] { "Trans", "OCR", "1234" }, "Segoe UI");
 
-        var text = OcrService.RecognizeAsync(Render(sample, 640, 120, 44, font), null)
+        var text = OcrService.RecognizeAsync(Render(sample, 640, 120, 44, font), null, engine: "system")
                              .GetAwaiter().GetResult();
         Console.WriteLine($"       引擎 {tag}，样本「{sample}」→ 识别「{text}」");
 
@@ -957,11 +962,13 @@ static class OcrProbe
         var s = AppSettings.CreateDefault();
         s.OcrCopyAndClose = true;
         s.OcrEngine = "rapid";
+        s.OcrLang = "ko-KR";
         var json = System.Text.Json.JsonSerializer.Serialize(s, SettingsJson.Default.AppSettings);
         var back = System.Text.Json.JsonSerializer.Deserialize(json, SettingsJson.Default.AppSettings)
                    ?? throw new InvalidOperationException("设置读回为空");
         if (!back.OcrCopyAndClose) throw new InvalidOperationException("OCR 快捷复制开关没有保存");
         if (back.OcrEngine != "rapid") throw new InvalidOperationException("OCR 识别引擎选择没有保存");
+        if (back.OcrLang != "ko-KR") throw new InvalidOperationException("OCR 识别语言没有保存");
     }
 
     static void OcrShortcutProbe()
@@ -1020,6 +1027,141 @@ static class OcrProbe
             var bad = OcrService.LanguageScoreForTest(text, other);
             if (good <= bad)
                 throw new InvalidOperationException($"{expected} 对「{text}」没有胜过 {other}：{good} <= {bad}");
+        }
+    }
+
+    static void OcrFallbackRoutingProbe()
+    {
+        string[] installed = ["zh-Hans-CN", "en-US", "ja-JP", "fr-FR", "ko-KR", "ru-RU", "ar-SA",
+            "th-TH", "el-GR", "he-IL", "hi-IN", "sr-Cyrl-RS", "sr-Latn-RS"];
+        string[] expected = ["ko-KR", "ru-RU", "ar-SA", "th-TH", "el-GR", "he-IL", "hi-IN", "sr-Cyrl-RS"];
+        foreach (var automatic in new string?[] { null, "", "auto", "AUTO" })
+            if (!OcrService.RapidFallbackLanguages(automatic, installed).ToHashSet().SetEquals(expected))
+                throw new InvalidOperationException("自动回退遗漏非拉丁语言或误纳中英日/拉丁语系");
+        foreach (var preferred in new[] { "ko", "RU", "ar", "th", "el", "he", "hi", "sr-Cyrl" })
+        {
+            var result = OcrService.RapidFallbackLanguages(preferred, installed);
+            if (result.Length != 1 || !result[0].StartsWith(preferred, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("指定语言没有匹配系统包：" + preferred);
+        }
+        foreach (var preferred in new[] { "zh-CN", "en", "ja", "fr", "sr-Latn", "uk" })
+            if (OcrService.RapidFallbackLanguages(preferred, installed).Length != 0)
+                throw new InvalidOperationException("支持的语言或缺包语言不应冒用其他包：" + preferred);
+        if (OcrService.RapidFallbackLanguages(null, []).Length != 0
+            || OcrService.RapidFallbackLanguages("ru-RU", ["ru-UA", "ru-RU"]).Single() != "ru-RU")
+            throw new InvalidOperationException("空列表或地区精确匹配不正确");
+
+        foreach (var (text, language) in new[]
+        {
+            ("한국어 문장", "ko-KR"), ("Привет мир", "ru-RU"), ("مرحبا بالعالم", "ar-SA"),
+            ("สวัสดีภาษาไทย", "th-TH"), ("γειά σου", "el-GR"), ("שלום עולם", "he-IL"),
+            ("नमस्ते भारत", "hi-IN"), ("Привет OCR 1234", "ru-RU"),
+        })
+        {
+            if (!OcrService.ShouldUseSystemFallback("田口口", text, language)
+                || !OcrService.ShouldUseSystemFallback("", text, language))
+                throw new InvalidOperationException("非空误读/空识别没有回退：" + language);
+        }
+        foreach (var (rapid, system, language) in new[]
+        {
+            ("", "", "ko"), ("", "1234", "ru"), ("", "Hello world", "ar"),
+            ("日语の测试", "日语测试", "ko"), ("hello", "한", "ko"),
+            ("English paragraph", "Hello world 한글", "ko"),
+            ("x + α + β = 10", "α β", "el"), ("Hello world", "Hello world", "en"),
+            ("A long and clearly recognized English paragraph", "Пр", "ru"),
+        })
+            if (OcrService.ShouldUseSystemFallback(rapid, system, language))
+                throw new InvalidOperationException("无脚本证据或弱候选不应覆盖原结果：" + system);
+    }
+
+    static void OcrFallbackSelectionProbe()
+    {
+        var calls = new List<string>();
+        var languages = OcrService.RapidFallbackLanguages(null, ["en-US", "zh-Hans-CN", "ko-KR", "ru-RU"]);
+        var chosen = OcrService.ChooseSystemFallbackAsync("田口口", languages, (tag, _) =>
+        {
+            calls.Add(tag);
+            return Task.FromResult(tag == "ko-KR" ? "한국어 문장 테스트" : "1234");
+        }, default).GetAwaiter().GetResult();
+        if (chosen != "ko-KR" || !calls.SequenceEqual(languages))
+            throw new InvalidOperationException("未探测已安装的非拉丁语言，或非空 Rapid 误读阻止了回退");
+        if (OcrService.ChooseSystemFallbackAsync("hello", languages, (_, _) => Task.FromResult("1234"), default)
+                .GetAwaiter().GetResult() is not null)
+            throw new InvalidOperationException("无脚本证据时覆盖了 Rapid 结果");
+        calls.Clear();
+        using var cancel = new CancellationTokenSource();
+        try
+        {
+            OcrService.ChooseSystemFallbackAsync("", languages, (tag, _) =>
+            {
+                calls.Add(tag);
+                cancel.Cancel();
+                return Task.FromResult("한국어 문장 테스트");
+            }, cancel.Token).GetAwaiter().GetResult();
+            throw new InvalidOperationException("取消后仍然返回了回退结果");
+        }
+        catch (OperationCanceledException) { }
+        if (calls.Count != 1) throw new InvalidOperationException("取消后仍在执行后续语言识别");
+    }
+
+    static void OcrFallbackRoundTrip()
+    {
+        foreach (var (tag, sample, font) in new[]
+        {
+            ("ko", "한국어 문장 테스트", "Malgun Gothic"),
+            ("ru", "Привет мир", "Segoe UI"),
+            ("ar", "مرحبا بالعالم", "Segoe UI"),
+            ("th", "สวัสดีภาษาไทย", "Leelawadee UI"),
+        })
+        {
+            if (OcrService.RapidFallbackLanguages(tag, OcrService.AvailableLanguages).Length == 0)
+            {
+                Console.WriteLine($"       未安装 {tag} OCR 包：未验证该语言真实像素识别，路由规则另有定向测试");
+                continue;
+            }
+            var image = Render(sample, 800, 120, 40, font);
+            foreach (var engine in new[] { "auto", "rapid" })
+            foreach (var preferred in new[] { "", tag })
+            {
+                var text = OcrService.RecognizeAsync(image, preferred, engine: engine).GetAwaiter().GetResult();
+                Console.WriteLine($"       {engine}/{(preferred == "" ? "自动" : preferred)}：{sample} → {text}");
+                if (Comparable(text) != Comparable(sample))
+                    throw new InvalidOperationException($"{tag} 系统回退识别与真值不同（仅忽略空白）");
+                var regions = OcrService.RecognizeRegionsAsync(image, preferred, engine: engine).GetAwaiter().GetResult();
+                if (Comparable(string.Join(" ", regions.Select(r => r.Text))) != Comparable(sample)
+                    || regions.Any(r => r.Bounds.IsEmpty || r.Bounds.Width <= 0 || r.Bounds.Height <= 0))
+                    throw new InvalidOperationException($"{tag} 打码识别未回退或丢失坐标");
+            }
+        }
+        static string Comparable(string value) => new(value.Where(c => !char.IsWhiteSpace(c)).ToArray());
+    }
+
+    static void OcrMissingFallbackProbe()
+    {
+        var missing = new[] { "ko", "ru", "ar", "th", "el", "he", "hi" }
+            .FirstOrDefault(tag => OcrService.RapidFallbackLanguages(tag, OcrService.AvailableLanguages).Length == 0);
+        if (missing is null)
+        {
+            Console.WriteLine("       系统已安装全部探针语言；缺包场景由候选列表规则测试覆盖");
+            return;
+        }
+        var image = Render("", 320, 100, 30, "Segoe UI");
+        foreach (var engine in new[] { "auto", "rapid", "system" })
+        {
+            ExpectMissing(() => OcrService.RecognizeAsync(image, missing, engine: engine).GetAwaiter().GetResult());
+            ExpectMissing(() => OcrService.RecognizeRegionsAsync(image, missing, engine: engine).GetAwaiter().GetResult());
+            try
+            {
+                OcrService.RecognizeAsync(image, missing, new CancellationToken(true), engine).GetAwaiter().GetResult();
+                throw new InvalidOperationException("取消请求没有优先退出");
+            }
+            catch (OperationCanceledException) { }
+        }
+        static void ExpectMissing(Action recognize)
+        {
+            try { recognize(); }
+            catch (InvalidOperationException ex) when (ex.Message.Contains("未安装", StringComparison.Ordinal)) { return; }
+            throw new InvalidOperationException("缺少指定语言包时没有明确报错");
         }
     }
 

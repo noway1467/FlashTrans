@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using FlashTrans.Interop;
 using RapidOcrNet;
 using SkiaSharp;
+using Windows.Globalization;
 
 namespace FlashTrans.Services;
 
@@ -86,15 +87,111 @@ public static partial class OcrService
         }
     }
 
-    /// <summary>
-    /// RapidOCR 识别路径：像素进 ONNX，按检测框坐标重组行，再走与系统 OCR
-    /// 相同的归一化后处理。多语言模型识别中英日及拉丁语系，不按 preferred 选语言。
-    /// </summary>
-    static async Task<string> RecognizeRapidAsync(CapturedImage image, CancellationToken ct)
+    // 文本提取和打码共用路由，但打码仍用原始检测框，不能从纠偏后的文字猜坐标。
+    static async Task<(List<Token>? RapidTokens, string? SystemLanguage)> RouteRecognitionAsync(
+        CapturedImage image, string? preferred, string? engine, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
+        var fallbackLanguages = RapidFallbackLanguages(preferred, AvailableLanguages);
+        if (SystemFallbackScript(preferred) is not null)
+        {
+            if (fallbackLanguages.Length == 0)
+                throw new InvalidOperationException($"未安装「{DisplayName(preferred!)}」的 Windows OCR 语言包。"
+                    + "请在 Windows 设置 → 时间和语言 → 语言选项中安装「光学字符识别」，然后重启闪译；不会改用其他语言包冒充识别。");
+            return (null, fallbackLanguages[0]);
+        }
+        if (string.Equals(engine, "system", StringComparison.OrdinalIgnoreCase)) return (null, preferred);
+        if (!string.Equals(engine, "rapid", StringComparison.OrdinalIgnoreCase) && RapidEngine() is null)
+            return (null, preferred);
+
         var tokens = await RecognizeRapidTokensAsync(image, ct).ConfigureAwait(false);
-        if (tokens.Count == 0) return "";
-        return NormalizeOcrText(CleanCandidate(LayoutTokens(tokens, cjk: true, rightToLeft: false)));
+        if (fallbackLanguages.Length == 0) return (tokens, null);
+
+        // Rapid 不认识的文字也可能被误读成非空中文，不能只在空结果时才探测。
+        // 只试已安装且不在模型能力内的脚本，每种语言一遍，选中后才跑系统增强通道。
+        var maxDimension = (int)Windows.Media.Ocr.OcrEngine.MaxImageDimension;
+        if (image.Width > maxDimension || image.Height > maxDimension) return (tokens, null);
+        var scaled = image.ScaleUpForOcr(640, 8, maxDimension);
+        var language = await ChooseSystemFallbackAsync(ComposeRapidText(tokens), fallbackLanguages,
+            async (tag, token) => EngineFor(tag) is { } ocr
+                ? await RecognizeBitmapAsync(ocr, scaled, tag, token).ConfigureAwait(false) : "", ct)
+            .ConfigureAwait(false);
+        return language is not null ? (null, language) : (tokens, null);
+    }
+
+    internal static async Task<string?> ChooseSystemFallbackAsync(string rapidText, IEnumerable<string> languages,
+        Func<string, CancellationToken, Task<string>> recognize, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        RecognitionCandidate? best = null;
+        foreach (var tag in languages)
+        {
+            ct.ThrowIfCancellationRequested();
+            var text = await recognize(tag, ct).ConfigureAwait(false);
+            if (!ShouldUseSystemFallback(rapidText, text, tag)) continue;
+            if (best is null || Score(text, tag) > Score(best.Value.Text, best.Value.Language))
+                best = new RecognitionCandidate(text, tag);
+        }
+        ct.ThrowIfCancellationRequested();
+        return best?.Language;
+    }
+
+    static string ComposeRapidText(List<Token> tokens) =>
+        NormalizeOcrText(CleanCandidate(LayoutTokens(tokens, cjk: true, rightToLeft: false)));
+
+    internal static string[] RapidFallbackLanguages(string? preferred, IEnumerable<string> installed)
+    {
+        var candidates = installed.Where(tag => SystemFallbackScript(tag) is not null)
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+        if (IsAutomaticLanguage(preferred))
+            return candidates.OrderBy(tag => tag, StringComparer.OrdinalIgnoreCase).ToArray();
+        var script = SystemFallbackScript(preferred);
+        if (script is null) return [];
+        return candidates.Where(tag => tag.Split('-')[0].Equals(preferred!.Split('-')[0],
+                StringComparison.OrdinalIgnoreCase) && SystemFallbackScript(tag) == script)
+            .OrderByDescending(tag => tag.Equals(preferred, StringComparison.OrdinalIgnoreCase))
+            .ThenBy(tag => tag, StringComparer.OrdinalIgnoreCase).Take(1).ToArray();
+    }
+
+    static string? SystemFallbackScript(string? tag)
+    {
+        if (IsAutomaticLanguage(tag)) return null;
+        try
+        {
+            // 用系统语言元数据区分 sr-Cyrl / sr-Latn，不把整个语言前缀一刀切。
+            return new Language(tag!).Script switch
+            {
+                "Kore" or "Hang" => "Hang",
+                "Cyrl" => "Cyrl",
+                "Arab" => "Arab",
+                "Thai" => "Thai",
+                "Grek" => "Grek",
+                "Hebr" => "Hebr",
+                "Deva" => "Deva",
+                _ => null,
+            };
+        }
+        catch (ArgumentException) { return null; }
+    }
+
+    internal static bool ShouldUseSystemFallback(string rapidText, string systemText, string language)
+    {
+        var script = SystemFallbackScript(language);
+        var letters = systemText.Count(char.IsLetter);
+        var matching = systemText.Count(c => char.IsLetter(c) && (script switch
+        {
+            "Hang" => IsHangul(c),
+            "Cyrl" => IsCyrillic(c),
+            "Arab" => IsArabic(c),
+            "Thai" => IsThai(c),
+            "Grek" => IsGreek(c),
+            "Hebr" => IsHebrew(c),
+            "Deva" => IsDevanagari(c),
+            _ => false,
+        }));
+        // 单个异文字符、公式变量或少量噪声不足以切换引擎；比较结果而不是假定包名即真值。
+        return matching >= 2 && matching * 5 >= letters * 3
+            && Score(systemText, language) > Score(rapidText);
     }
 
     static readonly SemaphoreSlim RapidRecognitionGate = new(1, 1);
@@ -106,7 +203,7 @@ public static partial class OcrService
         if (engine is null)
             throw new InvalidOperationException(
                 "RapidOCR 模型没就位：" + (RapidModelsHint() ?? "初始化失败") +
-                "。去「设置 → 文字识别」改回系统 OCR，或补上模型文件。");
+                "。去「设置 → OCR」改回系统 OCR，或补上模型文件。");
 
         ct.ThrowIfCancellationRequested();
         // Detect 是 CPU 密集的同步调用，挪到线程池免得卡住界面线程。

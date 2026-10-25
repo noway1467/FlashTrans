@@ -14,8 +14,8 @@ namespace FlashTrans.Services;
 internal sealed record OcrTextRegion(string Text, Rect Bounds);
 
 /// <summary>
-/// 文字识别，走系统自带的 Windows.Media.Ocr——不需要联网，也不用额外装东西。
-/// 能识别哪些语言取决于系统装了哪些「语言 → 可选功能 → 光学字符识别」包。
+/// 本地文字识别：RapidOCR 处理中英日及拉丁语系，其他脚本回退 Windows.Media.Ocr。
+/// 系统引擎能识别哪些语言取决于已安装的「光学字符识别」包，不上传截图。
 /// </summary>
 public static partial class OcrService
 {
@@ -56,7 +56,12 @@ public static partial class OcrService
         try
         {
             if (!string.Equals(engine, "system", StringComparison.OrdinalIgnoreCase)
-                && RapidModelsPresent && RapidEngine() is not null) return;
+                && SystemFallbackScript(preferred) is null
+                && RapidModelsPresent && RapidEngine() is not null)
+            {
+                foreach (var tag in RapidFallbackLanguages(preferred, AvailableLanguages)) _ = EngineFor(tag);
+                return;
+            }
             foreach (var tag in RecognitionLanguages(preferred)) _ = EngineFor(tag);
         }
         catch (Exception ex) { Log.Warn("预加载本地 OCR 失败：" + ex.Message); }
@@ -103,16 +108,11 @@ public static partial class OcrService
                                                      string? engine = null)
     {
         ct.ThrowIfCancellationRequested();
-        // RapidOCR 有本地模型时优先（auto），或用户点名要 rapid；显式 system 或
-        // Rapid 模型缺失时走系统 Windows OCR。auto 是默认值，老调用不传也成立。
-        var useRapid = engine switch
-        {
-            not null when string.Equals(engine, "system", StringComparison.OrdinalIgnoreCase) => false,
-            not null when string.Equals(engine, "rapid", StringComparison.OrdinalIgnoreCase) => true,
-            _ => RapidEngine() is not null,
-        };
-        if (useRapid)
-            return await RecognizeRapidAsync(image, ct).ConfigureAwait(false);
+        var (rapidTokens, systemLanguage) = await RouteRecognitionAsync(image, preferred, engine, ct)
+            .ConfigureAwait(false);
+        if (rapidTokens is not null)
+            return ComposeRapidText(rapidTokens);
+        preferred = systemLanguage;
 
         var engines = RecognitionLanguages(preferred)
             .Select(tag => (Tag: tag, Engine: EngineFor(tag)))
@@ -203,15 +203,12 @@ public static partial class OcrService
         CapturedImage image, string? preferred, CancellationToken ct = default, string? engine = null)
     {
         ct.ThrowIfCancellationRequested();
-        var useRapid = engine switch
-        {
-            not null when engine.Equals("system", StringComparison.OrdinalIgnoreCase) => false,
-            not null when engine.Equals("rapid", StringComparison.OrdinalIgnoreCase) => true,
-            _ => RapidEngine() is not null,
-        };
-        if (useRapid)
-            return (await RecognizeRapidTokensAsync(image, ct).ConfigureAwait(false))
+        var (rapidTokens, systemLanguage) = await RouteRecognitionAsync(image, preferred, engine, ct)
+            .ConfigureAwait(false);
+        if (rapidTokens is not null)
+            return rapidTokens
                 .Select(t => new OcrTextRegion(t.Text, new Rect(t.Left, t.Top, t.Width, t.Height))).ToArray();
+        preferred = systemLanguage;
 
         var engines = RecognitionLanguages(preferred).Select(EngineFor).Where(e => e is not null).ToArray();
         if (engines.Length == 0) throw new InvalidOperationException(NoEngineHint());
@@ -659,8 +656,8 @@ public static partial class OcrService
             OcrEngine? engine = null;
             try
             {
-                engine = OcrEngine.TryCreateFromLanguage(new Language(tag))
-                      ?? OcrEngine.TryCreateFromUserProfileLanguages();
+                // 不能把用户首选语言的结果冒充为 tag，否则脚本探测会选错回退语言。
+                engine = OcrEngine.TryCreateFromLanguage(new Language(tag));
             }
             catch (Exception ex)
             {

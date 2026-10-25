@@ -110,7 +110,7 @@ static class UiProbe
         step("结果区：聚合边到边（占位 → 乱序填充 → 收尾）", ProgressiveRender);
 
         // 设置窗口的每个分类都单独展开一次
-        foreach (var tab in new[] { "general", "sources", "languages", "capture", "hotkeys", "appearance", "about" })
+        foreach (var tab in new[] { "general", "sources", "languages", "capture", "ocr", "hotkeys", "appearance", "about" })
         {
             var key = tab;
             step($"设置窗口：{key} 页", () =>
@@ -1521,6 +1521,68 @@ static class UiProbe
             s.OcrResultWidth = oldWidth;
             s.OcrResultHeight = oldHeight;
             SettingsService.Instance.Save();
+        }
+    }
+
+    internal static void OcrSettingsPageProbe()
+    {
+        var s = SettingsService.Instance.Current;
+        var before = (s.OcrEngine, s.OcrLang, s.OcrCopyText, s.OcrCopyAndClose);
+        try
+        {
+            foreach (var theme in new[] { AppTheme.Dark, AppTheme.Light })
+            {
+                ThemeService.ApplyTheme(theme);
+                var w = new SettingsWindow(new AppHost()) { Width = 620, Height = 440 };
+                try
+                {
+                    Probe(w, close: false);
+                    w.SelectTab("capture");
+                    Pump();
+                    if (Descendants<TextBlock>(w).Any(t => t.Text == "识别引擎"))
+                        throw new InvalidOperationException("OCR 控件仍留在截图页底部");
+                    var page = Descendants<ScrollViewer>(w).OrderByDescending(v => v.ActualWidth).First();
+                    ScrollToProbeOffset(page, "截图");
+                    s.OcrLang = "ko-KR";
+                    var nav = Descendants<ToggleButton>(w).SingleOrDefault(b => (b.Content as string) == "OCR")
+                        ?? throw new InvalidOperationException("缺少 OCR 独立导航");
+                    nav.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left)
+                    {
+                        RoutedEvent = UIElement.PreviewMouseLeftButtonDownEvent,
+                    });
+                    Pump();
+                    if (nav.IsChecked != true || page.VerticalOffset > 1)
+                        throw new InvalidOperationException("点击 OCR 导航没有切到页首");
+                    var engine = Descendants<ComboBox>(w).Single(b => b.Items.OfType<ComboBoxItem>()
+                        .Any(i => (i.Tag as string) == "rapid"));
+                    engine.SelectedItem = engine.Items.OfType<ComboBoxItem>().Single(i => (i.Tag as string) == "rapid");
+                    if (s.OcrEngine != "rapid") throw new InvalidOperationException("OCR 引擎修改没有即时生效");
+                    var origin = engine.TransformToAncestor(page).Transform(new Point());
+                    if (origin.X < 0 || origin.Y < 0 || origin.X + engine.ActualWidth > page.ActualWidth
+                        || origin.Y + engine.ActualHeight > page.ActualHeight)
+                        throw new InvalidOperationException("最小窗口下 OCR 引擎控件被裁切或不在首屏");
+                    var language = Descendants<ComboBox>(w).Single(b => !ReferenceEquals(b, engine));
+                    if ((string)((ComboBoxItem)language.SelectedItem).Tag != "ko-KR")
+                        throw new InvalidOperationException("已保存的语言在缺包时被错误显示为自动");
+                    language.SelectedIndex = 0;
+                    if (s.OcrLang != "") throw new InvalidOperationException("无法从已保存语言恢复自动检测");
+                    foreach (var box in Descendants<CheckBox>(w)) box.IsChecked = true;
+                    if (!s.OcrCopyText || !s.OcrCopyAndClose)
+                        throw new InvalidOperationException("OCR 复制选项没有迁入独立页面");
+                    w.SelectTab("capture");
+                    w.SelectTab("ocr");
+                    Pump();
+                    if (Descendants<CheckBox>(w).Any(b => b.IsChecked != true))
+                        throw new InvalidOperationException("切页后 OCR 设置丢失");
+                }
+                finally { Close(w); }
+            }
+        }
+        finally
+        {
+            (s.OcrEngine, s.OcrLang, s.OcrCopyText, s.OcrCopyAndClose) = before;
+            SettingsService.Instance.Save();
+            ThemeService.Apply(s);
         }
     }
 

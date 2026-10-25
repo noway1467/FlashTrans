@@ -103,7 +103,7 @@ public sealed partial class SettingsWindow
             ? "启动项没能写进注册表，可能被安全软件拦截了"
             : null;
 
-    /// <summary>截图页。自己一栏：动作默认值、画笔、蒙层里的那些键、识别语言。</summary>
+    /// <summary>截图页：动作默认值、画笔及蒙层快捷键；识别选项在独立 OCR 页。</summary>
     UIElement BuildCapturePage()
     {
         var page = Page();
@@ -197,8 +197,13 @@ public sealed partial class SettingsWindow
             CaptureKeyField("长截图", S.CkLongShot, v => S.CkLongShot = v),
             CaptureKeyField("录制动图", S.CkRecord, v => S.CkRecord = v));
 
-        Section(page, "文字识别", BuildOcrRows());
+        return page;
+    }
 
+    UIElement BuildOcrPage()
+    {
+        var page = Page();
+        Section(page, "OCR · 文字识别", BuildOcrRows());
         return page;
     }
 
@@ -206,13 +211,13 @@ public sealed partial class SettingsWindow
     {
         var engineItems = new List<(string, string)>
         {
-            ("自动（优先用 RapidOCR，缺模型时退回系统 OCR）", "auto"),
+            ("自动（RapidOCR + 系统回退）", "auto"),
             ("系统 OCR（Windows 语言包）", "system"),
-            ("RapidOCR（本地模型，中英日）", "rapid"),
+            ("RapidOCR（其他脚本用系统）", "rapid"),
         };
         var rows = new List<UIElement>
         {
-            Field("识别引擎", Combo(engineItems, S.OcrEngine, v => S.OcrEngine = v, width: 260)),
+            Field("识别引擎", Combo(engineItems, S.OcrEngine, v => S.OcrEngine = v, width: double.NaN)),
         };
 
         // 两个引擎都没有时，直接告诉缺什么、去哪补
@@ -220,21 +225,24 @@ public sealed partial class SettingsWindow
         {
             rows.Add(Hint("识别文字需要系统 OCR 语言包或 RapidOCR 模型，现在都没有。" + OcrService.NoEngineHint()
                           + (OcrService.RapidModelsHint() is { } hint ? "\n" + hint : "")));
-            return rows.ToArray();
         }
 
-        if (OcrService.IsAvailable)
-        {
-            var langs = new List<(string, string)> { ("自动检测（尝试已安装语言）", "") };
-            langs.AddRange(OcrService.AvailableLanguages.Select(t => (OcrService.DisplayName(t), t)));
-            rows.Add(Field("系统 OCR 语言", Combo(langs, S.OcrLang, v => S.OcrLang = v, width: 230)));
-        }
-        else
+        var selectedLanguage = string.IsNullOrWhiteSpace(S.OcrLang)
+            || S.OcrLang.Equals(Languages.Auto, StringComparison.OrdinalIgnoreCase) ? "" : S.OcrLang;
+        var langs = new List<(string, string)> { ("自动检测（尝试已安装语言）", "") };
+        langs.AddRange(OcrService.AvailableLanguages.Select(t => (OcrService.DisplayName(t), t)));
+        // 便携配置可能来自另一台机器；不能显示“自动”却继续使用已失效的指定语言。
+        if (selectedLanguage.Length > 0 && !langs.Any(l => l.Item2 == selectedLanguage))
+            langs.Add(($"已保存：{OcrService.DisplayName(selectedLanguage)}", selectedLanguage));
+        rows.Add(Field("识别语言", Combo(langs, selectedLanguage, v => S.OcrLang = v, width: double.NaN)));
+        if (!OcrService.IsAvailable)
         {
             rows.Add(Hint("没有系统 OCR 语言包；RapidOCR 自动识别中英日及拉丁语系，不需要安装日语语言包。"));
         }
 
-        rows.Add(Hint("自动引擎优先使用 RapidOCR small 本地识别模型（中英日及拉丁语系），缺模型才回退系统 OCR；语言选项仅对系统 OCR 生效。韩语等其他语言请使用对应的 Windows OCR 语言包。截图不上传。"));
+        rows.Add(Hint("中英日及拉丁语系优先用 RapidOCR small；自动引擎在模型不可用时使用系统 OCR。截图始终在本机处理，不上传。"));
+        rows.Add(Hint("自动检测会尝试已安装的韩语、俄语、阿拉伯语、泰语等系统 OCR 包，根据文字脚本回退；选择 RapidOCR 时也生效。手动指定这些语言可直接使用对应系统包，不受自动判断影响。"));
+        rows.Add(Hint("其他语言需先在 Windows「语言选项」中安装「光学字符识别」并重启闪译。短词、混合语言可能判断不准，可手动选语言；超过系统 OCR 尺寸上限的图片不做自动回退。"));
         rows.Add(Hint("数学字符和上下标按普通文字识别并保留，结果需核对；复杂分式、矩阵、手写公式及转 LaTeX 尚不支持。不会通过猜改变量或补运算符伪造公式。"));
         rows.Add(Check("「识别并翻译」时把原文也复制到剪贴板", S.OcrCopyText, on => S.OcrCopyText = on));
         rows.Add(Check("按「识别文字」快捷键后直接复制并关闭", S.OcrCopyAndClose, on => S.OcrCopyAndClose = on));
@@ -801,10 +809,15 @@ public sealed partial class SettingsWindow
     {
         var page = Page();
         var ver = typeof(SettingsWindow).Assembly.GetName().Version?.ToString(3) ?? "1.0.0";
+        const string repositoryUrl = "https://github.com/noway1467/FlashTrans";
 
         Section(page, "闪译 FlashTrans",
             UiKit.Text($"版本 {ver} · WPF / .NET 9 · 本机 OCR / PDF 文本层处理", 12.5, "Text"),
             Hint("聚合免费与自带额度的翻译接口，标签页切换、失败自动降级、划词与快捷键唤出。"),
+            UiKit.Row(8,
+                UiKit.Text("GitHub 仓库", 12.5, "Text"),
+                SmallButton("打开仓库 ↗", () => OpenUrl(repositoryUrl), "GhostBtn")),
+            Hint("源码、Release 与问题反馈：github.com/noway1467/FlashTrans"),
             Hint("配置文件：" + SettingsService.Instance.ConfigPath),
             Hint("API 密钥使用 Windows DPAPI 加密后保存，只有当前 Windows 账户能解开。"));
 

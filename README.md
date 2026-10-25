@@ -2,7 +2,7 @@
 
 Windows 划词翻译、文件翻译与截图工具。
 
-## 下载安装 [![Release](https://img.shields.io/badge/release-v1.9.4-0088cc)](https://github.com/noway1467/FlashTrans/releases/latest)
+## 下载安装 [![Release](https://img.shields.io/badge/release-v1.9.5-0088cc)](https://github.com/noway1467/FlashTrans/releases/latest)
 
 点击上方版本徽章下载，解压后运行 `FlashTrans.exe`。默认启用免费翻译源，无需填写 API Key。
 
@@ -21,7 +21,7 @@ Windows 划词翻译、文件翻译与截图工具。
 | 文件翻译 | EPUB、TXT、Markdown、DOCX、文本层 PDF；支持断点续译、术语表、双语 HTML 和任务历史。 |
 | 截图标注 | 区域截图、标注、原图取色、复制、保存和屏幕贴图；文字编辑框可直接拖动边缘。贴图支持缩放、透明度和鼠标穿透。 |
 | 长截图与录制 | 原像素分片预览、适应宽度与缩放；录制 WebP / GIF / MP4。 |
-| 本地 OCR | RapidOCR small 支持中英日及拉丁语系；可切换 Windows OCR，支持提取文字和识别后翻译。 |
+| 本地 OCR | RapidOCR small 支持中英日及拉丁语系；其他脚本自动尝试已安装的 Windows OCR 包，支持提取文字和识别后翻译。 |
 | 敏感内容打码 | 本地检测敏感文字、自定义关键词、手动实心遮挡。 |
 | 快速启动 | 自选程序、快捷方式和文件夹，支持搜索、改名、排序及快捷键呼出。 |
 | 外观设置 | 深浅主题、字体、字号、透明度、紧凑模式和窗口位置记忆。 |
@@ -56,7 +56,9 @@ Windows 划词翻译、文件翻译与截图工具。
 ### OCR 能力边界
 
 - 默认使用 tiny 检测器 + small 识别模型。旧 tiny 识别词表没有日语假名，不能通过后处理可靠修好；新模型与词表来源、哈希见 `src/FlashTrans/models/v6/README.txt`。
-- 日语识别不依赖 Windows 日语语言包。设置中的「系统 OCR 语言」仅影响系统引擎；韩语等其他语言需相应系统语言包，不宣称 small 支持全部语言。
+- OCR 选项位于「设置 → OCR」，不再放在截图页底部；原有引擎、语言及复制选项沿用，无需重新配置。
+- 日语识别不依赖 Windows 日语语言包。「自动」和「RapidOCR」都会试识别已安装的韩语、俄语、阿拉伯语、泰语等系统包，根据结果中的脚本证据回退；即使 RapidOCR 误读出了非空文字，也会尝试。没有安装的语言包不会被调用，不联网识别或自动下载。
+- 「识别语言」默认自动检测；手动指定这些非 RapidOCR 语言时直接使用对应系统包，缺包会明确提示，不会冒用中文或英文包。安装 Windows「光学字符识别」可选功能后需重启闪译。短词、混合语言可能判断不准，可手动指定语言；超过 Windows OCR 尺寸上限的图片不做自动回退。
 - 普通公式字符、上下标和变量尽量原样保留，不猜改变量或补运算符。复杂二维分式、矩阵、手写公式及转 LaTeX 尚不支持，数学结果必须核对。
 
 
@@ -87,7 +89,7 @@ dotnet build .\src\FlashTrans\FlashTrans.csproj -c Release --nologo
 ```powershell
 .\tools\publish.cmd fast   # 自包含版本
 .\tools\publish.cmd small  # 依赖 .NET 9 Desktop Runtime
-powershell -NoProfile -File .\tools\pack-release.ps1 -Version 1.9.4
+powershell -NoProfile -File .\tools\pack-release.ps1 -Version 1.9.5
 ```
 
 发布目录位于 `dist/`，压缩包位于 `dist/release/`。发布会原位更新已有目录，并保留便携数据和用户文件；压缩仅收录本次构建的程序文件。

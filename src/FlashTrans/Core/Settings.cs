@@ -260,9 +260,9 @@ public sealed class AppSettings
     public string CkRecord { get; set; } = "Ctrl+R";
 
     // ------- 截图 OCR -------
-    /// <summary>识别语言。空 = 自动比较系统已安装的 OCR 语言包。</summary>
+    /// <summary>识别语言。空 = 自动探测；RapidOCR 不支持的脚本使用对应已安装系统包。</summary>
     public string OcrLang { get; set; } = "";
-    /// <summary>截图 OCR 用的识别引擎：auto = 有本地模型用 RapidOCR，否则系统 OCR；system = 系统 OCR；rapid = RapidOCR。</summary>
+    /// <summary>auto = 优先 RapidOCR，缺模型用系统；rapid = 本地模型；两者均按脚本回退。system = 仅系统 OCR。</summary>
     public string OcrEngine { get; set; } = "auto";
     /// <summary>识别结果窗口上次关闭时的宽高。</summary>
     public double OcrResultWidth { get; set; } = 520;
