@@ -59,7 +59,7 @@ public sealed partial class SettingsWindow
             Field("排除应用", Input(string.Join("; ", S.ExcludedApplications),
                 v => S.ExcludedApplications = ApplicationExclusions.Normalize(v.Split([';', '；', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries)),
                 "例如 KeePass.exe; notepad.exe"),
-                "按进程名匹配，分号分隔。禁用这些应用的划词（含快捷键）及剪贴板自动翻译；不影响手动输入和截图。"));
+                "进程名用分号分隔；停用这些应用的划词和剪贴板自动翻译，不影响手动输入与截图。"));
 
         Section(page, "弹窗",
             Field("出现位置", Combo<PopupPlace>(
@@ -130,12 +130,12 @@ public sealed partial class SettingsWindow
             v => { S.CaptureRedactionKeywords = v; S.CaptureRedactionKeywordsLocked = false; }, "多个关键词用分号分隔");
         keywords.MaxLength = SensitiveContentDetector.MaxKeywordsLength;
         Section(page, "敏感内容打码",
-            Hint("仅普通静态截图。本地识别手机号、邮箱、身份证、常见银行卡和带明确标签的密码/密钥；按整行或整块实心遮挡，仍需人工补漏。不识别人脸、二维码，不保护长截图或录制。"),
+            Hint("本地检测敏感文字，导出前请核对。仅限静态截图，不覆盖人脸、二维码、长截图和录制。"),
             Check("框选后自动检测敏感内容", S.CaptureAutoRedact, on => S.CaptureAutoRedact = on,
-                "默认关闭；也可随时点击截图工具条的「自动打码」。检测失败会阻止导出，直到重试或明确改为手动检查。"),
+                "也可从工具条手动检测；检测失败后须重试或切换手动检查，才能导出。"),
             Field("自定义关键词", keywords,
-                unreadableKeywords ? "关键词无法解密，请重新填写或点击下方清空；在处理前自动检测不会放行。"
-                    : "最多 4096 字符，分号分隔、忽略英文大小写；保存在本机配置时加密，换 Windows 账户后需重填。"),
+                unreadableKeywords ? "关键词无法解密，请重填或清空后再检测。"
+                    : "分号分隔，最多 4096 字符，不区分大小写。本机加密保存，换 Windows 账户需重填。"),
             LeftRow(SmallButton("清空关键词", () =>
             {
                 S.CaptureRedactionKeywords = ""; S.CaptureRedactionKeywordsLocked = false;
@@ -143,7 +143,7 @@ public sealed partial class SettingsWindow
             })));
 
         Section(page, "录制动图",
-            Hint($"录的是实时画面，最高 60 fps；实际帧率会随选区大小和机器性能变化。高流畅场景优先选 WebP / MP4，部分 GIF 播放器会限速。标注不会进去。`Esc` 停下并保存，`{RecordHud.PauseHotkey}` 暂停，`{RecordHud.CancelHotkey}` 取消（录制和编码中都能按，不留文件）。"),
+            Hint($"Esc 保存 · {RecordHud.PauseHotkey} 暂停 · {RecordHud.CancelHotkey} 取消。录制不含标注；流畅画面优先用 WebP / MP4。"),
             Field("格式", Combo(new (string, RecordFormat)[]
             {
                 ("WebP", RecordFormat.Webp),
@@ -161,7 +161,8 @@ public sealed partial class SettingsWindow
                     v => S.RecordMaxSeconds = (int)Math.Round(v), v => $"{v:F0} 秒")));
 
         Section(page, "画笔",
-            Hint("画的时候按 `Ctrl+滚轮` 改粗细，按住 `Shift` 出正方形 / 正圆 / 直线。"),
+            Hint("Ctrl+滚轮调整粗细；按住 Shift 绘制正方形、正圆或直线。"),
+            Field("标注颜色", BuildCaptureColorPicker(), "文字、矩形、圆、箭头和画笔共用；截图工具条也可随时换色。"),
             Field("画笔粗细", SliderRow(S.CapturePenWidth,
                     CaptureLimits.MinPenWidth, CaptureLimits.MaxPenWidth, 1,
                     v => S.CapturePenWidth = v, v => $"{v:F0} px")),
@@ -170,7 +171,7 @@ public sealed partial class SettingsWindow
                     v => S.CaptureMosaicBlock = v, "px")));
 
         Section(page, "文字标注",
-            Hint("打字时 `Ctrl+B` 加粗、`Ctrl+I` 斜体。"),
+            Hint("Ctrl+B 加粗 · Ctrl+I 斜体。"),
             Field("字号", SliderRow(S.CaptureFontSize,
                     CaptureLimits.MinFontSize, CaptureLimits.MaxFontSize, 1,
                     v => S.CaptureFontSize = v, v => $"{v:F0} px")),
@@ -207,6 +208,28 @@ public sealed partial class SettingsWindow
         return page;
     }
 
+    UIElement BuildCaptureColorPicker()
+    {
+        var chip = new Border { Width = 18, Height = 18, CornerRadius = new CornerRadius(4),
+            BorderThickness = new Thickness(1) };
+        chip.SetResourceReference(Border.BorderBrushProperty, "BorderStrong");
+        var label = UiKit.Text(S.CapturePenColor, 12);
+        var button = new Button { Name = "CaptureColorSetting", Height = 30,
+            Padding = new Thickness(8, 0, 8, 0), Content = UiKit.Row(8, chip, label, UiKit.Text("选择颜色", 11, "TextDim")),
+            HorizontalAlignment = HorizontalAlignment.Left };
+        button.SetResourceReference(StyleProperty, "OutlineBtn");
+        System.Windows.Media.Color Current() => ThemeService.Parse(S.CapturePenColor, System.Windows.Media.Colors.Red);
+        chip.Background = new System.Windows.Media.SolidColorBrush(Current());
+        AnnotationColorPalette.Attach(button, Current, color =>
+        {
+            S.CapturePenColor = AnnotationColorPalette.ToHex(color);
+            label.Text = S.CapturePenColor;
+            chip.Background = new System.Windows.Media.SolidColorBrush(color);
+            Save();
+        });
+        return button;
+    }
+
     UIElement[] BuildOcrRows()
     {
         var engineItems = new List<(string, string)>
@@ -223,8 +246,9 @@ public sealed partial class SettingsWindow
         // 两个引擎都没有时，直接告诉缺什么、去哪补
         if (!OcrService.IsAvailable && !OcrService.RapidModelsPresent)
         {
-            rows.Add(Hint("识别文字需要系统 OCR 语言包或 RapidOCR 模型，现在都没有。" + OcrService.NoEngineHint()
-                          + (OcrService.RapidModelsHint() is { } hint ? "\n" + hint : "")));
+            var missing = Description("缺少识别引擎：请补齐 RapidOCR 模型，或安装 Windows 光学字符识别语言包。", "Danger");
+            missing.ToolTip = OcrService.NoEngineHint() + "\n" + OcrService.RapidModelsHint();
+            rows.Add(missing);
         }
 
         var selectedLanguage = string.IsNullOrWhiteSpace(S.OcrLang)
@@ -237,15 +261,14 @@ public sealed partial class SettingsWindow
         rows.Add(Field("识别语言", Combo(langs, selectedLanguage, v => S.OcrLang = v, width: double.NaN)));
         if (!OcrService.IsAvailable)
         {
-            rows.Add(Hint("没有系统 OCR 语言包；RapidOCR 自动识别中英日及拉丁语系，不需要安装日语语言包。"));
+            rows.Add(Hint("未安装系统 OCR 语言包；RapidOCR 仍可识别中英日及拉丁语系。"));
         }
 
-        rows.Add(Hint("中英日及拉丁语系优先用 RapidOCR small；自动引擎在模型不可用时使用系统 OCR。截图始终在本机处理，不上传。"));
-        rows.Add(Hint("自动检测会尝试已安装的韩语、俄语、阿拉伯语、泰语等系统 OCR 包，根据文字脚本回退；选择 RapidOCR 时也生效。手动指定这些语言可直接使用对应系统包，不受自动判断影响。"));
-        rows.Add(Hint("其他语言需先在 Windows「语言选项」中安装「光学字符识别」并重启闪译。短词、混合语言可能判断不准，可手动选语言；超过系统 OCR 尺寸上限的图片不做自动回退。"));
-        rows.Add(Hint("数学字符和上下标按普通文字识别并保留，结果需核对；复杂分式、矩阵、手写公式及转 LaTeX 尚不支持。不会通过猜改变量或补运算符伪造公式。"));
-        rows.Add(Check("「识别并翻译」时把原文也复制到剪贴板", S.OcrCopyText, on => S.OcrCopyText = on));
-        rows.Add(Check("按「识别文字」快捷键后直接复制并关闭", S.OcrCopyAndClose, on => S.OcrCopyAndClose = on));
+        rows.Add(Hint("RapidOCR 支持中英日及拉丁语系，其他语言依赖系统包。全程本地识别，不上传截图。"));
+        rows.Add(Hint("其他语言：在 Windows「语言选项」安装「光学字符识别」后重启。识别不准可手动选语言。"));
+        rows.Add(Hint("公式结果请核对；不支持复杂分式、矩阵、手写公式或转 LaTeX。"));
+        rows.Add(Check("识别并翻译时复制原文", S.OcrCopyText, on => S.OcrCopyText = on));
+        rows.Add(Check("识别文字快捷键：复制后关闭", S.OcrCopyAndClose, on => S.OcrCopyAndClose = on));
         return rows.ToArray();
     }
 
@@ -498,7 +521,7 @@ public sealed partial class SettingsWindow
         var page = Page();
 
         Section(page, "全局快捷键",
-            Hint("点输入框后直接按组合键，Backspace 清除。普通键至少要带一个 Ctrl / Alt / Shift / Win；F1 到 F12 可以单独使用。"),
+            Hint("点击后按组合键，Backspace 清除。普通键需搭配 Ctrl / Alt / Shift / Win，F1–F12 可单用。"),
             HotkeyField("翻译选中文本", S.HkTranslateSelection, v => S.HkTranslateSelection = v, HotkeyAction.TranslateSelection),
             HotkeyField("显示 / 隐藏主窗口", S.HkToggleWindow, v => S.HkToggleWindow = v, HotkeyAction.ToggleWindow),
             HotkeyField("翻译剪贴板内容", S.HkTranslateClipboard, v => S.HkTranslateClipboard = v, HotkeyAction.TranslateClipboard),
@@ -813,13 +836,13 @@ public sealed partial class SettingsWindow
 
         Section(page, "闪译 FlashTrans",
             UiKit.Text($"版本 {ver} · WPF / .NET 9 · 本机 OCR / PDF 文本层处理", 12.5, "Text"),
-            Hint("聚合免费与自带额度的翻译接口，标签页切换、失败自动降级、划词与快捷键唤出。"),
+            Hint("划词翻译、多源对比、本地 OCR 与截图标注。"),
             UiKit.Row(8,
                 UiKit.Text("GitHub 仓库", 12.5, "Text"),
                 SmallButton("打开仓库 ↗", () => OpenUrl(repositoryUrl), "GhostBtn")),
             Hint("源码、Release 与问题反馈：github.com/noway1467/FlashTrans"),
             Hint("配置文件：" + SettingsService.Instance.ConfigPath),
-            Hint("API 密钥使用 Windows DPAPI 加密后保存，只有当前 Windows 账户能解开。"));
+            Hint("API 密钥本机加密保存，仅当前 Windows 账户可解密。"));
 
         Section(page, "维护",
             UiKit.Row(8,

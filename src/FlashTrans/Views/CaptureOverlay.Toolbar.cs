@@ -22,9 +22,7 @@ public sealed partial class CaptureOverlay
     static readonly Brush BarDim = Frozen(new SolidColorBrush(Color.FromRgb(0xA8, 0xAE, 0xB8)));
     static readonly Brush OnBack = Frozen(new SolidColorBrush(Color.FromRgb(0x4C, 0x8D, 0xFF)));
 
-    /// <summary>八个可选颜色，够用又不至于摆一排。</summary>
-    static readonly string[] Palette =
-        ["#FF3B30", "#FF9500", "#FFCC00", "#34C759", "#4C8DFF", "#AF52DE", "#FFFFFF", "#1C1C1E"];
+    System.Windows.Controls.Primitives.Popup? _colorPalette;
 
     // 工具图标自己画。用 ✎ ▩ 这类字符的话，系统会拿彩色 emoji 字体去凑，
     // 一排线条图标里混进个彩色铅笔很难看，而且换台机器字体不同就变样。
@@ -319,50 +317,33 @@ public sealed partial class CaptureOverlay
         VerticalAlignment = VerticalAlignment.Center,
     };
 
-    /// <summary>颜色：八个小方块，点一下换。当前那个描个白边。</summary>
+    /// <summary>常用色与任意色统一从色板选择，不另开窗口抢走截图焦点。</summary>
     UIElement ColorPicker()
     {
-        var row = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-        var swatches = new List<(string Hex, Border Box)>();
-
-        foreach (var hex in Palette)
+        var chip = new Border
         {
-            var fill = new SolidColorBrush(ParseColor(hex));
-            fill.Freeze();
-            var box = new Border
-            {
-                Width = 14,
-                Height = 14,
-                Background = fill,
-                CornerRadius = new CornerRadius(3),
-                Margin = new Thickness(2, 0, 0, 0),
-                BorderThickness = new Thickness(2),
-                BorderBrush = Brushes.Transparent,
-                Cursor = Cursors.Hand,
-                ToolTip = hex,
-            };
-            box.MouseLeftButtonUp += (_, e) =>
-            {
-                e.Handled = true;
-                _layer.PenColor = ParseColor(hex);
-                S.CapturePenColor = hex;
-                SettingsService.Instance.Save();
-                // 顺手把刚画完的那一笔也改成这个颜色：画完才想换色是常事，
-                // 不然得撤销重画。没画过东西时这句什么也不做。
-                _layer.Restyle();
-                // 正在打字时框里的字也跟着换色
-                SyncTextBoxStyle();
-                foreach (var (h, b) in swatches)
-                    b.BorderBrush = h == hex ? Brushes.White : Brushes.Transparent;
-            };
-            swatches.Add((hex, box));
-            row.Children.Add(box);
-        }
-
-        var cur = S.CapturePenColor;
-        foreach (var (h, b) in swatches)
-            if (string.Equals(h, cur, StringComparison.OrdinalIgnoreCase)) b.BorderBrush = Brushes.White;
-        return row;
+            Width = 16, Height = 16, CornerRadius = new CornerRadius(4), BorderBrush = BarEdge,
+            BorderThickness = new Thickness(1), Background = new SolidColorBrush(_layer.PenColor),
+        };
+        var text = new TextBlock { Text = "颜色 ▾", FontSize = 11.5, Foreground = BarText };
+        var button = MakeBtn(UiKit.Row(6, chip, text), "标注颜色：预设、色板或 HEX", () => { }, 12, double.NaN);
+        button.Name = "AnnotationColorButton";
+        _colorPalette = AnnotationColorPalette.Attach(button, () => _layer.PenColor, color =>
+        {
+            _layer.PenColor = color;
+            S.CapturePenColor = AnnotationColorPalette.ToHex(color);
+            SettingsService.Instance.Save();
+            _layer.Restyle();
+            SyncTextBoxStyle();
+            chip.Background = new SolidColorBrush(color);
+            button.ToolTip = "标注颜色 " + S.CapturePenColor;
+        }, dark: true);
+        _colorPalette.Closed += (_, _) =>
+        {
+            if (_closing) return;
+            if (_textBox is not null) _textBox.Focus(); else _layer.Focus();
+        };
+        return button;
     }
 
     // ------------------------------------------------------------- 第二行：参数
@@ -836,6 +817,8 @@ public sealed partial class CaptureOverlay
 
     void OnKey(object sender, KeyEventArgs e)
     {
+        // 色板内的字母、回车和方向键不能触发截图动作。
+        if (_colorPalette?.IsOpen == true) return;
         if (_redactionState == RedactionState.Scanning)
         {
             e.Handled = true;

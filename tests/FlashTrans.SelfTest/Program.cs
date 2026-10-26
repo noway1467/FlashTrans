@@ -69,6 +69,15 @@ static class Program
             return _fail == 0 ? 0 : 1;
         }
 
+        if (args.Contains("--only-settings"))
+        {
+            var index = Array.IndexOf(args, "--preview-dir");
+            SettingsProbe.RunAll(Step);
+            SettingsProbe.RunUi(Step, index >= 0 && index + 1 < args.Length ? args[index + 1] : null);
+            app.Shutdown();
+            return _fail == 0 ? 0 : 1;
+        }
+
         if (args.Contains("--only-documents"))
         {
             DocumentProbe.RunAll(Step);
@@ -158,6 +167,7 @@ static class Program
         ProtectionProbe.RunAll(Step);
         WindowStartupProbe.RunAll(Step);
         QuickLaunchProbe.RunAll(Step);
+        SettingsProbe.RunUi(Step);
         var host = new AppHost();
         UiProbe.RunAll(host, Step);
         CaptureQualityProbe.RunAll(Step);

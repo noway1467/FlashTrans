@@ -20,6 +20,7 @@ static class CaptureInteractionProbe
         step("取色：多 DPI 原像素、边界及 HEX/RGB 格式", SamplePixels);
         step("文字：真实输入框边缘直接拖动，提交后无需退出文字工具", TextDrag);
         step("取色：真实按钮、鼠标复制、Shift 格式与右键返回", ColorCopy);
+        step("标注色板：真实拖选、HEX、取消、文字与图形换色及保存", AnnotationPalette);
     }
 
     static CapturedImage Pattern(int width, int height)
@@ -110,6 +111,8 @@ static class CaptureInteractionProbe
         var frame = Field<Border>(window, "_textFrame");
         var start = new Point(Canvas.GetLeft(frame), Canvas.GetTop(frame));
         Drag(frame, new Point(2, frame.ActualHeight / 2), new Vector(70, 40));
+        if (Math.Abs(Canvas.GetLeft(frame) - start.X - 70) >= 1)
+            Preview(window, "text-drag-failure.png");
         Check(Math.Abs(Canvas.GetLeft(frame) - start.X - 70) < 1
             && Math.Abs(Canvas.GetTop(frame) - start.Y - 40) < 1,
             $"编辑框位移错误：起点={start}，终点={Canvas.GetLeft(frame)},{Canvas.GetTop(frame)}，活动={window.IsActive}，可见={window.IsVisible}");
@@ -170,6 +173,80 @@ static class CaptureInteractionProbe
         finally { if (sequence != 0) clipboard.Restore(sequence); }
     }
 
+    static void AnnotationPalette()
+    {
+        var settings = SettingsService.Instance.Current;
+        var oldColor = settings.CapturePenColor;
+        try
+        {
+            WithWindow((window, layer) =>
+            {
+                Call(window, "ToggleTool", CaptureTool.Text);
+                Click(layer, new Point(90, 75));
+                var editor = Field<TextBox>(window, "_textBox");
+                editor.Text = "自选颜色 Color";
+                var button = Field<Panel>(window, "_actionRow").Children.OfType<Button>()
+                    .Single(b => b.Name == "AnnotationColorButton");
+                AnnotationColorPalette Open()
+                {
+                    Click(button, new Point(button.ActualWidth / 2, button.ActualHeight / 2));
+                    var popup = Field<System.Windows.Controls.Primitives.Popup>(window, "_colorPalette");
+                    Check(popup.IsOpen && window.IsActive && window.IsVisible, "打开色板导致截图退出或未显示");
+                    return (AnnotationColorPalette)popup.Child;
+                }
+                var panel = Open();
+                var hex = Field<TextBox>(panel, "_hex");
+                var surface = Field<Grid>(panel, "_surface");
+                Drag(surface, new Point(20, 20), new Vector(70, 30));
+                Check(AnnotationColorPalette.TryParseHex(hex.Text, out _) && hex.Text != oldColor, "拖选没有更新颜色");
+                Check(settings.CapturePenColor == oldColor, "未确认已改动设置");
+                hex.Text = "#bad";
+                var apply = ((StackPanel)panel.Child).Children.OfType<StackPanel>().Last().Children.OfType<Button>().First();
+                Click(apply, new Point(20, 15));
+                Check(Field<System.Windows.Controls.Primitives.Popup>(window, "_colorPalette").IsOpen, "非法颜色仍被应用");
+                hex.Text = "#18a7b5";
+                PreviewPalette(panel);
+                Click(apply, new Point(20, 15));
+                var expected = Color.FromRgb(0x18, 0xA7, 0xB5);
+                Check(layer.PenColor == expected && ((SolidColorBrush)editor.Foreground).Color == expected
+                    && editor.IsKeyboardFocusWithin && layer.AnnotationCount == 0, "文字编辑换色或焦点恢复失败");
+                Call(window, "CommitTextInput");
+                Check(layer.Items.OfType<TextAnnotation>().Single().Color == expected, "文字提交后颜色丢失");
+
+                var rectangle = new RectAnnotation { Bounds = new Rect(300, 100, 120, 80), Color = Colors.Red };
+                layer.AddAnnotation(rectangle);
+                panel = Open();
+                Field<TextBox>(panel, "_hex").Text = "#2367DE";
+                Key(0x0D, true); Key(0x0D, false);
+                Check(window.IsVisible && rectangle.Color == Color.FromRgb(0x23, 0x67, 0xDE), "色板回车误导出或未改变图形");
+                var saved = SettingsService.Instance.Current.CapturePenColor;
+                panel = Open();
+                Field<TextBox>(panel, "_hex").Text = "#ABCDEF";
+                Key(0x1B, true); Key(0x1B, false);
+                Check(window.IsVisible && !Field<System.Windows.Controls.Primitives.Popup>(window, "_colorPalette").IsOpen
+                    && settings.CapturePenColor == saved && layer.Selection == new Rect(30, 30, 700, 270), "Esc 取消破坏颜色或选区");
+                SettingsService.Instance.Load();
+                Check(SettingsService.Instance.Current.CapturePenColor == "#2367DE", "自选颜色没有保存到磁盘");
+                // 恢复原实例供 WithWindow 的 finally 还原测试开关。
+                SettingsService.Instance.Apply(settings);
+            });
+        }
+        finally { settings.CapturePenColor = oldColor; SettingsService.Instance.Apply(settings); }
+    }
+
+    static void PreviewPalette(AnnotationColorPalette panel)
+    {
+        if (Environment.GetEnvironmentVariable("FLASHTRANS_CAPTURE_PREVIEW") is not { Length: > 0 } dir) return;
+        panel.UpdateLayout(); Pump();
+        var bitmap = new System.Windows.Media.Imaging.RenderTargetBitmap((int)panel.ActualWidth, (int)panel.ActualHeight,
+            96, 96, PixelFormats.Pbgra32);
+        bitmap.Render(panel);
+        var png = new System.Windows.Media.Imaging.PngBitmapEncoder();
+        png.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bitmap));
+        using var stream = System.IO.File.Create(System.IO.Path.Combine(dir, "annotation-palette.png"));
+        png.Save(stream);
+    }
+
     static T Field<T>(object target, string name) => (T)target.GetType().GetField(name, Private)!.GetValue(target)!;
     static void Call(object target, string name, params object[] args) => target.GetType().GetMethod(name, Private)!.Invoke(target, args);
     static void Check(bool condition, string message) { if (!condition) throw new InvalidOperationException(message); }
@@ -197,16 +274,16 @@ static class CaptureInteractionProbe
         finally { timer.Stop(); }
     }
 
-    static void Pointer(UIElement element, Point at)
+    static void MouseAt(Point screen, uint flags)
     {
-        var screen = element.PointToScreen(at);
-        Check(Win32.SetCursorPos((int)Math.Round(screen.X), (int)Math.Round(screen.Y)), "无法设置测试鼠标位置");
-        Pump();
-    }
-
-    static void MouseButton(uint flags)
-    {
-        var input = new INPUT { type = Win32.INPUT_MOUSE, u = new InputUnion { mi = new MOUSEINPUT { dwFlags = flags } } };
+        // 位置和按键放进同一条原生输入，避免 SetCursorPos 与按下之间的等待发生鼠标漂移。
+        var desktop = ScreenCapture.VirtualScreen();
+        var input = new INPUT { type = Win32.INPUT_MOUSE, u = new InputUnion { mi = new MOUSEINPUT
+        {
+            dx = (int)Math.Floor((screen.X - desktop.Left + .5) * 65536 / (desktop.Right - desktop.Left)),
+            dy = (int)Math.Floor((screen.Y - desktop.Top + .5) * 65536 / (desktop.Bottom - desktop.Top)),
+            dwFlags = flags | 0x0001 | 0x8000 | 0x4000,
+        } } };
         Check(Win32.SendInput(1, [input], Marshal.SizeOf<INPUT>()) == 1, "鼠标测试输入被系统拒绝");
         Pump();
     }
@@ -221,21 +298,20 @@ static class CaptureInteractionProbe
 
     static void Click(UIElement element, Point at, bool right = false)
     {
-        Pointer(element, at);
-        try { MouseButton(right ? 0x0008u : 0x0002u); }
-        finally { MouseButton(right ? 0x0010u : 0x0004u); }
+        var screen = element.PointToScreen(at);
+        try { MouseAt(screen, right ? 0x0008u : 0x0002u); }
+        finally { MouseAt(screen, right ? 0x0010u : 0x0004u); }
     }
 
     static void Drag(UIElement element, Point at, Vector delta)
     {
-        Pointer(element, at);
+        var start = element.PointToScreen(at);
         var target = element.PointToScreen(at + delta);
         try
         {
-            MouseButton(0x0002);
-            Win32.SetCursorPos((int)Math.Round(target.X), (int)Math.Round(target.Y));
-            Pump();
+            MouseAt(start, 0x0002);
+            MouseAt(target, 0);
         }
-        finally { MouseButton(0x0004); }
+        finally { MouseAt(target, 0x0004); }
     }
 }

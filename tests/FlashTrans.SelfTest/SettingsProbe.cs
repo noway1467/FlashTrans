@@ -1,7 +1,13 @@
 using System.Reflection;
 using System.Text.Json;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using FlashTrans.Core;
 using FlashTrans.Services;
+using FlashTrans.Views;
 
 namespace FlashTrans.SelfTest;
 
@@ -13,6 +19,130 @@ namespace FlashTrans.SelfTest;
 /// </summary>
 static class SettingsProbe
 {
+    public static void RunUi(Action<string, Action> step, string? preview = null)
+    {
+        step("设置：深浅主题与最小窗口下说明最多两行", () => DescriptionLayout(preview));
+        step("设置：OCR 控件切页、最小窗口与配置保存", UiProbe.OcrSettingsPageProbe);
+        step("设置：标注色板深浅主题、自选色保存与重新打开", () => ColorSetting(preview));
+        step("色板：HEX 校验与 HSV 边界", () =>
+        {
+            foreach (var value in new[] { "#000000", "#FFFFFF", "#18a7b5", "123456" })
+                if (!AnnotationColorPalette.TryParseHex(value, out var color) || color.A != 255)
+                    throw new InvalidOperationException("合法颜色未识别：" + value);
+            foreach (var value in new[] { "", "#FFF", "#12345G", "##123456", "#00112233" })
+                if (AnnotationColorPalette.TryParseHex(value, out _)) throw new InvalidOperationException("接受了非法颜色：" + value);
+            if (AnnotationColorPalette.FromHsv(360, 1, 1) != Colors.Red
+                || AnnotationColorPalette.FromHsv(120, 1, 1) != Colors.Lime
+                || AnnotationColorPalette.FromHsv(240, 1, 1) != Colors.Blue
+                || AnnotationColorPalette.FromHsv(180, 0, 1) != Colors.White
+                || AnnotationColorPalette.FromHsv(180, 1, 0) != Colors.Black)
+                throw new InvalidOperationException("HSV 边界颜色错误");
+        });
+    }
+
+    static void ColorSetting(string? preview)
+    {
+        var original = SettingsService.Instance.Current;
+        try
+        {
+            SettingsService.Instance.Apply(AppSettings.CreateDefault());
+            foreach (var theme in new[] { AppTheme.Dark, AppTheme.Light })
+            {
+                ThemeService.ApplyTheme(theme);
+                var window = new SettingsWindow(new AppHost());
+                try
+                {
+                    window.SelectTab("capture"); window.Show(); window.UpdateLayout(); Pump();
+                    var button = Descendants<Button>(window).Single(b => b.Name == "CaptureColorSetting");
+                    button.BringIntoView(); Pump();
+                    button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Pump();
+                    var palette = PresentationSource.CurrentSources.Cast<PresentationSource>()
+                        .Where(s => s.RootVisual is not null).SelectMany(s => Descendants<AnnotationColorPalette>(s.RootVisual)).Single();
+                    var hex = Descendants<TextBox>(palette).Single();
+                    hex.Text = "#37B9A6";
+                    var apply = Descendants<Button>(palette).Single(b => b.Name == "ApplyColor");
+                    apply.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Pump();
+                    if (SettingsService.Instance.Current.CapturePenColor != "#37B9A6")
+                        throw new InvalidOperationException("设置页未应用自选颜色");
+                    SettingsService.Instance.Load();
+                    window.SelectTab("ocr"); window.SelectTab("capture"); Pump();
+                    if (!Descendants<TextBlock>(window).Any(t => t.Text == "#37B9A6"))
+                        throw new InvalidOperationException("切页或读取配置丢失颜色");
+                    button = Descendants<Button>(window).Single(b => b.Name == "CaptureColorSetting");
+                    button.BringIntoView(); Pump();
+                    if (preview is not null) Snapshot(window, System.IO.Path.Combine(preview, $"settings-color-{theme}.png"));
+                }
+                finally { window.Close(); }
+            }
+        }
+        finally { SettingsService.Instance.Apply(original); ThemeService.Apply(original); }
+    }
+
+    static void DescriptionLayout(string? preview)
+    {
+        var original = SettingsService.Instance.Current;
+        try
+        {
+            var settings = AppSettings.CreateDefault();
+            settings.QuickLaunchItems = [new() { Name = "Visual Studio Code", Path = @"C:\Apps\Code.exe" },
+                new() { Name = "项目资料", Path = @"D:\Workspace\FlashTrans", IsFolder = true }];
+            SettingsService.Instance.Apply(settings);
+            foreach (var theme in new[] { AppTheme.Dark, AppTheme.Light })
+            foreach (var width in new[] { 620d, 720d })
+            {
+                ThemeService.ApplyTheme(theme);
+                var window = new SettingsWindow(new AppHost()) { Width = width, Height = 560, ShowActivated = false };
+                try
+                {
+                    window.Show();
+                    foreach (var tab in new[] { "general", "sources", "languages", "capture", "ocr", "quicklaunch", "hotkeys", "appearance", "about" })
+                    {
+                        window.SelectTab(tab); Pump(); window.UpdateLayout();
+                        foreach (var text in Descendants<TextBlock>(window).Where(t => Equals(t.Tag, "SettingsDescription")))
+                        {
+                            if (text.ActualHeight > 32.1 || text.MaxHeight != 32 || text.ActualWidth <= 0)
+                                throw new InvalidOperationException($"{tab} 说明布局越界：{text.Text}");
+                            // 不靠省略号伪装精简：常规页面文案在最窄窗口也必须完整显示。
+                            if (tab == "about" && text.Text.StartsWith("配置文件：")) continue;
+                            var full = new TextBlock { Text = text.Text, FontFamily = text.FontFamily, FontSize = text.FontSize,
+                                TextWrapping = TextWrapping.Wrap, LineHeight = 16, LineStackingStrategy = LineStackingStrategy.BlockLineHeight };
+                            full.Measure(new Size(text.ActualWidth, double.PositiveInfinity));
+                            if (full.DesiredSize.Height > 32.1)
+                                throw new InvalidOperationException($"{tab} 说明仍超过两行（宽 {text.ActualWidth}）：{text.Text}");
+                        }
+                        if (preview is not null && tab is "capture" or "ocr" or "quicklaunch")
+                            Snapshot(window, System.IO.Path.Combine(preview, $"settings-{tab}-{theme}-{width}.png"));
+                    }
+                }
+                finally { window.Close(); }
+            }
+        }
+        finally { SettingsService.Instance.Apply(original); ThemeService.Apply(original); }
+    }
+
+    static void Snapshot(Window window, string path)
+    {
+        System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
+        var bitmap = new RenderTargetBitmap((int)window.ActualWidth, (int)window.ActualHeight, 96, 96, PixelFormats.Pbgra32);
+        bitmap.Render(window);
+        var png = new PngBitmapEncoder(); png.Frames.Add(BitmapFrame.Create(bitmap));
+        using var stream = System.IO.File.Create(path); png.Save(stream);
+    }
+
+    static void Pump()
+    {
+        var frame = new DispatcherFrame();
+        Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Background, () => frame.Continue = false);
+        Dispatcher.PushFrame(frame);
+    }
+
+    static IEnumerable<T> Descendants<T>(DependencyObject root) where T : DependencyObject
+    {
+        if (root is T match) yield return match;
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+            foreach (var child in Descendants<T>(VisualTreeHelper.GetChild(root, i))) yield return child;
+    }
+
     public static void RunAll(Action<string, Action> step)
     {
         step("设置：每个字段都能存下来再读回来", RoundTrip);

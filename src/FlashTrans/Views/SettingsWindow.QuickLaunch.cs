@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
 using FlashTrans.Core;
 using FlashTrans.Interop;
 using FlashTrans.Services;
@@ -12,36 +13,62 @@ public sealed partial class SettingsWindow
     UIElement BuildQuickLaunchPage()
     {
         var page = Page();
-        Section(page, "呼出面板",
+        var heading = new DockPanel { Margin = new Thickness(0, 0, 0, 16) };
+        var open = SmallButton("打开面板", _host.ToggleQuickLaunch, "OutlineBtn");
+        open.Height = 30;
+        DockPanel.SetDock(open, Dock.Right);
+        heading.Children.Add(open);
+        var intro = new StackPanel();
+        intro.Children.Add(UiKit.Text("常用项目，一键直达", 18, "Text", FontWeights.SemiBold));
+        intro.Children.Add(Hint("集中收纳程序、快捷方式和文件夹。"));
+        heading.Children.Add(intro);
+        page.Children.Add(heading);
+        Section(page, "快捷键",
             HotkeyField("呼出 / 隐藏快速启动", S.HkQuickLaunch, v => S.HkQuickLaunch = v, HotkeyAction.QuickLaunch),
-            Hint("点输入框直接按组合键；冲突时保留原设置，Backspace 清除。也可从托盘菜单打开。"));
+            Hint("点击后按组合键，Backspace 清除；也可从托盘打开。"));
 
-        Button ActionButton(string title, Action action)
+        Button ActionButton(string title, Geometry icon, Action action, string style)
         {
-            var button = new Button { Content = title, Padding = new Thickness(12, 5, 12, 5) };
-            button.SetResourceReference(StyleProperty, "GhostBtn");
+            var glyph = UiKit.Icon(icon, 12);
+            var label = UiKit.Text(title, 11.5);
+            var button = new Button { Content = UiKit.Row(6, glyph, label), Height = 30, Padding = new Thickness(10, 0, 10, 0) };
+            button.SetResourceReference(StyleProperty, style);
+            glyph.SetBinding(System.Windows.Shapes.Shape.StrokeProperty, new System.Windows.Data.Binding("Foreground") { Source = button });
+            label.SetBinding(TextBlock.ForegroundProperty, new System.Windows.Data.Binding("Foreground") { Source = button });
             button.Click += (_, _) => action();
             return button;
         }
 
         var actions = UiKit.Row(8,
-            ActionButton("添加程序", () => PickQuickLaunchTarget(folder: false)),
-            ActionButton("添加文件夹", () => PickQuickLaunchTarget(folder: true)),
-            ActionButton("打开面板", _host.ToggleQuickLaunch));
-        Section(page, "启动列表", actions, Hint("可修改显示名称、上下排序；移除只影响列表，不删除原程序或文件夹。"));
+            ActionButton("添加程序", UiKit.IconPlus, () => PickQuickLaunchTarget(folder: false), "PrimaryBtn"),
+            ActionButton("添加文件夹", UiKit.IconFolder, () => PickQuickLaunchTarget(folder: true), "OutlineBtn"));
+        var listHeader = new DockPanel { Margin = new Thickness(0, 18, 0, 10) };
+        DockPanel.SetDock(actions, Dock.Right);
+        listHeader.Children.Add(actions);
+        listHeader.Children.Add(UiKit.Text($"启动列表 · {S.QuickLaunchItems.Count}", 12, "TextDim", FontWeights.SemiBold));
+        page.Children.Add(listHeader);
+        var items = new StackPanel();
 
         if (S.QuickLaunchItems.Count == 0)
         {
-            var hint = Hint("还没有启动项目，点击上方按钮选择添加。");
-            if (hint is FrameworkElement element) element.Margin = new Thickness(2, 16, 2, 0);
-            page.Children.Add(hint);
+            var empty = new StackPanel { Margin = new Thickness(0, 26, 0, 26), HorizontalAlignment = HorizontalAlignment.Center };
+            empty.Children.Add(QuickLaunchWindow.EntryIcon(folder: false));
+            var title = UiKit.Text("添加你的第一个启动项目", 13, "Text", FontWeights.SemiBold);
+            title.Margin = new Thickness(0, 12, 0, 4);
+            empty.Children.Add(title);
+            empty.Children.Add(Hint("支持多选程序、快捷方式或文件夹。"));
+            items.Children.Add(empty);
         }
         foreach (var item in S.QuickLaunchItems)
         {
             var index = S.QuickLaunchItems.IndexOf(item);
-            var row = new Grid();
+            var row = new Grid { Margin = new Thickness(12, 10, 10, 10) };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(46) });
             row.ColumnDefinitions.Add(new ColumnDefinition());
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var icon = QuickLaunchWindow.EntryIcon(item.IsFolder);
+            icon.HorizontalAlignment = HorizontalAlignment.Left;
+            row.Children.Add(icon);
             var text = new StackPanel { Margin = new Thickness(0, 0, 8, 0) };
             var name = new TextBox { Name = "QuickLaunchName", Text = item.Name, MaxLength = 80,
                 Height = 28, Padding = new Thickness(7, 0, 7, 0), VerticalContentAlignment = VerticalAlignment.Center,
@@ -53,11 +80,12 @@ public sealed partial class SettingsWindow
                 Save();
             };
             text.Children.Add(name);
-            var path = UiKit.Text((item.IsFolder ? "文件夹 · " : "程序 · ") + item.Path, 11, "TextDim");
+            var path = UiKit.Text(item.Path, 10.5, "TextDim");
             path.TextTrimming = TextTrimming.CharacterEllipsis;
             path.ToolTip = item.Path;
             path.Margin = new Thickness(1, 5, 0, 0);
             text.Children.Add(path);
+            Grid.SetColumn(text, 1);
             row.Children.Add(text);
 
             void Move(int delta)
@@ -81,13 +109,24 @@ public sealed partial class SettingsWindow
                 SelectTab("quicklaunch");
             });
             var tools = UiKit.Row(2, up, down, remove);
+            foreach (var button in new[] { up, down, remove })
+            {
+                button.Focusable = true;
+                System.Windows.Automation.AutomationProperties.SetName(button, button.ToolTip.ToString());
+            }
             tools.VerticalAlignment = VerticalAlignment.Center;
-            Grid.SetColumn(tools, 1);
+            Grid.SetColumn(tools, 2);
             row.Children.Add(tools);
-            var card = UiKit.Card(row, new Thickness(10));
-            card.Margin = new Thickness(0, 8, 0, 0);
-            page.Children.Add(card);
+            if (index > 0)
+            {
+                var divider = new Border { Height = 1, Margin = new Thickness(58, 0, 12, 0) };
+                divider.SetResourceReference(Border.BackgroundProperty, "Border");
+                items.Children.Add(divider);
+            }
+            items.Children.Add(row);
         }
+        page.Children.Add(UiKit.Card(items, new Thickness(0)));
+        page.Children.Add(Hint("点击名称改名；箭头排序。移除仅影响列表，不删除文件。"));
         return page;
     }
 

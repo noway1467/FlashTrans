@@ -35,32 +35,33 @@ public sealed partial class SettingsWindow
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(148) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
-        var text = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-        text.Children.Add(UiKit.Text(label, 12.5, "Text"));
-        if (hint is not null)
-        {
-            var h = UiKit.Text(hint, 10.5, "TextFaint", wrap: true);
-            h.Margin = new Thickness(0, 2, 8, 0);
-            text.Children.Add(h);
-        }
+        var text = UiKit.Text(label, 12.5, "Text");
         UiKit.SetGrid(text, col: 0);
         grid.Children.Add(text);
 
         if (control is FrameworkElement c) c.HorizontalAlignment = HorizontalAlignment.Stretch;
         UiKit.SetGrid(control, col: 1);
         grid.Children.Add(control);
-        return grid;
+        if (hint is null) return grid;
+        // 说明占整行，避免挤在窄标签栏里变成一长列。
+        var field = new StackPanel();
+        field.Children.Add(grid);
+        var description = Description(hint);
+        description.Margin = new Thickness(0, 4, 0, 0);
+        field.Children.Add(description);
+        return field;
     }
 
     static CheckBox Check(string label, bool value, Action<bool> onChange, string? hint = null)
     {
-        var box = new CheckBox { IsChecked = value, FontSize = 12.5, VerticalContentAlignment = VerticalAlignment.Center };
+        var box = new CheckBox { IsChecked = value, FontSize = 12.5,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Center };
         if (hint is null) box.Content = label;
         else
         {
             var sp = new StackPanel();
             sp.Children.Add(UiKit.Text(label, 12.5));
-            var h = UiKit.Text(hint, 10.5, "TextFaint", wrap: true);
+            var h = Description(hint);
             h.Margin = new Thickness(0, 2, 0, 0);
             sp.Children.Add(h);
             box.Content = sp;
@@ -188,9 +189,22 @@ public sealed partial class SettingsWindow
         return btn;
     }
 
+    static TextBlock Description(string text, string brush = "TextDim")
+    {
+        var tb = UiKit.Text(text, 11, brush, wrap: true);
+        tb.Tag = "SettingsDescription";
+        tb.LineHeight = 16;
+        tb.LineStackingStrategy = LineStackingStrategy.BlockLineHeight;
+        tb.MaxHeight = 32;
+        tb.TextTrimming = TextTrimming.CharacterEllipsis;
+        // 动态错误、路径可能很长；窄窗口仍可悬停查看完整内容。
+        tb.SetBinding(ToolTipProperty, new System.Windows.Data.Binding(nameof(TextBlock.Text)) { Source = tb });
+        return tb;
+    }
+
     static UIElement Hint(string text)
     {
-        var tb = UiKit.Text(text, 10.5, "TextFaint", wrap: true);
+        var tb = Description(text);
         tb.Margin = new Thickness(2, 6, 2, 0);
         return tb;
     }

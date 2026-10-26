@@ -24,8 +24,7 @@ public sealed partial class SettingsWindow
 
         var title = new StackPanel();
         title.Children.Add(UiKit.Text("已配置的翻译源", 12.5, "Text", FontWeights.SemiBold));
-        title.Children.Add(UiKit.Text("勾选启用，拖不动就用上下箭头调顺序；顺序决定失败降级的先后。",
-            10.5, "TextFaint", wrap: true));
+        title.Children.Add(Description("勾选启用；上下箭头调整备用源顺序。"));
         UiKit.SetGrid(title, col: 0);
         head.Children.Add(title);
 
@@ -44,10 +43,7 @@ public sealed partial class SettingsWindow
         RefreshSourceList();
 
         var tips = new StackPanel { Margin = new Thickness(2, 14, 2, 0) };
-        tips.Children.Add(UiKit.Text("免费源不需要任何配置，装好就能用；带额度的接口需要自己申请密钥。",
-            11, "TextDim", wrap: true));
-        tips.Children.Add(UiKit.Text("密钥用 Windows DPAPI 加密后存到 settings.json，换机器需要重新填。",
-            10.5, "TextFaint", wrap: true));
+        tips.Children.Add(Description("免费源即开即用，官方接口需自备密钥。密钥本机加密保存，换机器需重填。"));
         page.Children.Add(tips);
 
         return page;
@@ -142,7 +138,7 @@ public sealed partial class SettingsWindow
         info.Children.Add(nameRow);
 
         var note = configError ?? Engine.Health.LastError(cfg.Id) ?? meta.FreeNote;
-        var noteText = UiKit.Text(note, 10.5, configError is not null ? "Danger" : "TextFaint", wrap: true);
+        var noteText = Description(note, configError is not null ? "Danger" : "TextDim");
         noteText.Margin = new Thickness(0, 1, 8, 0);
         info.Children.Add(noteText);
 

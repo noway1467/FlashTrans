@@ -118,7 +118,7 @@ public sealed partial class SettingsWindow
         };
         models.LostKeyboardFocus += (_, _) => Invalidate();
 
-        var status = UiKit.Text("使用当前接口地址和 API Key；不支持列表时仍可手动填写。", 10.5, "TextFaint", wrap: true);
+        var status = Description("使用当前地址和密钥拉取，也可手动填写模型 ID。");
         status.Name = "AiModelStatus";
         status.Margin = new Thickness(0, 5, 0, 0);
         var fetch = SmallButton("拉取模型", () => { }, "OutlineBtn");
@@ -262,7 +262,7 @@ public sealed partial class SettingsWindow
 
     UIElement BuildTestRow(ProviderConfig cfg, ProviderMetaInfo meta)
     {
-        var status = UiKit.Text("", 11, "TextFaint", wrap: true);
+        var status = Description("");
         status.MaxWidth = 380;
 
         var test = SmallButton("测试", () => { }, "OutlineBtn");
