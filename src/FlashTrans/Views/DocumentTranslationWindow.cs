@@ -33,15 +33,17 @@ public partial class DocumentTranslationWindow : Window
         RefreshHost.Content = UiKit.IconButton(UiKit.IconRefresh, "刷新翻译源", (_, _) => RefreshProviders());
         ResetFolderHost.Content = UiKit.IconButton(UiKit.IconRefresh, "使用源文件目录", (_, _) => SetOutputDirectory(""));
         FromHost.Content = _from; ToHost.Content = _to;
+        SwapHost.Content = _swap = UiKit.IconButton(UiKit.IconSwap, "互换原文与目标语言", (_, _) => SwapLanguages());
         var settings = SettingsService.Instance.Current;
         _from.SelectedCode = string.IsNullOrWhiteSpace(settings.DocumentSourceLang) ? settings.SourceLang : settings.DocumentSourceLang;
         _to.SelectedCode = string.IsNullOrWhiteSpace(settings.DocumentTargetLang) ? settings.TargetLang : settings.DocumentTargetLang;
         _from.SelectionChanged += code =>
         {
             SettingsService.Instance.Current.DocumentSourceLang = code;
-            SettingsService.Instance.Save(); InvalidateTranslation();
+            SettingsService.Instance.Save(); InvalidateTranslation(); UpdateSwap();
         };
         _to.SelectionChanged += RememberTargetLanguage;
+        UpdateSwap();
         _syncOptions = true;
         BatchCharactersBox.Text = settings.DocumentBatchCharacters.ToString();
         RequestDelayBox.Text = settings.DocumentRequestDelayMs.ToString();
@@ -63,7 +65,8 @@ public partial class DocumentTranslationWindow : Window
         };
         Closing += (_, e) =>
         {
-            if (!_busy) return;
+            // 批量的两个文件之间 _busy 为 false，窗口直接关；置上标记让队列循环别再读下一个文件。
+            if (!_busy) { _closeWhenIdle = true; return; }
             e.Cancel = true; _closeWhenIdle = true; _cts?.Cancel();
             SetStatus("正在取消，完成清理后关闭…");
         };
@@ -77,11 +80,12 @@ public partial class DocumentTranslationWindow : Window
     }
     async void OnChooseFile(object sender, RoutedEventArgs e)
     {
-        var picker = new Microsoft.Win32.OpenFileDialog { Filter = DocumentTranslation.FileFilter, CheckFileExists = true };
-        if (picker.ShowDialog(this) == true) await LoadFileAsync(picker.FileName);
+        var picker = new Microsoft.Win32.OpenFileDialog { Filter = DocumentTranslation.FileFilter, CheckFileExists = true, Multiselect = true };
+        if (picker.ShowDialog(this) == true) await OpenFilesAsync(picker.FileNames);
     }
-    internal bool CanDrop(IDataObject data) => !_busy && data.GetDataPresent(DataFormats.FileDrop)
-        && data.GetData(DataFormats.FileDrop) is string[] { Length: 1 } paths && DocumentTranslation.Supports(paths[0]);
+    internal bool CanDrop(IDataObject data) => !_busy && !_batchRunning && DroppedFiles(data).Any(DocumentTranslation.Supports);
+    static string[] DroppedFiles(IDataObject data) =>
+        data.GetDataPresent(DataFormats.FileDrop) && data.GetData(DataFormats.FileDrop) is string[] paths ? paths : [];
     void OnDragOver(object sender, DragEventArgs e)
     {
         var accepted = CanDrop(e.Data);
@@ -92,7 +96,7 @@ public partial class DocumentTranslationWindow : Window
     async void OnDrop(object sender, DragEventArgs e)
     {
         e.Handled = true; OnDragLeave(sender, e);
-        if (CanDrop(e.Data)) await LoadFileAsync(((string[])e.Data.GetData(DataFormats.FileDrop))[0]);
+        if (CanDrop(e.Data)) await OpenFilesAsync(DroppedFiles(e.Data));
     }
     void OnChooseFolder(object sender, RoutedEventArgs e)
     {
@@ -176,12 +180,15 @@ public partial class DocumentTranslationWindow : Window
     void UpdateButtons()
     {
         if (StartButton is null) return;
-        DropArea.IsEnabled = Options.IsEnabled = !_busy;
-        StartButton.IsEnabled = !_busy && _document is { Count: > 0 } && SelectedProvider is not null;
-        StartButton.Content = _readyToSave ? "重试保存" : _document is { Completed: > 0, IsComplete: false } ? "继续翻译" : "开始翻译";
-        CancelButton.Visibility = _busy ? Visibility.Visible : Visibility.Collapsed;
-        OpenResult.Visibility = _outputPath.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
-        HistoryList.IsEnabled = !_busy;
+        // 批量的两个文件之间 _busy 会短暂为 false，这时也不能换文件、改选项或再点开始。
+        var locked = _busy || _batchRunning;
+        DropArea.IsEnabled = Options.IsEnabled = !locked;
+        StartButton.IsEnabled = !locked && _document is { Count: > 0 } && SelectedProvider is not null;
+        StartButton.Content = _readyToSave ? "重试保存" : _document is { Completed: > 0, IsComplete: false } ? "继续翻译"
+            : _queue.Count > 0 ? $"翻译全部 {_queue.Count + 1} 个" : "开始翻译";
+        CancelButton.Visibility = locked ? Visibility.Visible : Visibility.Collapsed;
+        OpenResult.Visibility = OpenResultFolder.Visibility = _outputPath.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        HistoryList.IsEnabled = !locked;
     }
     void SetStatus(string message)
     {
@@ -197,15 +204,17 @@ public partial class DocumentTranslationWindow : Window
         Progress.IsIndeterminate = false; UpdateButtons();
         if (_closeWhenIdle) Close();
     }
-    void OnCancel(object sender, RoutedEventArgs e) => _cts?.Cancel();
-    async void OnStart(object sender, RoutedEventArgs e) => await TranslateFileAsync();
+    void OnCancel(object sender, RoutedEventArgs e) { _cancelRequested = true; _cts?.Cancel(); }
+    async void OnStart(object sender, RoutedEventArgs e) => await StartAsync();
     void OnOpenResult(object sender, RoutedEventArgs e) => OpenPath(_outputPath, false);
+    void OnOpenResultFolder(object sender, RoutedEventArgs e) => OpenPath(_outputPath, true);
 
-    internal async Task LoadFileAsync(string path)
+    /// <summary>读取成功（含没有正文的文件）返回 true；选项无效、取消或读取失败返回 false。</summary>
+    internal async Task<bool> LoadFileAsync(string path)
     {
-        if (_busy) return;
+        if (_busy) return false;
         if (!TryReadOptions(out var batchCharacters, out _, out _))
-        { SetStatus("每批 200–2000 字符，请求间隔 0–5000 毫秒，单段超时 10–600 秒。"); return; }
+        { SetStatus("每批 200–2000 字符，请求间隔 0–5000 毫秒，单段超时 10–600 秒。"); return false; }
         Begin(); _document = null; _readyToSave = false; _outputPath = ""; _attempt = null;
         FileTitle.Text = Path.GetFileName(path); FileTitle.ToolTip = path;
         FileSummary.Text = "正在读取…"; Warnings.Text = ""; SetStatus("正在本机解析文件…"); Progress.IsIndeterminate = true;
@@ -218,19 +227,22 @@ public partial class DocumentTranslationWindow : Window
             Progress.Value = 0;
             SetStatus(_document.Count == 0 ? "没有可翻译的正文" : "完成后自动保存译文副本");
             SetOutputDirectory(_outputDirectory);
+            return true;
         }
         catch (OperationCanceledException) { SetStatus("已取消读取"); FileSummary.Text = "点击选择其他文件"; }
         catch (Exception ex) { SetStatus("读取失败：" + ex.Message); FileSummary.Text = "点击选择其他文件"; }
         finally { End(); }
+        return false;
     }
 
-    internal async Task TranslateFileAsync()
+    /// <summary>译文保存成功返回 true；批量队列据此决定是否继续下一个文件。</summary>
+    internal async Task<bool> TranslateFileAsync()
     {
-        if (_busy || _document is null || SelectedProvider is not { } provider) return;
+        if (_busy || _document is null || SelectedProvider is not { } provider) return false;
         if (!TryReadOptions(out var batchCharacters, out var requestDelayMs, out var timeoutSeconds))
-        { SetStatus("每批 200–2000 字符，请求间隔 0–5000 毫秒，单段超时 10–600 秒。"); return; }
+        { SetStatus("每批 200–2000 字符，请求间隔 0–5000 毫秒，单段超时 10–600 秒。"); return false; }
         var directory = _outputDirectory.Length == 0 ? Path.GetDirectoryName(_document.SourcePath)! : _outputDirectory;
-        if (!Directory.Exists(directory)) { SetStatus("输出目录不可用，请重新选择文件夹。"); return; }
+        if (!Directory.Exists(directory)) { SetStatus("输出目录不可用，请重新选择文件夹。"); return false; }
         var from = _from.SelectedCode; var target = _to.SelectedCode;
         var bilingual = _bilingualOutput.IsChecked == true;
         var checkpoints = _rememberProgress.IsChecked == true ? _checkpoints : null;
@@ -238,11 +250,12 @@ public partial class DocumentTranslationWindow : Window
         Begin(); _outputPath = "";
         if (!_readyToSave) _attempt = new DocumentHistoryEntry { SourcePath = _document.SourcePath, ProviderName = provider.DisplayName, SourceLanguage = from, TargetLanguage = target };
         var generation = _generation;
+        var eta = new RemainingTimeEstimator();
         var progress = new Progress<DocumentProgress>(p =>
         {
             if (!_busy || _saving || _generation != generation) return;
             Progress.Maximum = Math.Max(1, p.Total); Progress.Value = p.Completed;
-            SetStatus($"{p.Message} · {p.Completed}/{p.Total}");
+            SetStatus($"{BatchPrefix()}{p.Message} · {p.Completed}/{p.Total}{eta.Describe(p.Completed, p.Total)}");
         });
         try
         {
@@ -261,12 +274,13 @@ public partial class DocumentTranslationWindow : Window
                     timeoutSeconds, requestDelayMs, glossary, checkpoints), ct);
                 _readyToSave = true; _translatedTarget = target;
             }
-            _saving = true; SetStatus("正在生成译文副本…"); Progress.IsIndeterminate = true;
+            _saving = true; SetStatus(BatchPrefix() + "正在生成译文副本…"); Progress.IsIndeterminate = true;
             _outputPath = await Task.Run(() => _document.SaveCopy(directory, _translatedTarget, ct, bilingual), ct);
             _readyToSave = false;
             Progress.Maximum = Math.Max(1, _document.Count); Progress.Value = _document.Completed;
-            SetStatus("已保存 · " + Path.GetFileName(_outputPath));
+            SetStatus(BatchPrefix() + "已保存 · " + Path.GetFileName(_outputPath));
             Record("Completed");
+            return true;
         }
         catch (OperationCanceledException)
         {
@@ -279,6 +293,7 @@ public partial class DocumentTranslationWindow : Window
             Record(_readyToSave ? "SaveFailed" : "Failed");
         }
         finally { End(); }
+        return false;
     }
     void Record(string status)
     {

@@ -151,6 +151,32 @@ public partial class MainWindow
         var pad = S.Compact ? 8.0 : 12.0;
         Input.Padding = new Thickness(pad, S.Compact ? 6 : 8, pad, S.Compact ? 6 : 8);
         Input.MaxHeight = S.Compact ? 132 : 180;
+        // TextBox 内部还有约 2px 的文字边距，提示文字要对齐到光标起点。
+        InputHint.Margin = new Thickness(pad + 2, Input.Padding.Top, pad, 0);
+        InputHint.FontSize = S.FontSize;
+        InputHint.Text = S.EnterToTranslate ? "输入或粘贴文本，回车翻译，Shift+回车换行" : "输入或粘贴文本，Ctrl+回车翻译";
+        UpdateInputHint();
+    }
+
+    void UpdateInputHint() => InputHint.Visibility = Input.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+    /// <summary>
+    /// 结果区空白时给出上手指引。输入框里已有「回车翻译」的提示，这里不再重复，
+    /// 改列用户当前设置的全局快捷键：划词、截图这些入口不在主窗口里，最容易被忽略。
+    /// </summary>
+    void ShowWelcome()
+    {
+        var tips = new List<(string, string)>();
+        void Add(string hotkey, string label)
+        {
+            if (!string.IsNullOrWhiteSpace(hotkey)) tips.Add((HotkeySpec.Parse(hotkey).ToString(), label));
+        }
+        Add(S.HkTranslateSelection, "翻译其他程序里选中的文字");
+        Add(S.HkCaptureOcr, "截图，可识别文字并翻译");
+        Add(S.HkTranslateClipboard, "翻译剪贴板内容");
+        Add(S.HkQuickLaunch, "呼出快速启动");
+        if (tips.Count == 0) { _result.ShowMessage("输入或粘贴文本开始翻译；全局快捷键可在设置里配置"); return; }
+        _result.ShowTips("全局快捷键", tips);
     }
 
     internal void ApplyResultViewSettings() => _result.ApplyViewSettings();

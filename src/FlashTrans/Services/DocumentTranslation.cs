@@ -147,8 +147,8 @@ public static class DocumentTranslation
     public const int MaxTimeoutSeconds = 600;
     public const int DefaultTimeoutSeconds = 180;
 
-    public const string FileFilter = "可翻译文件|*.epub;*.txt;*.md;*.markdown;*.docx;*.pdf|EPUB 电子书|*.epub|文本|*.txt|Markdown|*.md;*.markdown|Word 文档|*.docx|PDF（文本层）|*.pdf";
-    public static bool Supports(string path) => Path.GetExtension(path).ToLowerInvariant() is ".epub" or ".txt" or ".md" or ".markdown" or ".docx" or ".pdf";
+    public const string FileFilter = "可翻译文件|*.epub;*.txt;*.md;*.markdown;*.docx;*.pdf;*.srt;*.vtt|EPUB 电子书|*.epub|文本|*.txt|Markdown|*.md;*.markdown|Word 文档|*.docx|PDF（文本层）|*.pdf|字幕|*.srt;*.vtt";
+    public static bool Supports(string path) => Path.GetExtension(path).ToLowerInvariant() is ".epub" or ".txt" or ".md" or ".markdown" or ".docx" or ".pdf" or ".srt" or ".vtt";
     public static TranslationDocument Load(string path, CancellationToken ct = default) => Load(path, DefaultBatchCharacters, ct);
     public static TranslationDocument Load(string path, int batchCharacters, CancellationToken ct = default)
         => DocumentFormats.Load(path, batchCharacters, ct);

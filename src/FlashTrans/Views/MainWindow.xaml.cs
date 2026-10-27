@@ -61,7 +61,7 @@ public partial class MainWindow : Window
         RestoreGeometry();
         ApplySettings();
         RebuildTabs();
-        _result.ShowMessage("输入或粘贴文本，回车开始翻译");
+        ShowWelcome();
         UpdateStatus();
         _settingsSignature = SettingsSignature();
 
@@ -146,7 +146,7 @@ public partial class MainWindow : Window
         InputTools.Children.Add(UiKit.IconButton(UiKit.IconTrash, "清空", (_, _) =>
         {
             Input.Clear();
-            _result.ShowMessage("输入或粘贴文本，回车开始翻译");
+            ShowWelcome();
             Input.Focus();
         }, 12));
         InputTools.Children.Add(UiKit.IconButton(UiKit.IconCopy, "复制全部译文", (_, _) =>

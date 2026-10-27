@@ -23,6 +23,8 @@ static class SettingsProbe
     {
         step("设置：深浅主题与最小窗口下说明最多两行", () => DescriptionLayout(preview));
         step("设置：OCR 控件切页、最小窗口与配置保存", UiProbe.OcrSettingsPageProbe);
+        step("设置：系统 OCR 语言包状态、安装命令与系统设置入口", OcrLanguagePacks);
+        step("主窗口：输入提示随内容显隐，空白时列出当前全局快捷键", () => MainWindowWelcome(preview));
         step("设置：标注色板深浅主题、自选色保存与重新打开", () => ColorSetting(preview));
         step("色板：HEX 校验与 HSV 边界", () =>
         {
@@ -118,6 +120,63 @@ static class SettingsProbe
             }
         }
         finally { SettingsService.Instance.Apply(original); ThemeService.Apply(original); }
+    }
+
+    static void OcrLanguagePacks()
+    {
+        if (!SettingsWindow.OcrLanguageInstalled(["en-US", "ko"], "ko-KR") || SettingsWindow.OcrLanguageInstalled(["en-US", "zh-Hans-CN"], "ru-RU")
+            || !SettingsWindow.OcrLanguageInstalled(["zh-Hans-CN"], "zh-CN"))
+            throw new InvalidOperationException("语言包按主语言比对错误");
+        var command = SettingsWindow.OcrInstallCommand("ru-RU");
+        if (!command.Contains("'Language.OCR*ru-RU*'") || !command.EndsWith("Add-WindowsCapability -Online"))
+            throw new InvalidOperationException("安装命令错误：" + command);
+        var w = new SettingsWindow(new AppHost()) { Width = 620, Height = 440, ShowActivated = false, ShowInTaskbar = false };
+        try
+        {
+            w.SelectTab("ocr"); w.Show(); w.UpdateLayout(); Pump();
+            var texts = Descendants<TextBlock>(w).Select(t => t.Text).ToList();
+            if (!texts.Contains("系统 OCR 语言包") || !texts.Contains("韩语") || !texts.Contains("俄语"))
+                throw new InvalidOperationException("OCR 页缺少语言包分组");
+            var missing = SettingsWindow.SuggestedOcrLanguages.Count(l => !SettingsWindow.OcrLanguageInstalled(OcrService.AvailableLanguages, l.Tag));
+            var copyButtons = Descendants<Button>(w).Count(b => Equals(b.Content, "复制安装命令"));
+            if (copyButtons != missing) throw new InvalidOperationException($"复制命令按钮数 {copyButtons} 与未安装语言数 {missing} 不一致");
+            if (!Descendants<Button>(w).Any(b => Equals(b.Content, "打开 Windows 语言设置")))
+                throw new InvalidOperationException("缺少系统语言设置入口");
+            var installedChips = OcrService.AvailableLanguages.Select(OcrService.DisplayName).ToList();
+            if (installedChips.Any(name => !texts.Contains(name))) throw new InvalidOperationException("已安装语言没有全部列出");
+        }
+        finally { w.Close(); }
+    }
+
+    static void MainWindowWelcome(string? preview)
+    {
+        var s = SettingsService.Instance.Current;
+        var typeTranslate = s.TranslateOnType;
+        // 关掉输入即译，避免往输入框里写字时真的去请求翻译服务。
+        s.TranslateOnType = false;
+        var main = new MainWindow(new AppHost()) { ShowActivated = false, ShowInTaskbar = false };
+        try
+        {
+            main.Show(); main.UpdateLayout(); Pump();
+            var hint = (TextBlock)main.FindName("InputHint");
+            var input = (TextBox)main.FindName("Input");
+            if (hint.Visibility != Visibility.Visible || !hint.Text.Contains("翻译")) throw new InvalidOperationException("空输入没有提示文字");
+            var texts = Descendants<TextBlock>(main).Select(t => t.Text).ToList();
+            foreach (var hotkey in new[] { s.HkTranslateSelection, s.HkCaptureOcr, s.HkTranslateClipboard, s.HkQuickLaunch }.Where(h => h.Length > 0))
+                if (!texts.Contains(Interop.HotkeySpec.Parse(hotkey).ToString()))
+                    throw new InvalidOperationException("空白指引缺少快捷键：" + hotkey);
+            if (preview is not null)
+                foreach (var theme in new[] { AppTheme.Dark, AppTheme.Light })
+                {
+                    ThemeService.ApplyTheme(theme); main.UpdateLayout(); Pump();
+                    Snapshot(main, System.IO.Path.Combine(preview, $"main-welcome-{theme}.png"));
+                }
+            input.Text = "hello";
+            if (hint.Visibility != Visibility.Collapsed) throw new InvalidOperationException("输入后提示没有隐藏");
+            input.Clear();
+            if (hint.Visibility != Visibility.Visible) throw new InvalidOperationException("清空后提示没有恢复");
+        }
+        finally { main.Close(); s.TranslateOnType = typeTranslate; }
     }
 
     static void Snapshot(Window window, string path)

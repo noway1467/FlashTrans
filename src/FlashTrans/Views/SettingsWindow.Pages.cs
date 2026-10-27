@@ -205,6 +205,7 @@ public sealed partial class SettingsWindow
     {
         var page = Page();
         Section(page, "OCR · 文字识别", BuildOcrRows());
+        Section(page, "系统 OCR 语言包", BuildOcrLanguageRows());
         return page;
     }
 
@@ -265,7 +266,7 @@ public sealed partial class SettingsWindow
         }
 
         rows.Add(Hint("RapidOCR 支持中英日及拉丁语系，其他语言依赖系统包。全程本地识别，不上传截图。"));
-        rows.Add(Hint("其他语言：在 Windows「语言选项」安装「光学字符识别」后重启。识别不准可手动选语言。"));
+        rows.Add(Hint("其他语言需安装系统语言包，见下方「系统 OCR 语言包」。识别不准可手动选语言。"));
         rows.Add(Hint("公式结果请核对；不支持复杂分式、矩阵、手写公式或转 LaTeX。"));
         rows.Add(Check("识别并翻译时复制原文", S.OcrCopyText, on => S.OcrCopyText = on));
         rows.Add(Check("识别文字快捷键：复制后关闭", S.OcrCopyAndClose, on => S.OcrCopyAndClose = on));

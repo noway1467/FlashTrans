@@ -46,31 +46,48 @@
             </Border>
 
             <!-- ============ 输入区 ============ -->
-            <Grid Grid.Row="1" Margin="9,8,9,0">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                </Grid.RowDefinitions>
+            <!-- 输入框、工具和翻译按钮合成一张卡片；焦点在卡片里任何位置时整张卡片描边高亮。 -->
+            <Border x:Name="InputCard" Grid.Row="1" Margin="9,9,9,0" CornerRadius="10" BorderThickness="1"
+                    Background="{DynamicResource BgInput}">
+                <Border.Style>
+                    <Style TargetType="Border">
+                        <Setter Property="BorderBrush" Value="{DynamicResource Border}" />
+                        <Style.Triggers>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                <Setter Property="BorderBrush" Value="{DynamicResource Accent}" />
+                            </Trigger>
+                        </Style.Triggers>
+                    </Style>
+                </Border.Style>
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
 
-                <TextBox x:Name="Input" Grid.Row="0"
-                         AcceptsReturn="True" TextWrapping="Wrap"
-                         MinHeight="46" MaxHeight="132" Padding="8,6,8,6"
-                         VerticalScrollBarVisibility="Auto"
-                         VerticalContentAlignment="Top"
-                         TextChanged="OnInputChanged"
-                         PreviewKeyDown="OnInputKeyDown" />
+                    <TextBox x:Name="Input" Grid.Row="0"
+                             AcceptsReturn="True" TextWrapping="Wrap"
+                             MinHeight="46" MaxHeight="132" Padding="8,6,8,6"
+                             Background="Transparent" BorderThickness="0"
+                             VerticalScrollBarVisibility="Auto"
+                             VerticalContentAlignment="Top"
+                             TextChanged="OnInputChanged"
+                             PreviewKeyDown="OnInputKeyDown" />
+                    <TextBlock x:Name="InputHint" Grid.Row="0" IsHitTestVisible="False" TextTrimming="CharacterEllipsis"
+                               Foreground="{DynamicResource TextFaint}" VerticalAlignment="Top" />
 
-                <Grid Grid.Row="1" Margin="0,5,0,0">
-                    <StackPanel x:Name="InputTools" Orientation="Horizontal" HorizontalAlignment="Left" />
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                        <TextBlock x:Name="CharCount" Style="{StaticResource Caption}"
-                                   VerticalAlignment="Center" Margin="0,0,8,0" />
-                        <Button x:Name="TranslateBtn" Style="{StaticResource PrimaryBtn}"
-                                Content="翻译" Padding="16,4" FontSize="12.5"
-                                Click="OnTranslateClick" />
-                    </StackPanel>
+                    <Grid Grid.Row="1" Margin="6,0,6,6">
+                        <StackPanel x:Name="InputTools" Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Center" />
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <TextBlock x:Name="CharCount" Style="{StaticResource Caption}"
+                                       VerticalAlignment="Center" Margin="0,0,10,0" />
+                            <Button x:Name="TranslateBtn" Style="{StaticResource PrimaryBtn}"
+                                    Content="翻译" Padding="18,4" FontSize="12.5"
+                                    Click="OnTranslateClick" />
+                        </StackPanel>
+                    </Grid>
                 </Grid>
-            </Grid>
+            </Border>
 
             <!-- ============ 翻译源标签 ============ -->
             <Grid Grid.Row="2" Margin="9,9,9,0">

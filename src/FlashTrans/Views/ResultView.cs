@@ -286,6 +286,39 @@ public sealed class ResultView : ScrollViewer
         _list.Children.Add(tb);
     }
 
+    /// <summary>空白时的上手指引：一列「按键 + 作用」，按键取自用户当前的快捷键设置。</summary>
+    public void ShowTips(string title, IReadOnlyList<(string Keys, string Label)> tips) => RunOnUi(() =>
+    {
+        Clear();
+        var panel = new StackPanel { Margin = new Thickness(2, 10, 2, 0), HorizontalAlignment = HorizontalAlignment.Left };
+        var head = UiKit.Text(title, S.FontSize - 2, "TextDim", FontWeights.SemiBold);
+        head.Margin = new Thickness(0, 0, 0, 8);
+        panel.Children.Add(head);
+        var grid = new Grid();
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        for (var i = 0; i < tips.Count; i++)
+        {
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            var key = new Border
+            {
+                Child = UiKit.Text(tips[i].Keys, S.FontSize - 3, "TextDim"), CornerRadius = new CornerRadius(4),
+                Padding = new Thickness(6, 1, 6, 2), BorderThickness = new Thickness(1, 1, 1, 2),
+                Margin = new Thickness(0, 0, 10, 7), HorizontalAlignment = HorizontalAlignment.Left,
+            };
+            key.SetResourceReference(Border.BackgroundProperty, "BgAlt");
+            key.SetResourceReference(Border.BorderBrushProperty, "Border");
+            UiKit.SetGrid(key, row: i, col: 0);
+            grid.Children.Add(key);
+            var label = UiKit.Text(tips[i].Label, S.FontSize - 2, "TextFaint");
+            label.Margin = new Thickness(0, 0, 0, 7);
+            UiKit.SetGrid(label, row: i, col: 1);
+            grid.Children.Add(label);
+        }
+        panel.Children.Add(grid);
+        _list.Children.Add(panel);
+    });
+
     void ShowLoadingCore(string providerName)
     {
         Clear();
@@ -393,7 +426,7 @@ public sealed class ResultView : ScrollViewer
         UiKit.SetGrid(badge, col: 0);
         head.Children.Add(badge);
 
-        var name = UiKit.Text(cfg.DisplayName, S.FontSize - 2, "TextDim", FontWeights.SemiBold);
+        var name = UiKit.Text(cfg.DisplayName, S.FontSize - 2, "Text", FontWeights.SemiBold);
         name.TextTrimming = TextTrimming.CharacterEllipsis;
         name.ToolTip = cfg.DisplayName;
         name.Margin = new Thickness(7, 0, 0, 0);
@@ -406,7 +439,7 @@ public sealed class ResultView : ScrollViewer
         var stack = new StackPanel();
         stack.Children.Add(head);
         stack.Children.Add(body);
-        return UiKit.Card(stack);
+        return ResultCard(stack, meta.Accent, pending: true);
     }
 
     Border ProviderCard(TranslateBatch batch, TranslateResult r, bool aggregate)
@@ -425,7 +458,7 @@ public sealed class ResultView : ScrollViewer
         UiKit.SetGrid(badge, col: 0);
         head.Children.Add(badge);
 
-        var name = UiKit.Text(r.ProviderName, S.FontSize - 2, "TextDim", FontWeights.SemiBold);
+        var name = UiKit.Text(r.ProviderName, S.FontSize - 2, "Text", FontWeights.SemiBold);
         name.TextTrimming = TextTrimming.CharacterEllipsis;
         name.ToolTip = r.ProviderName;
         name.Margin = new Thickness(7, 0, 0, 0);
@@ -491,7 +524,28 @@ public sealed class ResultView : ScrollViewer
         var stack = new StackPanel();
         stack.Children.Add(head);
         stack.Children.Add(body);
-        return UiKit.Card(stack);
+        return ResultCard(stack, meta.Accent, failed: !r.Ok && r.Texts.Count == 0);
+    }
+
+    /// <summary>
+    /// 结果卡片左侧一条翻译源配色的细条：多源并排时一眼分清是谁家的译文。
+    /// 失败的卡片用警示色，正在翻译的用半透明，和成功的拉开区别。
+    /// </summary>
+    static Border ResultCard(UIElement content, string accentHex, bool pending = false, bool failed = false)
+    {
+        var grid = new Grid();
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        var stripe = new Border { Width = 3, CornerRadius = new CornerRadius(1.5), Margin = new Thickness(0, 1, 11, 1) };
+        if (failed) stripe.SetResourceReference(Border.BackgroundProperty, "Danger");
+        else stripe.Background = new SolidColorBrush(Services.ThemeService.Parse(accentHex, Color.FromRgb(0x4C, 0x8D, 0xFF)));
+        if (pending) stripe.Opacity = 0.35;
+        grid.Children.Add(stripe);
+        UiKit.SetGrid(content, col: 1);
+        grid.Children.Add(content);
+        var card = UiKit.Card(grid, new Thickness(10, 10, 12, 12));
+        card.CornerRadius = new CornerRadius(10);
+        return card;
     }
 
     UIElement Body(string source, string translated, double fontSize)

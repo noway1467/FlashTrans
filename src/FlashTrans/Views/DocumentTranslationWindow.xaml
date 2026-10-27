@@ -38,6 +38,19 @@
             <Setter Property="Foreground" Value="{DynamicResource TextDim}" />
             <Setter Property="Margin" Value="0,0,0,7" />
         </Style>
+        <Style x:Key="OptionCard" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource BgCard}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource Border}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="10" />
+            <Setter Property="Padding" Value="16,13,16,15" />
+        </Style>
+        <Style x:Key="CardTitle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12.5" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{DynamicResource Text}" />
+            <Setter Property="Margin" Value="0,0,0,12" />
+        </Style>
         <Style x:Key="DropButton" TargetType="Button">
             <Setter Property="Background" Value="{DynamicResource BgAlt}" />
             <Setter Property="BorderBrush" Value="{DynamicResource BorderStrong}" />
@@ -118,46 +131,61 @@
                                     </Border>
                                     <TextBlock x:Name="FileTitle" Text="拖入文件，开始翻译" FontSize="18" FontWeight="SemiBold" HorizontalAlignment="Center"
                                                TextTrimming="CharacterEllipsis" MaxWidth="450" />
-                                    <TextBlock x:Name="FileSummary" Text="或点击选择文件" FontSize="12" Foreground="{DynamicResource TextDim}" HorizontalAlignment="Center" Margin="0,7,0,10" />
-                                    <TextBlock Text="EPUB / TXT / Markdown / DOCX / PDF（文本层）" FontSize="10.5" Foreground="{DynamicResource TextFaint}" HorizontalAlignment="Center" />
+                                    <TextBlock x:Name="FileSummary" Text="或点击选择文件，可一次选择多个批量翻译" FontSize="12" Foreground="{DynamicResource TextDim}" HorizontalAlignment="Center" Margin="0,7,0,10" />
+                                    <TextBlock Text="EPUB / TXT / Markdown / DOCX / PDF（文本层）/ SRT / VTT 字幕" FontSize="10.5" Foreground="{DynamicResource TextFaint}" HorizontalAlignment="Center" />
                                 </StackPanel>
                             </Button>
-                            <Grid x:Name="Options" Margin="0,20,0,0">
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
-                                </Grid.RowDefinitions>
-                                <Grid>
-                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                                    <StackPanel>
-                                        <TextBlock Text="翻译源" Style="{StaticResource FieldLabel}" />
-                                        <ComboBox x:Name="Providers" Height="34" SelectionChanged="OnProviderChanged" AutomationProperties.Name="翻译源" />
-                                    </StackPanel>
-                                    <ContentControl x:Name="RefreshHost" Grid.Column="1" VerticalAlignment="Bottom" Margin="8,0,0,3" />
-                                </Grid>
-                                <Grid Grid.Row="1" Margin="0,15,0,0">
-                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="26" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                                    <StackPanel>
-                                        <TextBlock Text="原文语言" Style="{StaticResource FieldLabel}" />
-                                        <Border Background="{DynamicResource BgInput}" BorderBrush="{DynamicResource Border}" BorderThickness="1" CornerRadius="6" Padding="6,3"><ContentControl x:Name="FromHost" /></Border>
-                                    </StackPanel>
-                                    <StackPanel Grid.Column="2">
-                                        <TextBlock Text="目标语言" Style="{StaticResource FieldLabel}" />
-                                        <Border Background="{DynamicResource BgInput}" BorderBrush="{DynamicResource Border}" BorderThickness="1" CornerRadius="6" Padding="6,3"><ContentControl x:Name="ToHost" /></Border>
-                                    </StackPanel>
-                                </Grid>
-                                <StackPanel Grid.Row="2" Margin="0,16,0,0">
-                                    <TextBlock Text="输出文件夹" Style="{StaticResource FieldLabel}" />
-                                    <Grid>
-                                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                                        <TextBox x:Name="OutputFolder" Style="{StaticResource DocumentSingleLineInput}" IsReadOnly="True" Text="源文件所在目录" AutomationProperties.Name="输出文件夹" />
-                                        <Button Grid.Column="1" Content="选择" Style="{StaticResource OutlineBtn}" Margin="8,0,0,0" Padding="12,4" Click="OnChooseFolder" />
-                                        <ContentControl Grid.Column="2" x:Name="ResetFolderHost" Margin="6,0,0,0" VerticalAlignment="Center" />
-                                    </Grid>
-                                    <CheckBox x:Name="DefaultFolder" Content="设为默认输出位置" Margin="0,9,0,0" FontSize="11.5" Checked="OnDefaultFolderChanged" Unchecked="OnDefaultFolderChanged" />
-                                    <StackPanel x:Name="DocumentExtras" Margin="0,12,0,0" />
+                            <Border x:Name="QueuePanel" Style="{StaticResource OptionCard}" Margin="0,12,0,0" Padding="14,10,10,10" Visibility="Collapsed">
+                                <StackPanel>
+                                    <DockPanel Margin="0,0,0,4">
+                                        <Button DockPanel.Dock="Right" Content="清空队列" Style="{StaticResource GhostBtn}" FontSize="11" Click="OnClearQueue" ToolTip="只移出队列，不删除文件" />
+                                        <TextBlock x:Name="QueueTitle" FontSize="12.5" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                    </DockPanel>
+                                    <StackPanel x:Name="QueueList" />
                                 </StackPanel>
-                                <TextBlock Grid.Row="3" x:Name="Privacy" FontSize="11" Foreground="{DynamicResource TextDim}" TextWrapping="Wrap" Margin="0,14,0,0" />
-                                <Expander Grid.Row="4" Header="选项与格式说明" FontSize="11" Foreground="{DynamicResource TextDim}" Margin="0,12,0,0">
+                            </Border>
+                            <StackPanel x:Name="Options" Margin="0,16,0,0">
+                                <Border Style="{StaticResource OptionCard}">
+                                    <StackPanel>
+                                        <TextBlock Text="翻译设置" Style="{StaticResource CardTitle}" />
+                                        <Grid>
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                            <StackPanel>
+                                                <TextBlock Text="翻译源" Style="{StaticResource FieldLabel}" />
+                                                <ComboBox x:Name="Providers" Height="34" SelectionChanged="OnProviderChanged" AutomationProperties.Name="翻译源" />
+                                            </StackPanel>
+                                            <ContentControl x:Name="RefreshHost" Grid.Column="1" VerticalAlignment="Bottom" Margin="8,0,0,3" />
+                                        </Grid>
+                                        <Grid Margin="0,14,0,0">
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="44" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                            <StackPanel>
+                                                <TextBlock Text="原文语言" Style="{StaticResource FieldLabel}" />
+                                                <Border Background="{DynamicResource BgInput}" BorderBrush="{DynamicResource Border}" BorderThickness="1" CornerRadius="6" Padding="6,3"><ContentControl x:Name="FromHost" /></Border>
+                                            </StackPanel>
+                                            <ContentControl x:Name="SwapHost" Grid.Column="1" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,5" />
+                                            <StackPanel Grid.Column="2">
+                                                <TextBlock Text="目标语言" Style="{StaticResource FieldLabel}" />
+                                                <Border Background="{DynamicResource BgInput}" BorderBrush="{DynamicResource Border}" BorderThickness="1" CornerRadius="6" Padding="6,3"><ContentControl x:Name="ToHost" /></Border>
+                                            </StackPanel>
+                                        </Grid>
+                                        <TextBlock x:Name="Privacy" FontSize="11" Foreground="{DynamicResource TextDim}" TextWrapping="Wrap" Margin="0,12,0,0" />
+                                    </StackPanel>
+                                </Border>
+                                <Border Style="{StaticResource OptionCard}" Margin="0,12,0,0">
+                                    <StackPanel>
+                                        <TextBlock Text="输出与术语" Style="{StaticResource CardTitle}" />
+                                        <TextBlock Text="输出文件夹" Style="{StaticResource FieldLabel}" />
+                                        <Grid>
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                            <TextBox x:Name="OutputFolder" Style="{StaticResource DocumentSingleLineInput}" IsReadOnly="True" Text="源文件所在目录" AutomationProperties.Name="输出文件夹" />
+                                            <Button Grid.Column="1" Content="选择" Style="{StaticResource OutlineBtn}" Margin="8,0,0,0" Padding="12,4" Click="OnChooseFolder" />
+                                            <ContentControl Grid.Column="2" x:Name="ResetFolderHost" Margin="6,0,0,0" VerticalAlignment="Center" />
+                                        </Grid>
+                                        <CheckBox x:Name="DefaultFolder" Content="设为默认输出位置" Margin="0,9,0,0" FontSize="11.5" Checked="OnDefaultFolderChanged" Unchecked="OnDefaultFolderChanged" />
+                                        <StackPanel x:Name="DocumentExtras" Margin="0,12,0,0" />
+                                    </StackPanel>
+                                </Border>
+                                <Expander Header="高级选项与格式说明" FontSize="11" Foreground="{DynamicResource TextDim}" Margin="2,14,0,0">
                                     <StackPanel Margin="0,10,0,0">
                                         <WrapPanel>
                                             <StackPanel Orientation="Horizontal" Margin="0,0,22,8">
@@ -178,9 +206,10 @@
                                         </WrapPanel>
                                         <TextBlock x:Name="Warnings" TextWrapping="Wrap" Margin="0,10,0,0" FontSize="11" LineHeight="17" />
                                         <TextBlock Text="单并发，失败重试 2 次。开启保存进度后，重新载入原文件并开始翻译即可校验恢复；更改文件、翻译源、语向或术语会重新翻译。" TextWrapping="Wrap" Margin="0,6,0,0" FontSize="11" />
+                                        <TextBlock Text="批量队列按顺序逐个翻译并各自保存；某个文件翻译失败或取消时暂停，剩余文件留在队列里，再点开始即可继续。" TextWrapping="Wrap" Margin="0,6,0,0" FontSize="11" />
                                     </StackPanel>
                                 </Expander>
-                            </Grid>
+                            </StackPanel>
                         </StackPanel>
                     </ScrollViewer>
                     <StackPanel Grid.Row="1" Margin="0,18,0,0">
@@ -188,7 +217,10 @@
                         <TextBlock x:Name="Status" Text="完成后自动保存译文副本" FontSize="12" TextWrapping="Wrap" Margin="0,10,0,13" MaxHeight="54" />
                         <Grid>
                             <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                            <Button x:Name="OpenResult" Content="打开译文" Style="{StaticResource GhostBtn}" HorizontalAlignment="Left" Click="OnOpenResult" Visibility="Collapsed" />
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
+                                <Button x:Name="OpenResult" Content="打开译文" Style="{StaticResource GhostBtn}" Click="OnOpenResult" Visibility="Collapsed" />
+                                <Button x:Name="OpenResultFolder" Content="打开文件夹" Style="{StaticResource GhostBtn}" Margin="4,0,0,0" Click="OnOpenResultFolder" Visibility="Collapsed" ToolTip="在资源管理器中打开译文所在文件夹" />
+                            </StackPanel>
                             <Button x:Name="CancelButton" Grid.Column="1" Content="取消" Style="{StaticResource OutlineBtn}" Padding="18,8" Margin="0,0,8,0" Click="OnCancel" Visibility="Collapsed" />
                             <Button x:Name="StartButton" Grid.Column="2" Content="开始翻译" Style="{StaticResource PrimaryBtn}" Padding="25,8" MinWidth="118" Click="OnStart" />
                         </Grid>

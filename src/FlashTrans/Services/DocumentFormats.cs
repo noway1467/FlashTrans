@@ -19,7 +19,7 @@ internal static partial class DocumentFormats
     internal static TranslationDocument Load(string path, int batchCharacters, CancellationToken ct)
     {
         path = Path.GetFullPath(path);
-        if (!DocumentTranslation.Supports(path)) throw new NotSupportedException("支持 EPUB、TXT、Markdown、DOCX 和文本层 PDF；旧版 .doc 请先另存为 .docx。");
+        if (!DocumentTranslation.Supports(path)) throw new NotSupportedException("支持 EPUB、TXT、Markdown、DOCX、文本层 PDF 和 SRT/VTT 字幕；旧版 .doc 请先另存为 .docx。");
         ct.ThrowIfCancellationRequested();
         // 打开后再核验长度，并限制读取；不因文件被替换或 ZIP 压缩比过高而耗尽内存。
         using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
@@ -36,6 +36,7 @@ internal static partial class DocumentFormats
         {
             case ".txt": LoadText(document, DecodeText(document, data), false, ct); break;
             case ".md": case ".markdown": LoadText(document, DecodeText(document, data), true, ct); break;
+            case ".srt": case ".vtt": LoadSubtitles(document, DecodeText(document, data), ct); break;
             case ".pdf": LoadPdf(document, data, ct); break;
             default: LoadPackage(document, data, ct); break;
         }
@@ -114,20 +115,60 @@ internal static partial class DocumentFormats
             }
             doc.Warnings.Add("Markdown 保留代码、公式、链接地址、图片、HTML 块及 YAML 元数据；这些区域及链接 title/图片替代文字/引用式链接标签不翻译。正文按语法树回填。");
         }
-        doc.Write = stream =>
-        {
-            using var writer = new StreamWriter(stream, Utf8, leaveOpen: true);
-            var end = 0;
-            foreach (var (start, replacement) in replacements)
-            {
-                if (start < end) throw new InvalidDataException("正文范围重叠，已停止导出。");
-                writer.Write(text.AsSpan(end, start - end));
-                writer.Write(replacement.Text);
-                end = start + replacement.Length;
-            }
-            writer.Write(text.AsSpan(end));
-        };
+        doc.Write = ReplacementWriter(text, replacements, Utf8);
     }
+
+    /// <summary>
+    /// SRT/WebVTT：只翻译时间轴之后的对白行；序号、时间轴、cue 标识以及 WEBVTT 头、NOTE/STYLE/REGION 块原样保留。
+    /// 每条字幕单独成段，不跨条拼批：拼批要靠格式标记，免费源常弄丢标记，一条出错整份字幕就停了。
+    /// </summary>
+    static void LoadSubtitles(TranslationDocument doc, string text, CancellationToken ct)
+    {
+        var replacements = new SortedDictionary<int, (int Length, string Text)>();
+        var lines = Regex.Matches(text, @"[^\r\n]*(?:\r\n|\r|\n|$)").Select(m => (Start: m.Index, Text: m.Value.TrimEnd('\r', '\n')))
+            .Where(line => line.Text.Length > 0 || line.Start < text.Length).ToList();
+        var multiline = false;
+        var cues = 0;
+        for (var i = 0; i < lines.Count;)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (string.IsNullOrWhiteSpace(lines[i].Text)) { i++; continue; }
+            var end = i;
+            while (end < lines.Count && !string.IsNullOrWhiteSpace(lines[end].Text)) end++;
+            var timing = Enumerable.Range(i, end - i).FirstOrDefault(n => lines[n].Text.Contains("-->", StringComparison.Ordinal), -1);
+            if (timing >= 0 && timing + 1 < end)
+            {
+                var first = lines[timing + 1];
+                var last = lines[end - 1];
+                var start = first.Start;
+                var length = last.Start + last.Text.Length - start;
+                var content = string.Join(" ", Enumerable.Range(timing + 1, end - timing - 1).Select(n => lines[n].Text.Trim()));
+                multiline |= end - timing > 2;
+                cues++;
+                AddGroup(doc, [new(content, value => replacements[start] = (length, value))]);
+            }
+            i = end;
+        }
+        if (cues == 0) throw new InvalidDataException("没有找到带时间轴（-->）的字幕条目，请确认是 SRT 或 WebVTT 文件。");
+        if (multiline) doc.Warnings.Add("多行字幕按整条翻译，译文合并为一行，播放器会按画面宽度自动换行。");
+        doc.Warnings.Add("字幕只翻译对白，序号与时间轴原样保留；<i> 等样式标签交给翻译源处理，个别源可能丢失。");
+        // 带 BOM 输出：不少电视和老播放器靠 BOM 认 UTF-8，没有它中文字幕会乱码；BOM 在规范里是允许的。
+        doc.Write = ReplacementWriter(text, replacements, new UTF8Encoding(true));
+    }
+
+    static Action<Stream> ReplacementWriter(string text, SortedDictionary<int, (int Length, string Text)> replacements, Encoding encoding) => stream =>
+    {
+        using var writer = new StreamWriter(stream, encoding, leaveOpen: true);
+        var end = 0;
+        foreach (var (start, replacement) in replacements)
+        {
+            if (start < end) throw new InvalidDataException("正文范围重叠，已停止导出。");
+            writer.Write(text.AsSpan(end, start - end));
+            writer.Write(replacement.Text);
+            end = start + replacement.Length;
+        }
+        writer.Write(text.AsSpan(end));
+    };
 
     static bool InsideProtectedLink(Inline inline)
     {

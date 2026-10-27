@@ -168,6 +168,7 @@ public partial class MainWindow
     void OnInputChanged(object sender, TextChangedEventArgs e)
     {
         CharCount.Text = Input.Text.Length == 0 ? "" : Input.Text.Length + " 字";
+        UpdateInputHint();
         if (_suppressInput) return;
 
         if (S.TranslateOnType && Input.Text.Trim().Length > 0)
@@ -181,7 +182,7 @@ public partial class MainWindow
             _debounce.Stop();
             _cts?.Cancel();
             _batch = null;
-            _result.ShowMessage("输入或粘贴文本，回车开始翻译");
+            ShowWelcome();
         }
     }
 

@@ -37,6 +37,12 @@ static partial class DocumentProbe
             {
                 window.Show(); PumpUntil(window.LoadFileAsync(source));
                 Render(window, Path.Combine(directory, "documents-" + theme + ".png"));
+                var queued = new[] { "第一章.md", "会议记录.txt", "S01E01.srt", "S01E02.srt", "S01E03.srt", "S01E04.srt", "S01E05.srt", "S01E06.srt" }
+                    .Select(name => Path.Combine(directory, name)).ToArray();
+                foreach (var path in queued) File.WriteAllText(path, path.EndsWith(".srt") ? "1\n00:00:01,000 --> 00:00:02,000\nHello\n" : "Hello world");
+                PumpUntil(window.OpenFilesAsync([source, .. queued]));
+                window.UpdateLayout();
+                Render(window, Path.Combine(directory, "documents-queue-" + theme + ".png"));
             }
             finally { window.Close(); }
             var editor = new FlashTrans.Views.GlossaryWindow(new DocumentGlossary([new("translation", "翻译"), new("clipboard", "剪贴板")]), "");

@@ -26,6 +26,7 @@ static partial class DocumentProbe
     internal static void RunAll(Action<string, Action> step)
     {
         RunFeatureProbes(step);
+        RunBatchProbes(step);
         step("文件：TXT 编码、换行、长段落和另存保护", () => InTemp(TextRoundtrip));
         step("文件：Markdown 正文翻译，代码/链接/表格/元数据不损坏", () => InTemp(MarkdownRoundtrip));
         step("文件：DOCX 表格/行内样式/页眉/脚注及媒体保留", () => InTemp(DocxRoundtrip));
@@ -37,7 +38,7 @@ static partial class DocumentProbe
         step("文件：WPF 深浅主题窗口、读取、按钮和渲染", () => InTemp(WindowRoundtrip));
         step("文件：自动副本、目录选择和同名避让", () => InTemp(AutomaticCopies));
         step("文件：历史持久化、上限、更新、清空及损坏保护", () => InTemp(HistoryPersistence));
-        step("文件：默认输出配置迁移及往返，版本 1.9.5", () => InTemp(OutputSettings));
+        step("文件：默认输出配置迁移及往返，版本 1.9.6", () => InTemp(OutputSettings));
         step("文件：路径与超时文本的完整高度（字号、缩放、禁用状态）", () => InTemp(InputTextHeight));
         step("文件：目标语言独立持久化，重开、重载及历史恢复", () => InTemp(TargetLanguagePersistence));
         step("文件：分批字符数和请求间隔可调、可持久化", () => InTemp(BatchAndDelay));
@@ -391,7 +392,7 @@ static partial class DocumentProbe
                 Check(content.ActualWidth > 400 && content.ActualHeight > 300, "文件窗口布局失败");
                 Check(window.DropArea.ActualHeight >= 180 && window.DropArea.ActualWidth > 370, "拖入区域过小");
                 Check(window.CanDrop(new DataObject(DataFormats.FileDrop, new[] { path })), "拖入没有接受 Markdown");
-                Check(!window.CanDrop(new DataObject(DataFormats.FileDrop, new[] { path, path })), "多文件拖入未拒绝");
+                Check(window.CanDrop(new DataObject(DataFormats.FileDrop, new[] { path, path })), "多文件拖入应进入批量队列");
                 Check(!window.CanDrop(new DataObject(DataFormats.FileDrop, new[] { "bad.exe" })), "不支持类型未拒绝");
                 var bitmap = new RenderTargetBitmap((int)window.ActualWidth, (int)window.ActualHeight, 96, 96, PixelFormats.Pbgra32);
                 bitmap.Render(window);
@@ -678,7 +679,7 @@ static partial class DocumentProbe
         var copy = JsonSerializer.Deserialize(JsonSerializer.Serialize(settings, SettingsJson.Default.AppSettings), SettingsJson.Default.AppSettings)!;
         SettingsService.Normalize(copy); Check(copy.DocumentOutputDirectory == root, "默认输出目录未保存");
         copy.DocumentOutputDirectory = "relative"; SettingsService.Normalize(copy); Check(copy.DocumentOutputDirectory == "", "相对目录未归一化");
-        Check(typeof(MainWindow).Assembly.GetName().Version == new Version(1, 9, 5, 0), "主程序版本未调整为 1.9.5");
+        Check(typeof(MainWindow).Assembly.GetName().Version == new Version(1, 9, 6, 0), "主程序版本未调整为 1.9.6");
     }
 
     sealed class TestTranslator : ITranslator

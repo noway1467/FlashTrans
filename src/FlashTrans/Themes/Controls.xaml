@@ -141,8 +141,9 @@
         </Setter>
     </Style>
 
+    <!-- 朗读不加底色，悬停才出现：卡片右上角只留复制一个实心按钮，层次更清楚。 -->
     <Style x:Key="SpeechBtn" TargetType="Button" BasedOn="{StaticResource IconBtn}">
-        <Setter Property="Background" Value="{DynamicResource BgAlt}" />
+        <Setter Property="Background" Value="Transparent" />
         <Setter Property="Foreground" Value="{DynamicResource Success}" />
         <Setter Property="Width" Value="30" />
         <Setter Property="Height" Value="27" />

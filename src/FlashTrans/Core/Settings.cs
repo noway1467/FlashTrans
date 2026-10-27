@@ -55,6 +55,9 @@ public sealed class QuickLaunchEntry
     public string Name { get; set; } = "";
     public string Path { get; set; } = "";
     public bool IsFolder { get; set; }
+    /// <summary>只用于搜索结果排序，不改变用户手动排好的默认顺序。</summary>
+    public int LaunchCount { get; set; }
+    public DateTimeOffset? LastLaunched { get; set; }
 }
 
 public sealed class AppSettings
