@@ -67,7 +67,7 @@ public sealed class AppSettings
     public int Version { get; set; } = CurrentVersion;
 
     /// <summary>加新的默认源/字段时 +1，并在 Migrate 里补一段。</summary>
-    public const int CurrentVersion = 13;
+    public const int CurrentVersion = 14;
 
     // 只保存用户选择的路径，不扫描磁盘或自动收集已安装程序。
     public List<QuickLaunchEntry> QuickLaunchItems { get; set; } = [];

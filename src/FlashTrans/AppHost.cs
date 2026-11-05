@@ -22,7 +22,7 @@ public sealed partial class AppHost : IDisposable
     SelectionIcon? _icon;
     SettingsWindow? _settings;
     QuickLaunchWindow? _quickLaunch;
-    DesktopShelfWindow? _desktopShelf;
+    readonly Dictionary<string, DesktopShelfWindow> _desktopShelves = new(StringComparer.Ordinal);
     DispatcherOperation? _shelfShowOperation;
 
     uint _lastClipSeq;
@@ -383,7 +383,7 @@ public sealed partial class AppHost : IDisposable
         _icon?.Close();
         _popup?.Close();
         _quickLaunch?.Close();
-        _desktopShelf?.Close();
+        foreach (var shelf in _desktopShelves.Values.ToArray()) shelf.Close();
         ToastWindow.Shutdown();
         _main?.PersistGeometry();
         SettingsService.Instance.Save();

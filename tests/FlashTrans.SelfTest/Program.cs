@@ -77,6 +77,14 @@ static class Program
             return _fail == 0 ? 0 : 1;
         }
 
+        if (Array.IndexOf(args, "--shelf-preview") is var shelfPreview && shelfPreview >= 0 && shelfPreview + 1 < args.Length)
+        {
+            // 只渲染贴边窄条与多收纳窗排布，不发送真实鼠标输入，适合反复对照样式。
+            Step("桌面收纳：贴边样式预览", () => DesktopShelfProbe.EdgePreview(args[shelfPreview + 1]));
+            app.Shutdown();
+            return _fail == 0 ? 0 : 1;
+        }
+
         if (args.Contains("--shelf-interactive"))
         {
             Step("桌面收纳：隔离交互预览", DesktopShelfProbe.Interactive);

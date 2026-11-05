@@ -17,7 +17,7 @@ public sealed class DesktopShelfStorage(string root)
     public string Root { get; } = FullPath(root);
     readonly SemaphoreSlim _gate = new(1, 1);
 
-    public async Task<(int Added, string? Error)> ImportAsync(DesktopShelfSettings settings, IEnumerable<string> paths)
+    public async Task<(int Added, string? Error)> ImportAsync(DesktopShelfSettings settings, DesktopShelfBox box, IEnumerable<string> paths)
     {
         var selected = paths.Take(QuickLaunchService.MaxItems + 1).ToArray();
         var recoveryError = await RecoverAsync(settings);
@@ -25,37 +25,46 @@ public sealed class DesktopShelfStorage(string root)
         await _gate.WaitAsync();
         try
         {
-            var existing = settings.Items.ToArray();
-            var result = await Task.Run(() => Import(selected, existing));
+            // 去重和原位置重叠检查覆盖所有收纳窗；数量上限只按目标收纳窗计算。
+            var existing = DesktopShelfService.AllItems(settings).ToArray();
+            var room = QuickLaunchService.MaxItems - box.Items.Count;
+            var result = await Task.Run(() => Import(selected, existing, room));
+            // 移动期间目标收纳窗被删除时放进第一个收纳窗，不让已移入的文件在列表里消失。
+            if (!settings.Boxes.Contains(box)) box = FirstBox(settings);
             foreach (var entry in result.Entries)
             {
-                var old = settings.Items.FindIndex(i => !i.IsStored && Same(i.Path, entry.OriginalPath));
-                if (old >= 0) { entry.Name = settings.Items[old].Name; settings.Items[old] = entry; }
-                else settings.Items.Add(entry);
+                var owner = settings.Boxes.FirstOrDefault(b => b.Items.Any(i => !i.IsStored && Same(i.Path, entry.OriginalPath)));
+                if (owner is null) { box.Items.Add(entry); continue; }
+                // 旧入口原位转换，仍留在它原来所在的收纳窗。
+                var old = owner.Items.FindIndex(i => !i.IsStored && Same(i.Path, entry.OriginalPath));
+                entry.Name = owner.Items[old].Name;
+                owner.Items[old] = entry;
             }
             return (result.Entries.Count, result.Error);
         }
         finally { _gate.Release(); }
     }
 
-    (List<DesktopShelfEntry> Entries, string? Error) Import(string[] paths, DesktopShelfEntry[] existing)
+    (List<DesktopShelfEntry> Entries, string? Error) Import(string[] paths, DesktopShelfEntry[] existing, int room)
     {
         var entries = new List<DesktopShelfEntry>();
+        var added = 0;
         string? error = null;
         CheckNoLinks(Root);
         Directory.CreateDirectory(Root);
         foreach (var input in paths.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(p => p?.Length ?? 0))
         {
             DesktopShelfRecord? record = null;
+            var replacing = false;
             try
             {
                 var source = FullPath(input);
                 if (entries.Any(i => i.IsFolder && Inside(source, i.OriginalPath))) continue;
                 if (existing.Any(i => i.IsStored && (Same(i.Path, source) || Same(i.OriginalPath, source)))
                     || entries.Any(i => Same(i.OriginalPath, source))) throw new IOException("该项目已收纳，请先解除收纳再添加");
-                var replacing = existing.Any(i => !i.IsStored && Same(i.Path, source));
-                if (!replacing && existing.Length + entries.Count >= QuickLaunchService.MaxItems)
-                    throw new IOException($"最多收纳 {QuickLaunchService.MaxItems} 项，请先解除不再使用的项目");
+                replacing = existing.Any(i => !i.IsStored && Same(i.Path, source));
+                if (!replacing && added >= room)
+                    throw new IOException($"每个收纳窗最多 {QuickLaunchService.MaxItems} 项，请先解除不再使用的项目");
                 ValidateUserPath(source);
                 var candidate = new AppSettings();
                 if (!QuickLaunchService.TryAdd(candidate, source, Directory.Exists(source), out var why)) throw new IOException(why);
@@ -73,6 +82,7 @@ public sealed class DesktopShelfStorage(string root)
                 record.State = "stored";
                 WriteRecord(record);
                 entries.Add(entry);
+                if (!replacing) added++;
             }
             catch (Exception ex) when (IsFileError(ex))
             {
@@ -81,6 +91,7 @@ public sealed class DesktopShelfStorage(string root)
                 if (record is not null && Exists(record.Entry.Path))
                 {
                     entries.Add(record.Entry);
+                    if (!replacing) added++;
                     error += "；已移动的部分保留在收纳目录，原位置也请检查";
                 }
             }
@@ -111,8 +122,9 @@ public sealed class DesktopShelfStorage(string root)
                     WriteRecord(record);
                     // 保留已还原标记：即使此后 settings.json 保存失败，下次也不会重现失效的收纳项。
                 });
-            if (item.IsStored) settings.Items.RemoveAll(i => i.StorageId == item.StorageId);
-            else settings.Items.Remove(item);
+            foreach (var box in settings.Boxes)
+                if (item.IsStored) box.Items.RemoveAll(i => i.StorageId == item.StorageId);
+                else box.Items.Remove(item);
         }
         finally { _gate.Release(); }
     }
@@ -125,24 +137,32 @@ public sealed class DesktopShelfStorage(string root)
             var result = await Task.Run(ReadInventory);
             foreach (var entry in result.Entries)
             {
-                var old = settings.Items.FindIndex(i => i.StorageId == entry.StorageId);
-                if (old >= 0)
+                var known = DesktopShelfService.AllItems(settings).FirstOrDefault(i => i.StorageId == entry.StorageId);
+                if (known is not null)
                 {
-                    settings.Items[old].Path = entry.Path;
-                    settings.Items[old].OriginalPath = entry.OriginalPath;
-                    settings.Items[old].IsFolder = entry.IsFolder;
+                    known.Path = entry.Path;
+                    known.OriginalPath = entry.OriginalPath;
+                    known.IsFolder = entry.IsFolder;
+                    continue;
                 }
-                else
-                {
-                    // 迁移中途退出时，旧入口仍可能留在配置中。
-                    settings.Items.RemoveAll(i => !i.IsStored && Same(i.Path, entry.OriginalPath));
-                    settings.Items.Add(entry);
-                }
+                // 迁移中途退出时，旧入口仍可能留在配置中；放回旧入口所在的收纳窗，找不到就放进第一个。
+                var target = settings.Boxes.FirstOrDefault(b => b.Items.Any(i => !i.IsStored && Same(i.Path, entry.OriginalPath)))
+                    ?? FirstBox(settings);
+                foreach (var box in settings.Boxes) box.Items.RemoveAll(i => !i.IsStored && Same(i.Path, entry.OriginalPath));
+                target.Items.Add(entry);
             }
-            foreach (var id in result.Restored) settings.Items.RemoveAll(i => i.StorageId == id);
+            foreach (var id in result.Restored)
+                foreach (var box in settings.Boxes) box.Items.RemoveAll(i => i.StorageId == id);
             return result.Error;
         }
         finally { _gate.Release(); }
+    }
+
+    /// <summary>尚未归一化的配置可能还没有收纳窗，恢复和导入时补一个默认的。</summary>
+    internal static DesktopShelfBox FirstBox(DesktopShelfSettings settings)
+    {
+        if (settings.Boxes.Count == 0) DesktopShelfService.Normalize(settings);
+        return settings.Boxes[0];
     }
 
     (List<DesktopShelfEntry> Entries, List<string> Restored, string? Error) ReadInventory()

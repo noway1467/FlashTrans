@@ -224,6 +224,12 @@ public sealed class SettingsService
             s.Version = 13;
             changed = true;
         }
+        if (s.Version < 14)
+        {
+            // 收纳窗改为可以有多个：旧的单窗口字段由 Normalize 并入第一个收纳窗，这里只让新结构立即落盘。
+            s.Version = 14;
+            changed = true;
+        }
         return changed;
     }
 

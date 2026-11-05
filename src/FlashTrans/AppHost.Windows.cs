@@ -156,22 +156,29 @@ public sealed partial class AppHost
 
     void ScheduleDesktopShelf()
     {
-        if (!S.DesktopShelf.Enabled || _shuttingDown || _desktopShelf is not null
-            || _shelfShowOperation?.Status == DispatcherOperationStatus.Pending) return;
-        // 不在 Start() 中构造窗口、访问文件或加载系统图标。
+        if (!S.DesktopShelf.Enabled || _shuttingDown || _shelfShowOperation?.Status == DispatcherOperationStatus.Pending
+            || S.DesktopShelf.Boxes.All(b => _desktopShelves.ContainsKey(b.Id))) return;
+        // 不在 Start() 中构造窗口、访问文件或加载系统图标；多个收纳窗逐个在空闲时创建，不连成一长段卡住界面。
         _shelfShowOperation = Application.Current.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, () =>
         {
             _shelfShowOperation = null;
-            if (!_shuttingDown && S.DesktopShelf.Enabled) EnsureDesktopShelf().Show();
+            if (_shuttingDown || !S.DesktopShelf.Enabled) return;
+            if (S.DesktopShelf.Boxes.FirstOrDefault(b => !_desktopShelves.ContainsKey(b.Id)) is { } box) EnsureDesktopShelf(box).Show();
+            ScheduleDesktopShelf();
         });
     }
 
-    DesktopShelfWindow EnsureDesktopShelf()
+    DesktopShelfWindow EnsureDesktopShelf(DesktopShelfBox box)
     {
-        if (_desktopShelf is not null) return _desktopShelf;
-        _desktopShelf = new DesktopShelfWindow(() => ShowSettings("desktopshelf"));
-        _desktopShelf.Closed += (_, _) => _desktopShelf = null;
-        return _desktopShelf;
+        if (_desktopShelves.TryGetValue(box.Id, out var existing)) return existing;
+        var window = new DesktopShelfWindow(box, () => ShowSettings("desktopshelf"));
+        _desktopShelves[box.Id] = window;
+        window.Closed += (_, _) =>
+        {
+            if (_desktopShelves.TryGetValue(window.BoxId, out var current) && ReferenceEquals(current, window))
+                _desktopShelves.Remove(window.BoxId);
+        };
+        return window;
     }
 
     void SyncDesktopShelf()
@@ -180,21 +187,34 @@ public sealed partial class AppHost
         {
             _shelfShowOperation?.Abort();
             _shelfShowOperation = null;
-            _desktopShelf?.Close();
+            foreach (var window in _desktopShelves.Values.ToArray()) window.Close();
             return;
         }
-        if (_desktopShelf is not null) _desktopShelf.ApplySettings();
-        else ScheduleDesktopShelf();
+        // 删掉的收纳窗关窗，其余按新设置重排；新建的留给空闲时创建。
+        var ids = S.DesktopShelf.Boxes.Select(b => b.Id).ToHashSet(StringComparer.Ordinal);
+        foreach (var (id, window) in _desktopShelves.ToArray())
+            if (ids.Contains(id)) window.ApplySettings();
+            else window.Close();
+        ScheduleDesktopShelf();
     }
 
-    internal void PreviewDesktopShelf() => _desktopShelf?.ApplySettings();
+    internal void PreviewDesktopShelf()
+    {
+        foreach (var window in _desktopShelves.Values.ToArray()) window.ApplySettings();
+    }
 
-    public void ShowDesktopShelf()
+    /// <summary>托盘和设置页的「显示收纳窗」：不指定时展开全部收纳窗。</summary>
+    public void ShowDesktopShelf() => ShowDesktopShelf(null);
+
+    public void ShowDesktopShelf(DesktopShelfBox? only)
     {
         if (!S.DesktopShelf.Enabled) { ShowSettings("desktopshelf"); return; }
-        var window = EnsureDesktopShelf();
-        window.Show();
-        window.RevealForUser();
+        foreach (var box in S.DesktopShelf.Boxes.Where(b => only is null || ReferenceEquals(b, only)).ToArray())
+        {
+            var window = EnsureDesktopShelf(box);
+            window.Show();
+            window.RevealForUser();
+        }
     }
 
     // ------------------------------------------------------------- 托盘菜单
