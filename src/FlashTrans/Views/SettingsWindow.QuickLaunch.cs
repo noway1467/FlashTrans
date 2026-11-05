@@ -16,6 +16,7 @@ public sealed partial class SettingsWindow
         var page = Page();
         var heading = new DockPanel { Margin = new Thickness(0, 0, 0, 16) };
         var open = SmallButton("打开面板", _host.ToggleQuickLaunch, "OutlineBtn");
+        open.IsEnabled = S.QuickLaunchEnabled;
         open.Height = 30;
         DockPanel.SetDock(open, Dock.Right);
         heading.Children.Add(open);
@@ -24,6 +25,13 @@ public sealed partial class SettingsWindow
         intro.Children.Add(Hint("集中收纳程序、快捷方式、常用文件和文件夹。"));
         heading.Children.Add(intro);
         page.Children.Add(heading);
+        var enabled = Check("开启快速启动", S.QuickLaunchEnabled, value =>
+        {
+            S.QuickLaunchEnabled = value;
+            open.IsEnabled = value;
+        }, "默认关闭；关闭后释放快捷键并隐藏托盘入口，保留项目列表。");
+        enabled.Name = "QuickLaunchEnabled";
+        Section(page, "功能开关", enabled);
         Section(page, "快捷键",
             HotkeyField("呼出 / 隐藏快速启动", S.HkQuickLaunch, v => S.HkQuickLaunch = v, HotkeyAction.QuickLaunch),
             Hint("点击后按组合键，Backspace 清除；也可从托盘打开。"));

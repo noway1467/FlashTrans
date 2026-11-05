@@ -57,6 +57,7 @@ public sealed partial class SettingsWindow : Window
         _pages.Add(("capture", NavButton("截图"), BuildCapturePage));
         _pages.Add(("ocr", NavButton("OCR"), BuildOcrPage));
         _pages.Add(("quicklaunch", NavButton("快速启动"), BuildQuickLaunchPage));
+        _pages.Add(("desktopshelf", NavButton("桌面收纳"), BuildDesktopShelfPage));
         _pages.Add(("hotkeys", NavButton("快捷键"), BuildHotkeyPage));
         _pages.Add(("appearance", NavButton("外观与词典"), BuildAppearancePage));
         _pages.Add(("about", NavButton("关于"), BuildAboutPage));

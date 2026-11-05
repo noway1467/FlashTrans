@@ -12,6 +12,7 @@ namespace FlashTrans.Services;
     NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals,
     PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(AppSettings))]
+[JsonSerializable(typeof(DesktopShelfRecord))]
 internal partial class SettingsJson : JsonSerializerContext;
 
 /// <summary>设置读写。支持便携模式（exe 同目录放 portable.txt）。密钥用 DPAPI 加密。</summary>
@@ -210,6 +211,19 @@ public sealed class SettingsService
             s.Version = 11;
             changed = true;
         }
+        if (s.Version < 12)
+        {
+            // 升级后不擅自打开桌面窗口；缺少字段时沿用默认关闭。
+            s.DesktopShelf ??= new();
+            s.Version = 12;
+            changed = true;
+        }
+        if (s.Version < 13)
+        {
+            // 缺少开关的旧配置也保持关闭；旧收纳入口只改数据结构，不自动移动用户文件。
+            s.Version = 13;
+            changed = true;
+        }
         return changed;
     }
 
@@ -221,6 +235,8 @@ public sealed class SettingsService
     public static void Normalize(AppSettings s)
     {
         s.QuickLaunchItems = QuickLaunchService.Normalize(s.QuickLaunchItems);
+        s.DesktopShelf ??= new();
+        DesktopShelfService.Normalize(s.DesktopShelf);
         s.HkQuickLaunch ??= "";
         s.ExcludedApplications = Interop.ApplicationExclusions.Normalize(s.ExcludedApplications);
         s.DocumentProviderId ??= "";

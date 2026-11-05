@@ -66,6 +66,7 @@ public static class QuickLaunchService
                 {
                     Path = path, Name = name[..Math.Min(name.Length, 80)], IsFolder = item.IsFolder,
                     LaunchCount = Math.Max(0, item.LaunchCount), LastLaunched = item.LastLaunched,
+                    AddedAt = item.AddedAt,
                 });
                 if (result.Count == MaxItems) break;
             }
@@ -86,7 +87,8 @@ public static class QuickLaunchService
                 throw new InvalidOperationException("这个项目已经在快速启动列表中");
             if (settings.QuickLaunchItems.Count >= MaxItems)
                 throw new InvalidOperationException($"最多添加 {MaxItems} 项，请先移除不再使用的项目");
-            settings.QuickLaunchItems.Add(new QuickLaunchEntry { Name = DefaultName(path, folder), Path = path, IsFolder = folder });
+            settings.QuickLaunchItems.Add(new QuickLaunchEntry { Name = DefaultName(path, folder), Path = path, IsFolder = folder,
+                AddedAt = DateTimeOffset.UtcNow });
             return true;
         }
         catch (Exception ex) when (ex is ArgumentException or IOException or InvalidOperationException or NotSupportedException or UnauthorizedAccessException)

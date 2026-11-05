@@ -69,6 +69,21 @@ static class Program
             return _fail == 0 ? 0 : 1;
         }
 
+        if (args.Contains("--only-desktopshelf"))
+        {
+            var index = Array.IndexOf(args, "--preview-dir");
+            DesktopShelfProbe.RunAll(Step, index >= 0 && index + 1 < args.Length ? args[index + 1] : null);
+            app.Shutdown();
+            return _fail == 0 ? 0 : 1;
+        }
+
+        if (args.Contains("--shelf-interactive"))
+        {
+            Step("桌面收纳：隔离交互预览", DesktopShelfProbe.Interactive);
+            app.Shutdown();
+            return _fail == 0 ? 0 : 1;
+        }
+
         if (args.Contains("--only-settings"))
         {
             var index = Array.IndexOf(args, "--preview-dir");
@@ -185,6 +200,9 @@ static class Program
         if (args.Contains("--mp4lab")) SizeLab.Mp4Lab();
         if (args.Contains("--fliplab")) SizeLab.FlipLab();
         if (args.Contains("--shot")) ShotProbe.Run("shots", host);
+
+        // 生命周期探针会 Dispose 宿主及全局缓存，必须放在其他功能验证之后。
+        DesktopShelfProbe.RunAll(Step);
 
         Console.WriteLine(_fail == 0 ? "\n全部通过" : $"\n失败 {_fail} 项");
         app.Shutdown();

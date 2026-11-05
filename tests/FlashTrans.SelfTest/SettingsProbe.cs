@@ -97,7 +97,7 @@ static class SettingsProbe
                 try
                 {
                     window.Show();
-                    foreach (var tab in new[] { "general", "sources", "languages", "capture", "ocr", "quicklaunch", "hotkeys", "appearance", "about" })
+                    foreach (var tab in new[] { "general", "sources", "languages", "capture", "ocr", "quicklaunch", "desktopshelf", "hotkeys", "appearance", "about" })
                     {
                         window.SelectTab(tab); Pump(); window.UpdateLayout();
                         foreach (var text in Descendants<TextBlock>(window).Where(t => Equals(t.Tag, "SettingsDescription")))
@@ -162,7 +162,7 @@ static class SettingsProbe
             var input = (TextBox)main.FindName("Input");
             if (hint.Visibility != Visibility.Visible || !hint.Text.Contains("翻译")) throw new InvalidOperationException("空输入没有提示文字");
             var texts = Descendants<TextBlock>(main).Select(t => t.Text).ToList();
-            foreach (var hotkey in new[] { s.HkTranslateSelection, s.HkCaptureOcr, s.HkTranslateClipboard, s.HkQuickLaunch }.Where(h => h.Length > 0))
+            foreach (var hotkey in new[] { s.HkTranslateSelection, s.HkCaptureOcr, s.HkTranslateClipboard, s.QuickLaunchEnabled ? s.HkQuickLaunch : "" }.Where(h => h.Length > 0))
                 if (!texts.Contains(Interop.HotkeySpec.Parse(hotkey).ToString()))
                     throw new InvalidOperationException("空白指引缺少快捷键：" + hotkey);
             if (preview is not null)

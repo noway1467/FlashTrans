@@ -174,7 +174,7 @@ public partial class MainWindow
         Add(S.HkTranslateSelection, "翻译其他程序里选中的文字");
         Add(S.HkCaptureOcr, "截图，可识别文字并翻译");
         Add(S.HkTranslateClipboard, "翻译剪贴板内容");
-        Add(S.HkQuickLaunch, "呼出快速启动");
+        if (S.QuickLaunchEnabled) Add(S.HkQuickLaunch, "呼出快速启动");
         if (tips.Count == 0) { _result.ShowMessage("输入或粘贴文本开始翻译；全局快捷键可在设置里配置"); return; }
         _result.ShowTips("全局快捷键", tips);
     }
@@ -216,7 +216,7 @@ public partial class MainWindow
             s.AutoSwapSameLang, s.MultiTargetEnabled, string.Join(",", s.MultiTargets),
             s.Bilingual, s.HideBilingualSource, s.BilingualByParagraph,
             s.FontSize, s.FontFamily, s.Compact, s.Opacity,
-            s.AlwaysOnTop,
+            s.AlwaysOnTop, s.QuickLaunchEnabled, s.HkQuickLaunch,
             // 词典开关也进签名：结果区的「欧路词典」按钮是渲染时按它决定的，
             // 漏掉的话关掉开关后那个按钮要等下一次翻译才消失。
             s.ShowLatency, s.ShowDictionary, s.EudicEnabled, providers);

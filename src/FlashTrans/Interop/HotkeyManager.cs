@@ -31,7 +31,7 @@ public sealed class HotkeyManager(IntPtr hwnd) : IDisposable
         yield return (HotkeyAction.NextProvider, s.HkNextProvider, "切换下一个翻译源");
         yield return (HotkeyAction.CaptureOcr, s.HkCaptureOcr, "截图");
         yield return (HotkeyAction.TogglePopup, s.HkTogglePopup, "收起/叫回翻译弹窗");
-        yield return (HotkeyAction.QuickLaunch, s.HkQuickLaunch, "快速启动");
+        yield return (HotkeyAction.QuickLaunch, s.QuickLaunchEnabled ? s.HkQuickLaunch : "", "快速启动");
     }
 
     public static string? FindConflict(AppSettings s, HotkeyAction action, string? text)
@@ -90,6 +90,11 @@ public sealed class HotkeyManager(IntPtr hwnd) : IDisposable
     public bool TryChange(AppSettings s, HotkeyAction action, string text, out string? error)
     {
         error = FindConflict(s, action, text);
+        if (action == HotkeyAction.QuickLaunch && !s.QuickLaunchEnabled)
+        {
+            Remove(action);
+            return error is null;
+        }
         return error is null && TryBind(action, HotkeySpec.Parse(text), out error);
     }
 

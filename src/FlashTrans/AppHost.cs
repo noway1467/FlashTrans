@@ -22,6 +22,8 @@ public sealed partial class AppHost : IDisposable
     SelectionIcon? _icon;
     SettingsWindow? _settings;
     QuickLaunchWindow? _quickLaunch;
+    DesktopShelfWindow? _desktopShelf;
+    DispatcherOperation? _shelfShowOperation;
 
     uint _lastClipSeq;
     bool _clipboardHooked;
@@ -60,6 +62,7 @@ public sealed partial class AppHost : IDisposable
             SyncStartupWhenIdle();
         }
         PreloadWhenIdle(startHidden, preloadOcr: !diagnostic);
+        ScheduleDesktopShelf();
     }
 
     // ------------------------------------------------------------- 消息分发
@@ -295,7 +298,9 @@ public sealed partial class AppHost : IDisposable
         _tray.UpdateTip(TrayTip());
         _main?.OnSettingsChanged();
         _popup?.OnSettingsChanged();
-        _quickLaunch?.Refresh();
+        if (s.QuickLaunchEnabled) _quickLaunch?.Refresh();
+        else _quickLaunch?.Close();
+        SyncDesktopShelf();
         // 「重置为默认设置」这类不经过那个复选框的改动也要跟着落地
         if (!_diagnosticMode) StartupService.Sync(s.RunAtStartup);
     }
@@ -364,7 +369,9 @@ public sealed partial class AppHost : IDisposable
 
     public void Dispose()
     {
+        _shuttingDown = true;
         _preloadTimer?.Stop();
+        _shelfShowOperation?.Abort();
         SettingsService.Instance.Changed -= OnSettingsChanged;
         CloseTrayMenu();
         _selectionCts?.Cancel();
@@ -376,6 +383,7 @@ public sealed partial class AppHost : IDisposable
         _icon?.Close();
         _popup?.Close();
         _quickLaunch?.Close();
+        _desktopShelf?.Close();
         ToastWindow.Shutdown();
         _main?.PersistGeometry();
         SettingsService.Instance.Save();

@@ -37,6 +37,7 @@ static class QuickLaunchProbe
     public static void RunAll(Action<string, Action> step, string? preview = null)
     {
         step("快速启动：配置往返、升级兼容、非法路径与重复项", Configuration);
+        step("快速启动：默认关闭、设置开关及热键释放", FeatureSwitch);
         step("快速启动：相关度、首字母缩写与使用次数排序", Ranking);
         step("快速启动：全局/截图/录制冲突与符号快捷键", Conflicts);
         step("快速启动：独立进程占用检测、旧键保留和真实热键消息", NativeHotkeys);
@@ -53,7 +54,7 @@ static class QuickLaunchProbe
         Check(SettingsService.Migrate(old) && old.Version == AppSettings.CurrentVersion, "旧设置没有迁移");
         Check(old.HkQuickLaunch == "" && old.HkToggleWindow == "Ctrl+Alt+Space", "新增默认键抢了旧功能");
         var defaults = JsonSerializer.Deserialize("{}", SettingsJson.Default.AppSettings)!;
-        Check(defaults.HkQuickLaunch == "Ctrl+Alt+Space" && defaults.QuickLaunchItems.Count == 0, "缺省配置错误");
+        Check(!defaults.QuickLaunchEnabled && !old.QuickLaunchEnabled && defaults.HkQuickLaunch == "Ctrl+Alt+Space" && defaults.QuickLaunchItems.Count == 0, "缺省开关/升级配置错误");
         var path = Path.Combine(Path.GetTempPath(), "QuickLaunch-未挂载", "app.exe");
         defaults.QuickLaunchItems = [new() { Name = " 我的程序 ", Path = path, LaunchCount = 7, LastLaunched = new DateTimeOffset(2026, 10, 1, 8, 0, 0, TimeSpan.Zero) },
             new() { Path = path.ToUpperInvariant() },
@@ -94,6 +95,7 @@ static class QuickLaunchProbe
     static void Conflicts()
     {
         var s = AppSettings.CreateDefault();
+        s.QuickLaunchEnabled = true;
         Check(HotkeyManager.FindConflict(s, HotkeyAction.QuickLaunch, s.HkQuickLaunch) is null, "默认键冲突");
         foreach (var text in new[] { "Alt+Control+q", "F1", RecordHud.PauseHotkey, RecordHud.CancelHotkey, s.CkAutoRedact, "Ctrl+D" })
             Check(HotkeyManager.FindConflict(s, HotkeyAction.QuickLaunch, text) is not null, "未拦截冲突：" + text);
@@ -129,7 +131,7 @@ static class QuickLaunchProbe
         return Process.Start(info)!;
     }
 
-    static void NativeHotkeys() => InTemp(dir =>
+    static void NativeHotkeys() => WithSettings(() => InTemp(dir =>
     {
         var first = AvailableKey();
         var occupied = AvailableKey(exclude: first);
@@ -147,6 +149,7 @@ static class QuickLaunchProbe
             var host = new AppHost();
             manager.Triggered += action => { if (action == HotkeyAction.QuickLaunch) { count++; host.ToggleQuickLaunch(); } };
             var s = AppSettings.CreateDefault();
+            s.QuickLaunchEnabled = true;
             Check(manager.TryChange(s, HotkeyAction.QuickLaunch, first, out var error), error ?? "首次注册失败");
             Check(!manager.TryChange(s, HotkeyAction.QuickLaunch, occupied, out error) && error!.Contains("占用"), "未检测到独立进程占用");
             SendHotkey(first);
@@ -170,7 +173,7 @@ static class QuickLaunchProbe
             if (!child.WaitForExit(5000)) { child.Kill(); child.WaitForExit(); }
             foreach (var w in Application.Current.Windows.OfType<QuickLaunchWindow>().ToArray()) w.Close();
         }
-    });
+    }));
 
     static void SendHotkey(string text)
     {
@@ -186,6 +189,7 @@ static class QuickLaunchProbe
     static AppSettings EmptyHotkeys()
     {
         var s = AppSettings.CreateDefault();
+        s.QuickLaunchEnabled = true;
         foreach (var property in typeof(AppSettings).GetProperties().Where(p => p.Name.StartsWith("Hk")))
             property.SetValue(s, "");
         return s;
@@ -456,9 +460,60 @@ static class QuickLaunchProbe
     static void WithSettings(Action action)
     {
         var original = SettingsService.Instance.Current;
-        try { SettingsService.Instance.Apply(AppSettings.CreateDefault()); action(); }
+        try { var settings = AppSettings.CreateDefault(); settings.QuickLaunchEnabled = true; SettingsService.Instance.Apply(settings); action(); }
         finally { SettingsService.Instance.Apply(original); ThemeService.Apply(original); }
     }
+
+    static void FeatureSwitch() => WithSettings(() =>
+    {
+        var s = EmptyHotkeys();
+        s.QuickLaunchEnabled = false;
+        s.HkQuickLaunch = AvailableKey();
+        SettingsService.Instance.Apply(s);
+        using var message = new MessageWindow("QuickLaunch.Switch");
+        using var manager = new HotkeyManager(message.Handle);
+        manager.Rebind(s);
+        Check(manager.GetBinding(HotkeyAction.QuickLaunch) is null, "默认关闭仍注册了快捷键");
+        Check(manager.TryChange(s, HotkeyAction.QuickLaunch, s.HkQuickLaunch, out _)
+            && manager.GetBinding(HotkeyAction.QuickLaunch) is null, "关闭时编辑快捷键却把功能启动了");
+        s.QuickLaunchEnabled = true; manager.Rebind(s);
+        Check(manager.GetBinding(HotkeyAction.QuickLaunch) is not null, "开启后未注册快捷键");
+        s.QuickLaunchEnabled = false; manager.Rebind(s);
+        Check(manager.GetBinding(HotkeyAction.QuickLaunch) is null, "关闭后未释放快捷键");
+        var spec = HotkeySpec.Parse(s.HkQuickLaunch);
+        Check(Win32.RegisterHotKey(message.Handle, 0x7400, spec.Win32Modifiers, spec.VirtualKey), "关闭后系统仍认为快捷键被占用");
+        Win32.UnregisterHotKey(message.Handle, 0x7400);
+        var host = new AppHost();
+        host.ToggleQuickLaunch();
+        var window = Application.Current.Windows.OfType<SettingsWindow>().Single();
+        try
+        {
+            Pump();
+            Check(!Application.Current.Windows.OfType<QuickLaunchWindow>().Any(), "关闭时仍打开了启动面板");
+            var toggle = Descendants<CheckBox>(window).Single(b => b.Name == "QuickLaunchEnabled");
+            Check(toggle.IsChecked == false, "设置页未显示关闭状态");
+            toggle.IsChecked = true;
+            SettingsService.Instance.Load();
+            Check(SettingsService.Instance.Current.QuickLaunchEnabled, "开关未保存");
+            host.ToggleQuickLaunch();
+            Check(Application.Current.Windows.OfType<QuickLaunchWindow>().Single().IsVisible, "开启后不能使用快速启动");
+            var tray = typeof(AppHost).GetMethod("BuildTrayMenu", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            Check(((ContextMenu)tray.Invoke(host, null)!).Items.OfType<MenuItem>().Any(i => Equals(i.Header, "快速启动")), "开启后缺少托盘入口");
+            SettingsService.Instance.Current.QuickLaunchEnabled = false;
+            Check(!((ContextMenu)tray.Invoke(host, null)!).Items.OfType<MenuItem>().Any(i => Equals(i.Header, "快速启动")), "关闭后托盘仍有入口");
+            typeof(AppHost).GetField("_diagnosticMode", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(host, true);
+            typeof(AppHost).GetField("_tray", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(host, new TrayIcon(message.Handle, "FlashTrans test"));
+            typeof(AppHost).GetMethod("OnSettingsChanged", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .Invoke(host, [SettingsService.Instance.Current]);
+            Check(!Application.Current.Windows.OfType<QuickLaunchWindow>().Any(), "关闭开关后已打开的面板未释放");
+            ((TrayIcon)typeof(AppHost).GetField("_tray", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(host)!).Dispose();
+        }
+        finally
+        {
+            window.Close();
+            foreach (var panel in Application.Current.Windows.OfType<QuickLaunchWindow>().ToArray()) panel.Close();
+        }
+    });
 
     static void InTemp(Action<string> action)
     {

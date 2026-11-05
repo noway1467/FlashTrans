@@ -122,6 +122,7 @@ public sealed partial class AppHost
 
     public void ToggleQuickLaunch()
     {
+        if (!S.QuickLaunchEnabled) { ShowSettings("quicklaunch"); return; }
         if (_quickLaunch is { IsVisible: true }) { _quickLaunch.Hide(); return; }
         if (_quickLaunch is null)
         {
@@ -153,6 +154,49 @@ public sealed partial class AppHost
         _settings.Activate();
     }
 
+    void ScheduleDesktopShelf()
+    {
+        if (!S.DesktopShelf.Enabled || _shuttingDown || _desktopShelf is not null
+            || _shelfShowOperation?.Status == DispatcherOperationStatus.Pending) return;
+        // 不在 Start() 中构造窗口、访问文件或加载系统图标。
+        _shelfShowOperation = Application.Current.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, () =>
+        {
+            _shelfShowOperation = null;
+            if (!_shuttingDown && S.DesktopShelf.Enabled) EnsureDesktopShelf().Show();
+        });
+    }
+
+    DesktopShelfWindow EnsureDesktopShelf()
+    {
+        if (_desktopShelf is not null) return _desktopShelf;
+        _desktopShelf = new DesktopShelfWindow(() => ShowSettings("desktopshelf"));
+        _desktopShelf.Closed += (_, _) => _desktopShelf = null;
+        return _desktopShelf;
+    }
+
+    void SyncDesktopShelf()
+    {
+        if (!S.DesktopShelf.Enabled)
+        {
+            _shelfShowOperation?.Abort();
+            _shelfShowOperation = null;
+            _desktopShelf?.Close();
+            return;
+        }
+        if (_desktopShelf is not null) _desktopShelf.ApplySettings();
+        else ScheduleDesktopShelf();
+    }
+
+    internal void PreviewDesktopShelf() => _desktopShelf?.ApplySettings();
+
+    public void ShowDesktopShelf()
+    {
+        if (!S.DesktopShelf.Enabled) { ShowSettings("desktopshelf"); return; }
+        var window = EnsureDesktopShelf();
+        window.Show();
+        window.RevealForUser();
+    }
+
     // ------------------------------------------------------------- 托盘菜单
 
     ContextMenu BuildTrayMenu()
@@ -171,7 +215,9 @@ public sealed partial class AppHost
         }));
         menu.Items.Add(Item("截图", HotkeySpec.Parse(S.HkCaptureOcr).ToString(),
             () => _ = CaptureAsync()));
-        menu.Items.Add(Item("快速启动", HotkeySpec.Parse(S.HkQuickLaunch).ToString(), ToggleQuickLaunch));
+        if (S.QuickLaunchEnabled)
+            menu.Items.Add(Item("快速启动", HotkeySpec.Parse(S.HkQuickLaunch).ToString(), ToggleQuickLaunch));
+        menu.Items.Add(Item("桌面收纳", "", ShowDesktopShelf));
         menu.Items.Add(new Separator());
 
         var selection = new MenuItem

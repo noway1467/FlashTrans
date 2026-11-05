@@ -50,7 +50,7 @@ public enum RecordFormat
     Mp4,
 }
 
-public sealed class QuickLaunchEntry
+public class QuickLaunchEntry
 {
     public string Name { get; set; } = "";
     public string Path { get; set; } = "";
@@ -58,6 +58,7 @@ public sealed class QuickLaunchEntry
     /// <summary>只用于搜索结果排序，不改变用户手动排好的默认顺序。</summary>
     public int LaunchCount { get; set; }
     public DateTimeOffset? LastLaunched { get; set; }
+    public DateTimeOffset? AddedAt { get; set; }
 }
 
 public sealed class AppSettings
@@ -66,10 +67,12 @@ public sealed class AppSettings
     public int Version { get; set; } = CurrentVersion;
 
     /// <summary>加新的默认源/字段时 +1，并在 Migrate 里补一段。</summary>
-    public const int CurrentVersion = 11;
+    public const int CurrentVersion = 13;
 
     // 只保存用户选择的路径，不扫描磁盘或自动收集已安装程序。
     public List<QuickLaunchEntry> QuickLaunchItems { get; set; } = [];
+    public bool QuickLaunchEnabled { get; set; }
+    public DesktopShelfSettings DesktopShelf { get; set; } = new();
 
     // ------- 文件翻译 -------
     /// <summary>空字符串表示源文件目录；只保存用户显式设为默认的目录。</summary>

@@ -530,7 +530,8 @@ public sealed partial class SettingsWindow
             HotkeyField("切换到下一个源", S.HkNextProvider, v => S.HkNextProvider = v, HotkeyAction.NextProvider),
             HotkeyField("截图", S.HkCaptureOcr, v => S.HkCaptureOcr = v, HotkeyAction.CaptureOcr),
             HotkeyField("收起 / 叫回翻译弹窗", S.HkTogglePopup, v => S.HkTogglePopup = v, HotkeyAction.TogglePopup),
-            HotkeyField("呼出 / 隐藏快速启动", S.HkQuickLaunch, v => S.HkQuickLaunch = v, HotkeyAction.QuickLaunch));
+            HotkeyField("呼出 / 隐藏快速启动", S.HkQuickLaunch, v => S.HkQuickLaunch = v, HotkeyAction.QuickLaunch),
+            Hint("快速启动默认关闭，需在「快速启动」分类中开启后才占用快捷键。"));
 
         Section(page, "框选时的键",
             Hint("矩形、画笔、马赛克那些键在「截图」一栏里配。"),
@@ -648,7 +649,7 @@ public sealed partial class SettingsWindow
                 Toast("Esc / 回车 / 空格 / Tab 在框选时另有用途，不能改");
                 return;
             }
-            if (spec == HotkeySpec.Parse(S.HkQuickLaunch))
+            if (S.QuickLaunchEnabled && spec == HotkeySpec.Parse(S.HkQuickLaunch))
             {
                 Toast("与快速启动的全局快捷键重复，请更换");
                 return;
