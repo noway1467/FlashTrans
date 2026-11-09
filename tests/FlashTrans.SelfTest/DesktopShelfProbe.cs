@@ -52,7 +52,8 @@ static class DesktopShelfProbe
             step("桌面收纳：设置页新建、切换、改名、单独调尺寸与删除收纳窗", SettingsBoxes);
             step("桌面收纳：收纳窗菜单与双击标题改名", RenameAndMenu);
             step("桌面收纳：四边收起/展开、菜单与拖放保护、位置不丢失", () => AutoHide(preview));
-            step("桌面收纳：贴边窄条贴边直角、悬停高亮、划过不展开及同边多个不重叠", () => EdgeTabs(preview));
+            step("桌面收纳：贴边不强制置顶，普通/全屏窗口遮挡及置顶开关即时生效", WindowLayer);
+            step("桌面收纳：贴边窄条保持原色、划过不展开及同边多个不重叠", () => EdgeTabs(preview));
             step("桌面收纳：关闭自动贴边后真实拖动到四边、鼠标移出隐藏及移入展开", () => ManualEdgeAutoHide(preview));
             step("桌面收纳：默认不创建、启用延后显示、关闭后释放窗口", HostLifecycle);
             step("桌面收纳：宿主为每个收纳窗逐个建窗、互不遮挡、删除即关窗", HostMultiple);
@@ -669,7 +670,7 @@ static class DesktopShelfProbe
                 window.FitToScreen(edge); window.PersistGeometry();
                 var full = new Rect(window.Left, window.Top, window.Width, window.Height);
                 window.CollapseToEdge(); Pump();
-                Check(window.IsEdgeCollapsed && window.Topmost, "未收起为可呼出的窄边");
+                Check(window.IsEdgeCollapsed && !window.Topmost, "未收起为窄边，或自动隐藏强制置顶");
                 Check(edge is ShelfEdge.Left or ShelfEdge.Right
                     ? window.Width == DesktopShelfWindow.TabThickness && window.Height == DesktopShelfWindow.TabLength
                     : window.Height == DesktopShelfWindow.TabThickness && window.Width == DesktopShelfWindow.TabLength, "隐藏窗口仍占大块桌面");
@@ -738,6 +739,65 @@ static class DesktopShelfProbe
         finally { reopened.Close(); }
     }
 
+    public static void WindowLayer()
+    {
+        var original = S;
+        var shelf = new DesktopShelfSettings { Boxes = [new() { Width = 280, Height = 300 }] };
+        DesktopShelfService.Normalize(shelf);
+        SettingsService.Instance.Current.DesktopShelf = shelf;
+        var window = new DesktopShelfWindow(Box, () => { });
+        var covering = new Window { Title = "FlashTrans 层级回归", WindowStyle = WindowStyle.None,
+            ResizeMode = ResizeMode.NoResize, ShowInTaskbar = false, Background = Brushes.SteelBlue };
+        try
+        {
+            // 先打开其他程序的等价窗口，再建收纳窗，覆盖实际启动时的顺序。
+            covering.Show(); covering.Activate(); Pump();
+            var monitor = ScreenHelper.MonitorAt(ScreenHelper.CursorPos(), covering);
+            covering.Left = monitor.Left; covering.Top = monitor.Top;
+            covering.Width = monitor.Width; covering.Height = monitor.Height;
+            Box.Left = monitor.Right - Box.Width; Box.Top = monitor.Top + 120;
+            WaitForHit(covering, new Point(monitor.Right - 20, monitor.Top + 140), "全屏测试窗口就绪");
+            window.Show(); Await(window.InventoryReady); Pump();
+            CheckNotTopmost("启动");
+            CheckCovered("全屏期间启动收纳窗");
+            foreach (var fullScreen in new[] { false, true })
+            {
+                foreach (var edge in Edges)
+                {
+                    window.ExpandFromEdge(); window.FitToScreen(edge); window.PersistGeometry();
+                    var bounds = new Rect(window.Left, window.Top, window.Width, window.Height);
+                    var cover = fullScreen ? monitor : bounds;
+                    covering.Left = cover.Left; covering.Top = cover.Top;
+                    covering.Width = cover.Width; covering.Height = cover.Height;
+                    covering.Activate(); Pump();
+                    CheckCovered("展开状态");
+                    window.CollapseToEdge(animate: false); Pump();
+                    CheckNotTopmost("收起"); CheckCovered("收起状态");
+                    window.ApplySettings(); Pump();
+                    CheckNotTopmost("收起时应用设置"); CheckCovered("应用设置后");
+                    window.ExpandFromEdge(animate: true); Pump();
+                    CheckNotTopmost("悬停展开"); CheckCovered("展开后");
+                }
+            }
+            window.CollapseToEdge(animate: false);
+            shelf.Topmost = true; window.ApplySettings(); Pump();
+            Check(window.Topmost && NativeTopmost(), "主动开启置顶没有生效");
+            shelf.Topmost = false; window.ApplySettings(); Pump();
+            CheckNotTopmost("关闭置顶"); CheckCovered("关闭置顶后");
+            window.RevealForUser(); Pump(); CheckNotTopmost("用户主动呼出");
+            covering.Activate(); Pump(); CheckCovered("呼出后切回软件");
+        }
+        finally { window.Close(); covering.Close(); SettingsService.Instance.Current.DesktopShelf = original; Pump(); }
+
+        bool NativeTopmost() => (Win32.GetWindowLong(new WindowInteropHelper(window).Handle, Win32.GWL_EXSTYLE) & 0x00000008) != 0;
+        void CheckNotTopmost(string phase) => Check(!window.Topmost && !NativeTopmost(), phase + "仍有原生置顶标志");
+        void CheckCovered(string phase)
+        {
+            var point = window.PointToScreen(new Point(window.Width / 2, window.Height / 2));
+            WaitForHit(covering, point, phase + "：其他软件应遮住收纳窗");
+        }
+    }
+
     static void EdgeTabs(string? preview)
     {
         S.Boxes = [Box];
@@ -753,7 +813,6 @@ static class DesktopShelfProbe
                 try
                 {
                     window.Show(); Pump();
-                    var accent = ((SolidColorBrush)window.FindResource("Accent")).Color;
                     foreach (var edge in Edges)
                     {
                         window.ExpandFromEdge(); window.FitToScreen(edge); window.PersistGeometry();
@@ -784,10 +843,12 @@ static class DesktopShelfProbe
                         Check(Alpha(pixels, width, innerA) < 80, "窄条内侧没有圆角：" + edge);
                         var middle = edge is ShelfEdge.Left or ShelfEdge.Right ? (width / 2, height / 4) : (width / 4, height / 2);
                         Check(Alpha(pixels, width, middle) >= 225, "窄条底色跟着背景一起变淡，桌面上看不清");
+                        var idle = PixelColor(pixels, width, middle);
                         hover.Invoke(window, [true]); window.UpdateLayout();
                         var hot = Pixels(window, out _, out _);
                         var color = PixelColor(hot, width, middle);
-                        Check(Math.Abs(color.R - accent.R) + Math.Abs(color.G - accent.G) + Math.Abs(color.B - accent.B) < 40, "悬停时窄条没有高亮");
+                        Check(Math.Abs(color.R - idle.R) + Math.Abs(color.G - idle.G) + Math.Abs(color.B - idle.B) < 12,
+                            "悬停时窄条颜色发生突变");
                         hover.Invoke(window, [false]);
                         Check(window.IsEdgeCollapsed, "悬停刚开始就展开了");
                     }
@@ -840,7 +901,7 @@ static class DesktopShelfProbe
         finally { S.Boxes = [Box]; S.AutoHide = false; S.BackgroundOpacity = 0.92; }
     }
 
-    static void ManualEdgeAutoHide(string? preview)
+    public static void ManualEdgeAutoHide(string? preview)
     {
         var shelf = new DesktopShelfSettings { SnapToEdge = false, Boxes = [new() { Width = 280, Height = 300 }] };
         DesktopShelfService.Normalize(shelf);
@@ -885,6 +946,7 @@ static class DesktopShelfProbe
                     ShelfEdge.Top => new Point(window.Width / 2, 0.5), _ => new Point(window.Width / 2, window.Height - 0.5),
                 };
                 var tab = window.PointToScreen(rim);
+                WaitForHit(window, tab, "首次悬停前窄条应可见：" + edge);
                 Check(Win32.SetCursorPos((int)tab.X, (int)tab.Y), "无法移入窄边");
                 Wait(() => !window.IsEdgeCollapsed, "真实鼠标移入窄边未展开：" + edge);
                 Check(new Rect(window.Left, window.Top, window.Width, window.Height) == expanded, "展开后手动位置或大小丢失");
@@ -893,6 +955,7 @@ static class DesktopShelfProbe
                 Check(Win32.SetCursorPos((int)outside.X, (int)outside.Y), "无法移开鼠标");
                 Wait(() => window.IsEdgeCollapsed, "从缝里移开后没有收起：" + edge);
                 var inside = window.PointToScreen(new Point(window.Width / 2, window.Height / 2));
+                WaitForHit(window, inside, "再次悬停前窄条应可见：" + edge);
                 Check(Win32.SetCursorPos((int)inside.X, (int)inside.Y), "无法移入窄边");
                 Wait(() => !window.IsEdgeCollapsed, "真实鼠标移入窄边未展开：" + edge);
             }
@@ -903,6 +966,7 @@ static class DesktopShelfProbe
     static void DragShelf(DesktopShelfWindow window, Point destination)
     {
         var start = window.PointToScreen(new Point(20, 20));
+        WaitForHit(window, start, "真实拖动前标题栏应可见");
         var finish = window.PointToScreen(new Point(20 + destination.X - window.Left, 20 + destination.Y - window.Top));
         var desktop = ScreenCapture.VirtualScreen();
         void SendMouse(Point at, uint flags)
@@ -1329,6 +1393,23 @@ static class DesktopShelfProbe
         try { action(); } catch (IOException) { return; }
         throw new InvalidOperationException("应拒绝不安全的文件操作");
     }
+    static void WaitForHit(Window window, Point point, string phase)
+    {
+        var expected = new WindowInteropHelper(window).Handle;
+        var hit = IntPtr.Zero;
+        var watch = Stopwatch.StartNew();
+        // WPF 布局完成时，透明窗口的原生命中区域可能还未更新，不能立即向旧区域发送鼠标输入。
+        while (watch.Elapsed < TimeSpan.FromSeconds(3))
+        {
+            Pump();
+            hit = Win32.GetAncestor(Win32.WindowFromPoint(new POINT { X = (int)point.X, Y = (int)point.Y }), Win32.GA_ROOT);
+            if (hit == expected) return;
+            Thread.Sleep(10);
+        }
+        Win32.GetWindowThreadProcessId(hit, out var pid);
+        Check(false, $"{phase}：命中进程 {pid}，测试进程 {Environment.ProcessId}，坐标 {point}");
+    }
+
     static void Pump()
     {
         var frame = new DispatcherFrame();

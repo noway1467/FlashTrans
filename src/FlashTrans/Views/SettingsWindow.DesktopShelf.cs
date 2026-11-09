@@ -50,7 +50,7 @@ public sealed partial class SettingsWindow
             Check("贴边后自动隐藏", shelf.AutoHide, value => shelf.AutoHide = value,
                 "与自动贴边独立；手动靠边也能隐藏，鼠标停在窄条上即展开。"),
             Check("始终置顶", shelf.Topmost, value => shelf.Topmost = value,
-                "自动隐藏时，窄边与临时展开的小窗始终可见。"));
+                "默认关闭；关闭时收纳窗和贴边窄条不置顶，其他软件可正常遮住它们。"));
 
         UIElement SliderField(string label, string name, double value, double min, double max, double tick,
             Action<double> update, Func<double, string> format)

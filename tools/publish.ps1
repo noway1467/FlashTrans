@@ -80,6 +80,7 @@ try {
 } finally {
     if (-not $preserveStage -and (Test-Path -LiteralPath $stage)) {
         $safeStage = Assert-ReleasePath $stage $dist
+        Write-Host "清理已核验的临时构建目录：$safeStage"
         Remove-Item -LiteralPath $safeStage -Recurse -Force
     }
 }

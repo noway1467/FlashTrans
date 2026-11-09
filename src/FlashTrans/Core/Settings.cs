@@ -67,7 +67,7 @@ public sealed class AppSettings
     public int Version { get; set; } = CurrentVersion;
 
     /// <summary>加新的默认源/字段时 +1，并在 Migrate 里补一段。</summary>
-    public const int CurrentVersion = 14;
+    public const int CurrentVersion = 15;
 
     // 只保存用户选择的路径，不扫描磁盘或自动收集已安装程序。
     public List<QuickLaunchEntry> QuickLaunchItems { get; set; } = [];
@@ -314,6 +314,7 @@ public sealed class AppSettings
         s.Providers.Add(ProviderConfig.Create(ProviderKind.YoudaoFree));
         // 免费、不要 Key、国内直连，默认开着；谷歌在墙内连不上时它顶得住。
         s.Providers.Add(ProviderConfig.Create(ProviderKind.TranSmart));
+        s.Providers.Add(ProviderConfig.Create(ProviderKind.Bilibili));
         var deepl = ProviderConfig.Create(ProviderKind.DeepL);
         deepl.Enabled = false;
         s.Providers.Add(deepl);

@@ -201,7 +201,7 @@ public sealed partial class SettingsWindow
         };
 
         AddGroupLabel(menu, "AI 翻译");
-        foreach (var m in ProviderMeta.All.Where(m => m.IsAi)) menu.Items.Add(AddItem(m));
+        foreach (var m in ProviderMeta.All.Where(m => m.IsAi && m.NeedsKey)) menu.Items.Add(AddItem(m));
 
         menu.Items.Add(new Separator());
         AddGroupLabel(menu, "免费 · 无需密钥");

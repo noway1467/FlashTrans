@@ -47,7 +47,7 @@ public sealed partial class SettingsWindow
         cfg.Options.TryGetValue(f.Key, out var current);
         current ??= f.Default ?? "";
 
-        if (cfg.Kind == ProviderKind.OpenAiCompat && f.Key == "model")
+        if ((cfg.Kind is ProviderKind.OpenAiCompat or ProviderKind.Bilibili) && f.Key == "model")
             return BuildModelEditor(cfg, current);
 
         switch (f.Kind)
@@ -315,7 +315,7 @@ public sealed partial class SettingsWindow
         });
 
         var buttons = UiKit.Row(6, test, setDefault, clone);
-        if (meta.DocUrl is { } url)
+        if (meta.Kind != ProviderKind.Bilibili && meta.DocUrl is { } url)
         {
             var doc = SmallButton("申请密钥 ↗", () => OpenUrl(url), "GhostBtn");
             buttons.Children.Add(doc);

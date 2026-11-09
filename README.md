@@ -2,7 +2,7 @@
 
 Windows 划词翻译、文件翻译与截图工具。
 
-## 下载安装 [![Release](https://img.shields.io/badge/release-v1.9.7-0088cc)](https://github.com/noway1467/FlashTrans/releases/latest)
+## 下载安装 [![Release](https://img.shields.io/badge/release-v1.9.8-0088cc)](https://github.com/noway1467/FlashTrans/releases/latest)
 
 点击上方版本徽章下载，解压后运行 `FlashTrans.exe`。默认启用免费翻译源，无需填写 API Key。
 
@@ -39,7 +39,7 @@ Windows 划词翻译、文件翻译与截图工具。
 
 | 类型 | 支持的服务 |
 | --- | --- |
-| 默认免费源 | 谷歌、微软、有道、腾讯交互翻译 |
+| 默认免费源 | 谷歌、微软、有道、腾讯交互翻译、B站 Index-Translate |
 | 免费 / 自建 | LibreTranslate、MyMemory、Lingva、DeepLX |
 | 官方 API | DeepL、Azure、Google Cloud、百度、腾讯、彩云小译 |
 | AI | OpenAI 兼容接口、Gemini、Claude；支持 Ollama / LM Studio 本地服务 |
@@ -95,7 +95,7 @@ dotnet build .\src\FlashTrans\FlashTrans.csproj -c Release --nologo
 ```powershell
 .\tools\publish.cmd fast   # 自包含版本
 .\tools\publish.cmd small  # 依赖 .NET 9 Desktop Runtime
-powershell -NoProfile -File .\tools\pack-release.ps1 -Version 1.9.7
+powershell -NoProfile -File .\tools\pack-release.ps1 -Version 1.9.8
 ```
 
 发布目录位于 `dist/`，压缩包位于 `dist/release/`。发布会原位更新已有目录，并保留便携数据和用户文件；压缩仅收录本次构建的程序文件。

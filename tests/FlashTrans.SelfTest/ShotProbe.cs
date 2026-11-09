@@ -68,6 +68,27 @@ static class ShotProbe
                             w.UpdateLayout(); Pump();
                             Save(w, Path.Combine(outDir, $"results-narrow-{tag}.png"));
                         }
+                        if (isPopup)
+                        {
+                            var multilingual = new TranslateBatch { SourceText = "Translate", From = "en", Targets = ["zh-CN", "en"] };
+                            foreach (var cfg in s.Providers.Where(p => p.Kind is ProviderKind.GoogleFree or ProviderKind.Bilibili))
+                                multilingual.Results.Add(new TranslateResult { ProviderId = cfg.Id, ProviderName = cfg.DisplayName,
+                                    ElapsedMs = 1687, Texts = new() { ["zh-CN"] = "翻译", ["en"] = "Translate" },
+                                    Dict = [new() { Pos = "verb", Terms = ["翻译", "译", "翻"] }] });
+                            w.Width = 500;
+                            view.ShowBatch(multilingual, true); w.UpdateLayout(); Pump();
+                            Save(w, Path.Combine(outDir, $"results-multilingual-{tag}.png"));
+                            foreach (var width in new[] { w.MinWidth, 768d, 1280d })
+                            {
+                                w.Width = width; w.UpdateLayout(); Pump();
+                                if (view.ExtentWidth > view.ViewportWidth + 1)
+                                    throw new InvalidOperationException($"多语言结果出现水平溢出：{width}");
+                                Save(w, Path.Combine(outDir, $"results-multilingual-{width:F0}-{tag}.png"));
+                            }
+                            w.Width = 500;
+                            view.ShowBatch(new TranslateBatch(), true); w.UpdateLayout(); Pump();
+                            Save(w, Path.Combine(outDir, $"results-empty-{tag}.png"));
+                        }
                     }
                     finally { w.Close(); }
                 }

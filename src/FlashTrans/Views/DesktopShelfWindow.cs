@@ -61,7 +61,7 @@ public sealed class DesktopShelfWindow : Window
     int _openMenus;
     bool _edgeChanged;
     Rect _expandedBounds;
-    Brush _tabFill = Brushes.Transparent, _tabOnAccent = Brushes.White;
+    Brush _tabFill = Brushes.Transparent;
     internal bool IsEdgeCollapsed => _collapsed;
     internal string BoxId => _id;
     int _revision;
@@ -116,7 +116,7 @@ public sealed class DesktopShelfWindow : Window
             Win32.SetWindowLong(hwnd, Win32.GWL_EXSTYLE, Win32.GetWindowLong(hwnd, Win32.GWL_EXSTYLE) | Win32.WS_EX_TOOLWINDOW);
             HwndSource.FromHwnd(hwnd)?.AddHook(WindowMessage);
         };
-        Loaded += (_, _) => { RestorePosition(); InventoryReady = RecoverInventoryAsync(); };
+        Loaded += (_, _) => { RestorePosition(); ApplyWindowLayer(sendToBack: true); InventoryReady = RecoverInventoryAsync(); };
         SizeChanged += (_, _) =>
         {
             _shell.Clip = new RectangleGeometry(new Rect(0, 0, Math.Max(0, ActualWidth), Math.Max(0, ActualHeight)), S.CornerRadius, S.CornerRadius);
@@ -283,10 +283,9 @@ public sealed class DesktopShelfWindow : Window
             // 窄条与收纳窗同色，但不跟着调到很透明：常驻屏幕边缘，太淡就找不到了。
             color.A = (byte)Math.Round(Math.Max(S.BackgroundOpacity, 0.9) * 255);
             _tabFill = new SolidColorBrush(color);
-            _tabOnAccent = new SolidColorBrush(dark ? Color.FromRgb(0x0E, 0x22, 0x30) : Colors.White);
             _shell.CornerRadius = new CornerRadius(S.CornerRadius);
             _shell.Clip = new RectangleGeometry(new Rect(0, 0, Width, Height), S.CornerRadius, S.CornerRadius);
-            Topmost = S.Topmost || CanAutoHide;
+            ApplyWindowLayer();
             Title = "闪译 · " + box.Name;
             if (!_renaming) _title.Text = box.Name;
             _title.ToolTip = (S.SnapToEdge ? "按住此处拖动收纳盒，松手后自动贴到最近的屏幕边缘"
@@ -307,6 +306,19 @@ public sealed class DesktopShelfWindow : Window
     }
 
     void SetBrush(string name, string hex) => Resources[name] = new SolidColorBrush(ThemeService.Parse(hex, Colors.Black));
+
+    void ApplyWindowLayer(bool sendToBack = false)
+    {
+        // 自动隐藏只改变窗口形状，不能绕过用户的置顶开关遮住其他软件。
+        var wasTopmost = Topmost;
+        Topmost = S.Topmost;
+        // 新显示的非激活窗口、刚取消置顶的窗口仍可能排在普通程序之前，主动放回底层。
+        if (Topmost || (!sendToBack && !wasTopmost)) return;
+        var hwnd = new WindowInteropHelper(this).Handle;
+        if (hwnd != IntPtr.Zero && !Win32.SetWindowPos(hwnd, new IntPtr(1), 0, 0, 0, 0,
+            Win32.SWP_NOMOVE | Win32.SWP_NOSIZE | Win32.SWP_NOACTIVATE))
+            Log.Warn("收纳窗退回桌面层失败：" + System.Runtime.InteropServices.Marshal.GetLastWin32Error());
+    }
 
     void RefreshItems()
     {
@@ -772,7 +784,7 @@ public sealed class DesktopShelfWindow : Window
         Top = result.Position.Y;
         _edgeChanged |= box.Edge != result.Edge;
         box.Edge = result.Edge;
-        Topmost = S.Topmost || CanAutoHide;
+        ApplyWindowLayer();
     }
 
     internal void PersistGeometry()
@@ -869,8 +881,7 @@ public sealed class DesktopShelfWindow : Window
             OtherTabs(edge, work), TabGap);
         Left = edge switch { ShelfEdge.Left => work.Left, ShelfEdge.Right => work.Right - Width, _ => along };
         Top = edge switch { ShelfEdge.Top => work.Top, ShelfEdge.Bottom => work.Bottom - Height, _ => along };
-        // 仅窄边常驻最上层，覆盖面积受限；不把整个透明窗口留在桌面上挡鼠标。
-        Topmost = true;
+        ApplyWindowLayer();
         // 窄条只淡入不平移：它只有十几像素宽，一平移光标所在那几列就空了。
         if (animate) Reveal(_edgeTab, edge, 0);
     }
@@ -905,13 +916,6 @@ public sealed class DesktopShelfWindow : Window
 
     void PaintTab()
     {
-        if (_tabHot)
-        {
-            _edgeTab.SetResourceReference(Border.BackgroundProperty, "Accent");
-            _edgeTab.SetResourceReference(Border.BorderBrushProperty, "Accent");
-            _edgeArrow.Stroke = _tabOnAccent;
-            return;
-        }
         _edgeTab.Background = _tabFill;
         _edgeTab.SetResourceReference(Border.BorderBrushProperty, "BorderStrong");
         _edgeArrow.SetResourceReference(Shape.StrokeProperty, "TextDim");
@@ -953,7 +957,7 @@ public sealed class DesktopShelfWindow : Window
         _edgeTab.Visibility = Visibility.Collapsed;
         _shell.Visibility = Visibility.Visible;
         FitToScreen(Box.Edge);
-        Topmost = S.Topmost || CanAutoHide;
+        ApplyWindowLayer();
         if (animate) Reveal(_shell, Box.Edge, 16);
         ScheduleAutoHide();
     }
@@ -961,9 +965,8 @@ public sealed class DesktopShelfWindow : Window
     internal void RevealForUser()
     {
         ExpandFromEdge(animate: true);
-        Topmost = true;
         Activate();
-        Topmost = S.Topmost || CanAutoHide;
+        ApplyWindowLayer();
         _keyboardNavigation = false;
         ScheduleAutoHide(TimeSpan.FromSeconds(2));
     }

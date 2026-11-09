@@ -104,7 +104,6 @@ static class UiProbe
 
         step("结果区：渲染批次（聚合 + 双语 + 词典）", ResultRender);
         RunResultLayoutProbes(step);
-        step("结果区：按语言和原文复制", ResultCopyButtons);
         step("语音：语言标签匹配和中文别名", SpeechLanguageProbe);
         step("语音：本机合成播放与连续替换", SpeechPlaybackProbe);
         step("结果区：聚合边到边（占位 → 乱序填充 → 收尾）", ProgressiveRender);
@@ -158,6 +157,7 @@ static class UiProbe
 
     public static void RunResultLayoutProbes(Action<string, Action> step)
     {
+        step("结果区：按语言和原文复制、朗读回调", ResultCopyButtons);
         step("结果区：单列 / 多列视图按宽度重排且不重建控件", ResultLayout);
         step("结果区：视图菜单能切换并同步主窗口与弹窗", ResultViewMenu);
         step("弹窗：单源新翻译回到顶部，收起恢复保留滚动位置", () => PopupScrollProbe(aggregate: false));
@@ -1210,6 +1210,8 @@ static class UiProbe
             throw new InvalidOperationException("迁移后版本号没跟上：" + old.Version);
         if (old.Providers.All(p => p.Kind != ProviderKind.TranSmart))
             throw new InvalidOperationException("迁移没补上腾讯交互翻译");
+        if (old.Providers.All(p => p.Kind != ProviderKind.Bilibili))
+            throw new InvalidOperationException("迁移没补上 B 站翻译");
 
         // 用户自己加的源要留在原地，主用源不能被顶掉
         if (old.Providers.Last().Id != mine.Id)

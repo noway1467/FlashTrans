@@ -230,6 +230,19 @@ public sealed class SettingsService
             s.Version = 14;
             changed = true;
         }
+        if (s.Version < 15)
+        {
+            // v14 -> v15：加入无需 Key 的 B 站 Index-Translate 源，保留用户自己的源顺序和主用源。
+            if (s.Providers.All(p => p.Kind != ProviderKind.Bilibili))
+            {
+                var cfg = ProviderConfig.Create(ProviderKind.Bilibili);
+                var at = s.Providers.FindLastIndex(p => !ProviderMeta.Get(p.Kind).NeedsKey);
+                s.Providers.Insert(at < 0 ? s.Providers.Count : at + 1, cfg);
+                Log.Warn("配置迁移：已添加「B站翻译（免费）」");
+            }
+            s.Version = 15;
+            changed = true;
+        }
         return changed;
     }
 

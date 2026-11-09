@@ -23,6 +23,9 @@ static class TranslationProbe
 
     public static void RunAll(Action<string, Action> step)
     {
+        step("B站翻译：默认配置、旧配置迁移及已有源不重复添加", BilibiliDefaults);
+        step("B站翻译：设置菜单可添加、编辑器无需密钥且模型预填", BilibiliEditor);
+        step("B站翻译：无 Key、多目标请求与流式输出", BilibiliRequests);
         step("翻译：多目标部分失败保留译文、错误和失败状态", PartialTargets);
         step("翻译：多目标部分失败自动换源", PartialFallback);
         step("翻译：聚合回调也标明部分失败", AggregatePartialTargets);
@@ -99,6 +102,114 @@ static class TranslationProbe
 
     static Response Json(object value) => new(JsonSerializer.Serialize(value));
     static Response Ai(string text) => Json(new { choices = new[] { new { message = new { content = text } } } });
+
+    static void BilibiliDefaults()
+    {
+        var cfg = AppSettings.CreateDefault().Providers.Single(p => p.Kind == ProviderKind.Bilibili);
+        var meta = ProviderMeta.Get(cfg.Kind);
+        var translator = new ProviderRegistry().Get(cfg);
+        Check(cfg.Enabled && !meta.NeedsKey && meta.IsAi && translator.ConfigError is null,
+            "内置 B 站源未启用或仍要求配置密钥");
+        Check(cfg.Options["baseUrl"] == "https://index-translate.bilibili.com/v1" &&
+            cfg.Options["model"] == "Index-Translate-35B-A3B" && cfg.TimeoutMs == 15000,
+            "内置地址、模型或超时默认值错误");
+        Check(!cfg.Options.ContainsKey("apiKey") && meta.Fields.All(f => f.Kind != FieldKind.Secret), "B 站源仍包含密钥字段");
+        var google = ProviderConfig.Create(ProviderKind.GoogleFree);
+        var custom = ProviderConfig.Create(ProviderKind.OpenAiCompat, "自定义源");
+        var old = new AppSettings { Version = 14, Providers = [google, custom], PrimaryProviderId = custom.Id };
+        Check(SettingsService.Migrate(old) && old.Version == AppSettings.CurrentVersion, "v14 配置未迁移");
+        Check(old.Providers.Select(p => p.Kind).SequenceEqual(new[] { ProviderKind.GoogleFree, ProviderKind.Bilibili, ProviderKind.OpenAiCompat }) &&
+            old.PrimaryProviderId == custom.Id, "升级改变了原有源顺序或主用源");
+        Check(!SettingsService.Migrate(old) && old.Providers.Count(p => p.Kind == ProviderKind.Bilibili) == 1,
+            "重复迁移添加了多份 B 站源");
+        cfg.Enabled = false; cfg.Name = "我的 B 站";
+        old = new AppSettings { Version = 14, Providers = [cfg] };
+        SettingsService.Migrate(old);
+        var roundtrip = JsonSerializer.Deserialize(JsonSerializer.Serialize(old, SettingsJson.Default.AppSettings), SettingsJson.Default.AppSettings)!;
+        Check(roundtrip.Providers.Count == 1 && roundtrip.Providers[0].Kind == ProviderKind.Bilibili &&
+            !roundtrip.Providers[0].Enabled && roundtrip.Providers[0].Name == cfg.Name,
+            "已有 B 站源的开关、名称或配置保存丢失");
+    }
+
+    static void BilibiliRequests()
+    {
+        using var server = new LocalServer(r => Task.FromResult(r.Json["stream"]?.GetValue<bool>() == true
+            ? new Response("data: {\"choices\":[{\"delta\":{\"content\":\"本地流式译文\"}}]}\n\ndata: [DONE]\n\n", "text/event-stream")
+            : Ai("本地译文")));
+        var cfg = ProviderConfig.Create(ProviderKind.Bilibili);
+        cfg.Options["baseUrl"] = server.Url + "/v1";
+        WithSettings([cfg], (settings, engine) =>
+        {
+            settings.MultiTargetEnabled = true;
+            var result = Single(engine, cfg).Results.Single();
+            Check(result.Ok && result.Texts.Count == 2, "多目标译文未完整返回");
+            var prompts = server.Requests.Select(r => r.Json["messages"]![0]!["content"]!.ToString()).ToArray();
+            Check(prompts.Any(p => p.Contains("Chinese")) && prompts.Any(p => p.Contains("French")), "目标语言没有传入提示词");
+            var stream = Task.Run(async () =>
+            {
+                var text = new StringBuilder();
+                await foreach (var piece in ((IStreamingTranslator)engine.Registry.Get(cfg)).StreamAsync(
+                    new TranslateRequest { Text = Text, Targets = ["zh-CN"] }, CancellationToken.None)) text.Append(piece);
+                return text.ToString();
+            });
+            PumpUntil(stream);
+            Check(stream.Result == "本地流式译文", "流式内容未正确读取");
+            Check(server.Requests.Count == 3 && server.Requests.All(r => r.Path == "/v1/chat/completions" &&
+                r.Authorization.Length == 0 && r.Json["model"]?.ToString() == "Index-Translate-35B-A3B"),
+                "B 站请求地址、模型或无 Key 鉴权错误");
+        });
+    }
+
+    static void BilibiliEditor()
+    {
+        var cfg = ProviderConfig.Create(ProviderKind.Bilibili);
+        WithSettings([cfg], (_, _) =>
+        {
+            var window = new SettingsWindow(new AppHost()) { Left = -4000, Top = -4000, ShowActivated = false, ShowInTaskbar = false };
+            try
+            {
+                window.Show(); window.SelectTab("sources"); window.UpdateLayout();
+                var add = Descendants(window).OfType<Button>().Single(b => b.Content is "＋ 添加源");
+                add.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                var menu = ContextMenuService.GetContextMenu(add);
+                var items = menu.Items.OfType<MenuItem>().Where(i => i.Tag is ProviderKind).ToArray();
+                Check(items.Length == ProviderMeta.All.Length && items.Select(i => i.Tag).Distinct().Count() == items.Length,
+                    "添加菜单出现重复源或遗漏");
+                var bilibili = items.Single(i => i.Tag is ProviderKind.Bilibili);
+                menu.IsOpen = false;
+                bilibili.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent)); window.UpdateLayout();
+                Check(SettingsService.Instance.Current.Providers.Count(p => p.Kind == ProviderKind.Bilibili) == 2,
+                    "点击菜单没有添加 B 站源");
+                var model = Descendants(window).OfType<ComboBox>().Single(c => c.Name == "AiModelSelector");
+                Check(model.IsEditable && model.Text == "Index-Translate-35B-A3B", "模型没有预填或不可编辑");
+                Check(!Descendants(window).OfType<PasswordBox>().Any() &&
+                    !Descendants(window).OfType<Button>().Any(b => b.Content is "申请密钥 ↗"), "B 站编辑器仍要求密钥");
+            }
+            finally { window.Close(); }
+        });
+    }
+
+    internal static void BilibiliLive()
+    {
+        var task = Task.Run(async () =>
+        {
+            var cfg = ProviderConfig.Create(ProviderKind.Bilibili);
+            var translator = new ProviderRegistry().Get(cfg);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            foreach (var (text, from, target, keyword) in new[] { ("Hello, world!", "en", "zh-CN", "世界"), ("你好，世界！", "zh-CN", "en", "world") })
+            {
+                var result = await translator.TranslateAsync(new TranslateRequest { Text = text, From = from, Targets = [target] }, timeout.Token);
+                Check(result.Ok && result.Get(target)!.Contains(keyword, StringComparison.OrdinalIgnoreCase), "B 站实测失败：" + (result.Error ?? result.Get(target)));
+                Console.WriteLine($"       {from} → {target}：{result.Get(target)}（{result.ElapsedMs} ms）");
+            }
+            var streamed = new StringBuilder();
+            await foreach (var piece in ((IStreamingTranslator)translator).StreamAsync(
+                new TranslateRequest { Text = "你好，世界！", From = "zh-CN", Targets = ["en"] }, timeout.Token)) streamed.Append(piece);
+            Check(streamed.ToString().Contains("world", StringComparison.OrdinalIgnoreCase), "B 站流式实测未返回英文译文");
+            Console.WriteLine("       流式：" + streamed);
+        });
+        task.GetAwaiter().GetResult();
+    }
 
     static Response PartialResponse(Request request)
     {
@@ -421,7 +532,7 @@ static class TranslationProbe
         task.GetAwaiter().GetResult();
     }
 
-    sealed record Request(string Path, JsonNode Json, CancellationToken Token);
+    sealed record Request(string Path, JsonNode Json, CancellationToken Token, string Authorization);
     sealed record Response(string Body, string ContentType = "application/json", int Status = 200);
 
     sealed class LocalServer : IDisposable
@@ -482,7 +593,8 @@ static class TranslationProbe
                         if (count == 0) throw new IOException("本机测试请求体提前结束");
                         data.Write(buffer, 0, count);
                     }
-                    var request = new Request(headers.Split(' ')[1], JsonNode.Parse(data.ToArray().AsSpan(headerEnd + 4, length))!, _stop.Token);
+                    var auth = headers[..headerEnd].Split("\r\n").FirstOrDefault(h => h.StartsWith("Authorization:", StringComparison.OrdinalIgnoreCase));
+                    var request = new Request(headers.Split(' ')[1], JsonNode.Parse(data.ToArray().AsSpan(headerEnd + 4, length))!, _stop.Token, auth?[14..].Trim() ?? "");
                     Requests.Enqueue(request);
                     var response = await _respond(request);
                     var body = Encoding.UTF8.GetBytes(response.Body);

@@ -27,6 +27,7 @@ public sealed class ProviderConfig
     {
         var meta = ProviderMeta.Get(kind);
         var cfg = new ProviderConfig { Kind = kind, Name = name ?? "" };
+        if (kind == ProviderKind.Bilibili) cfg.TimeoutMs = 15000;
         foreach (var f in meta.Fields)
             if (!string.IsNullOrEmpty(f.Default)) cfg.Options[f.Key] = f.Default!;
         return cfg;

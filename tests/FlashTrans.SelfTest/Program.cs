@@ -69,6 +69,20 @@ static class Program
             return _fail == 0 ? 0 : 1;
         }
 
+        if (args.Contains("--only-desktopshelf-interaction"))
+        {
+            Step("桌面收纳：真实鼠标贴边隐藏与展开", () => DesktopShelfProbe.ManualEdgeAutoHide(null));
+            app.Shutdown();
+            return _fail == 0 ? 0 : 1;
+        }
+
+        if (args.Contains("--only-desktopshelf-layer"))
+        {
+            Step("桌面收纳：普通/全屏窗口层级回归", DesktopShelfProbe.WindowLayer);
+            app.Shutdown();
+            return _fail == 0 ? 0 : 1;
+        }
+
         if (args.Contains("--only-desktopshelf"))
         {
             var index = Array.IndexOf(args, "--preview-dir");
@@ -144,6 +158,7 @@ static class Program
         if (args.Contains("--only-translation"))
         {
             TranslationProbe.RunAll(Step);
+            if (args.Contains("--net")) Step("B站翻译：真实接口无 Key 中英互译与流式输出", TranslationProbe.BilibiliLive);
             app.Shutdown();
             return _fail == 0 ? 0 : 1;
         }
@@ -179,7 +194,9 @@ static class Program
         if (args.Contains("--only-results"))
         {
             UiProbe.RunResultLayoutProbes(Step);
-            if (args.Contains("--shot")) Step("结果视图：深浅主题离线渲染", () => ShotProbe.RunResults("shots"));
+            var index = Array.IndexOf(args, "--preview-dir");
+            if (args.Contains("--shot")) Step("结果视图：深浅主题离线渲染", () => ShotProbe.RunResults(
+                index >= 0 && index + 1 < args.Length ? args[index + 1] : "shots"));
             app.Shutdown();
             return _fail == 0 ? 0 : 1;
         }

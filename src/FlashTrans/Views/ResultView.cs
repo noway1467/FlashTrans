@@ -1,7 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
-using System.Windows.Media;
 using System.Windows.Threading;
 using System.Text;
 using FlashTrans.Core;
@@ -418,7 +417,7 @@ public sealed class ResultView : ScrollViewer
     {
         var meta = ProviderMeta.Get(cfg.Kind);
 
-        var head = new Grid();
+        var head = new Grid { MinHeight = 32 };
         head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         head.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
@@ -433,13 +432,13 @@ public sealed class ResultView : ScrollViewer
         UiKit.SetGrid(name, col: 1);
         head.Children.Add(name);
 
-        var body = new StackPanel { Margin = new Thickness(0, 6, 0, 0) };
+        var body = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
         body.Children.Add(UiKit.Text("正在翻译…", S.FontSize - 1, "TextFaint"));
 
         var stack = new StackPanel();
         stack.Children.Add(head);
         stack.Children.Add(body);
-        return ResultCard(stack, meta.Accent, pending: true);
+        return ResultCard(stack);
     }
 
     Border ProviderCard(TranslateBatch batch, TranslateResult r, bool aggregate)
@@ -449,7 +448,7 @@ public sealed class ResultView : ScrollViewer
         // registry 缓存会一直涨，还白造一堆 translator。
         var meta = ProviderMeta.Get(S.Find(r.ProviderId)?.Kind ?? ProviderKind.GoogleFree);
 
-        var head = new Grid();
+        var head = new Grid { MinHeight = 32 };
         head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         head.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -477,8 +476,7 @@ public sealed class ResultView : ScrollViewer
             {
                 var sourceCopy = UiKit.IconButton(UiKit.IconCopy, "复制原文",
                     (_, _) => CopyRequested?.Invoke(batch.SourceText), 14, "SourceCopyBtn");
-                sourceCopy.Width = 30;
-                sourceCopy.Height = 27;
+                sourceCopy.Width = sourceCopy.Height = 32;
                 sourceCopy.Margin = new Thickness(4, 0, 0, 0);
                 right.Children.Add(sourceCopy);
             }
@@ -490,7 +488,7 @@ public sealed class ResultView : ScrollViewer
                 AddSpeechButton(right, FirstText(r, batch), batch.Targets[0]);
                 var copy = UiKit.IconButton(UiKit.IconCopy, "复制译文",
                     (_, _) => CopyRequested?.Invoke(ProviderText(r, batch)), 14, "TranslationCopyBtn");
-                copy.Width = 30; copy.Height = 27;
+                copy.Width = copy.Height = 32;
                 copy.Margin = new Thickness(4, 0, 0, 0);
                 right.Children.Add(copy);
             }
@@ -498,8 +496,7 @@ public sealed class ResultView : ScrollViewer
             {
                 var copy = UiKit.IconButton(UiKit.IconCopy, "复制此源全部译文",
                     (_, _) => CopyRequested?.Invoke(ProviderText(r, batch)), 14, "ProviderCopyBtn");
-                copy.Width = 30;
-                copy.Height = 27;
+                copy.Width = copy.Height = 32;
                 copy.Margin = new Thickness(4, 0, 0, 0);
                 right.Children.Add(copy);
             }
@@ -507,7 +504,7 @@ public sealed class ResultView : ScrollViewer
         UiKit.SetGrid(right, col: 2);
         head.Children.Add(right);
 
-        var body = new StackPanel { Margin = new Thickness(0, 6, 0, 0) };
+        var body = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
         if (r.Texts.Count > 0)
         {
             foreach (var lang in batch.Targets)
@@ -524,26 +521,13 @@ public sealed class ResultView : ScrollViewer
         var stack = new StackPanel();
         stack.Children.Add(head);
         stack.Children.Add(body);
-        return ResultCard(stack, meta.Accent, failed: !r.Ok && r.Texts.Count == 0);
+        return ResultCard(stack);
     }
 
-    /// <summary>
-    /// 结果卡片左侧一条翻译源配色的细条：多源并排时一眼分清是谁家的译文。
-    /// 失败的卡片用警示色，正在翻译的用半透明，和成功的拉开区别。
-    /// </summary>
-    static Border ResultCard(UIElement content, string accentHex, bool pending = false, bool failed = false)
+    /// <summary>结果卡片只用背景、边框和间距分层，避免在每张卡片边缘堆一条抢眼的色线。</summary>
+    static Border ResultCard(UIElement content)
     {
-        var grid = new Grid();
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        var stripe = new Border { Width = 3, CornerRadius = new CornerRadius(1.5), Margin = new Thickness(0, 1, 11, 1) };
-        if (failed) stripe.SetResourceReference(Border.BackgroundProperty, "Danger");
-        else stripe.Background = new SolidColorBrush(Services.ThemeService.Parse(accentHex, Color.FromRgb(0x4C, 0x8D, 0xFF)));
-        if (pending) stripe.Opacity = 0.35;
-        grid.Children.Add(stripe);
-        UiKit.SetGrid(content, col: 1);
-        grid.Children.Add(content);
-        var card = UiKit.Card(grid, new Thickness(10, 10, 12, 12));
+        var card = UiKit.Card(content, new Thickness(12, 10, 12, 12));
         card.CornerRadius = new CornerRadius(10);
         return card;
     }
@@ -594,31 +578,26 @@ public sealed class ResultView : ScrollViewer
 
     UIElement LangLabel(string lang, string text)
     {
-        var row = new StackPanel
+        var row = new Grid
         {
-            Orientation = Orientation.Horizontal,
-            Margin = new Thickness(0, 6, 0, 3),
+            Margin = new Thickness(0, 4, 0, 4),
         };
+        row.ColumnDefinitions.Add(new ColumnDefinition());
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var label = UiKit.Text(Languages.NameOf(lang), S.FontSize - 3, "TextDim", FontWeights.SemiBold);
+        label.TextTrimming = TextTrimming.CharacterEllipsis;
+        row.Children.Add(label);
 
-        var border = new Border
-        {
-            CornerRadius = new CornerRadius(4),
-            Padding = new Thickness(5, 1, 5, 1),
-            HorizontalAlignment = HorizontalAlignment.Left,
-            Child = UiKit.Text(Languages.NameOf(lang), S.FontSize - 4, "TextDim", FontWeights.SemiBold),
-        };
-        border.SetResourceReference(Border.BackgroundProperty, "BgAlt");
-        row.Children.Add(border);
-
-        row.Children.Add(CopySeparator());
-        AddSpeechButton(row, text, lang);
+        var actions = new StackPanel { Orientation = Orientation.Horizontal };
+        AddSpeechButton(actions, text, lang);
         var copy = UiKit.IconButton(UiKit.IconCopy, $"复制{Languages.NameOf(lang)}译文",
             (_, _) => CopyRequested?.Invoke(text), 13, "TranslationCopyBtn");
-        copy.Width = 30;
-        copy.Height = 27;
-        copy.Margin = new Thickness(5, 0, 0, 0);
+        copy.Width = copy.Height = 32;
+        copy.Margin = new Thickness(4, 0, 0, 0);
         copy.VerticalAlignment = VerticalAlignment.Center;
-        row.Children.Add(copy);
+        actions.Children.Add(copy);
+        UiKit.SetGrid(actions, col: 1);
+        row.Children.Add(actions);
         return row;
     }
 
@@ -683,8 +662,7 @@ public sealed class ResultView : ScrollViewer
             {
                 var sourceCopy = UiKit.IconButton(UiKit.IconCopy, "复制原文",
                     (_, _) => CopyRequested?.Invoke(batch.SourceText), 14, "SourceCopyBtn");
-                sourceCopy.Width = 30;
-                sourceCopy.Height = 27;
+                sourceCopy.Width = sourceCopy.Height = 32;
                 row.Children.Add(sourceCopy);
                 row.Children.Add(CopySeparator());
             }
@@ -692,8 +670,7 @@ public sealed class ResultView : ScrollViewer
             AddSpeechButton(row, FirstText(r, batch), batch.Targets[0]);
             var copy = UiKit.IconButton(UiKit.IconCopy, "复制译文",
                 (_, _) => CopyRequested?.Invoke(ProviderText(r, batch)), 14, "TranslationCopyBtn");
-            copy.Width = 30;
-            copy.Height = 27;
+            copy.Width = copy.Height = 32;
             row.Children.Add(copy);
         }
 
@@ -741,8 +718,7 @@ public sealed class ResultView : ScrollViewer
         if (!SpeechService.HasVoice(language)) return;
         var speak = UiKit.IconButton(UiKit.IconVolume, $"播放{Languages.NameOf(language)}译文",
             (_, _) => SpeakRequested?.Invoke(text, language), 13, "SpeechBtn");
-        speak.Width = 30;
-        speak.Height = 27;
+        speak.Width = speak.Height = 32;
         speak.Margin = new Thickness(4, 0, 0, 0);
         panel.Children.Add(speak);
     }

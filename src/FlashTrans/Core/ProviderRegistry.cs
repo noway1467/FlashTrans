@@ -50,6 +50,7 @@ public sealed class ProviderRegistry
         ProviderKind.MyMemory => new MyMemoryTranslator(cfg),
         ProviderKind.Lingva => new LingvaTranslator(cfg),
         ProviderKind.TranSmart => new TranSmartTranslator(cfg),
+        ProviderKind.Bilibili => new OpenAiCompatTranslator(cfg),
         ProviderKind.OpenAiCompat => new OpenAiCompatTranslator(cfg),
         ProviderKind.Gemini => new GeminiTranslator(cfg),
         ProviderKind.Claude => new ClaudeTranslator(cfg),

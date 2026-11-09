@@ -9,7 +9,7 @@ public enum ProviderKind
     GoogleFree, GoogleApi, BingFree, AzureTranslator,
     DeepL, DeepLX, YoudaoFree, Baidu, Tencent, Caiyun,
     LibreTranslate, MyMemory, Lingva, TranSmart,
-    OpenAiCompat, Gemini, Claude
+    OpenAiCompat, Gemini, Claude, Bilibili
 }
 
 public sealed class TranslateRequest

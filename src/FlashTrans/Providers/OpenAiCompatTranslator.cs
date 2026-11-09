@@ -25,7 +25,7 @@ public sealed class OpenAiCompatTranslator(ProviderConfig cfg) : TranslatorBase(
     public bool StreamEnabled => Opt("stream", "true").Equals("true", StringComparison.OrdinalIgnoreCase);
 
     // 显式清空地址时必须报错，不能让 Opt 的默认值把 Key 发给另一家服务。
-    string BaseUrl => Cfg.Options.GetValueOrDefault("baseUrl", "https://api.openai.com/v1");
+    string BaseUrl => Cfg.Options.TryGetValue("baseUrl", out var url) ? url : Opt("baseUrl");
     string Endpoint() => ApiEndpoint(BaseUrl, "chat/completions");
 
     internal static string ApiEndpoint(string baseUrl, string resource)

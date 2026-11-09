@@ -29,6 +29,15 @@ public static class ProviderMeta
             "免费 · 无需 Key · 国内直连 · 支持 15 种语言", "https://transmart.qq.com/zh-CN/index",
             [], DefaultEnabled: true, NeedsKey: false),
 
+        new(ProviderKind.Bilibili, "B站翻译（免费）", "B", "#00A1D6",
+            "免费 · 无需 Key · Index-Translate-35B-A3B", "https://index-translate.bilibili.com/v1",
+            [
+                new("baseUrl", "接口地址", FieldKind.Text, true, "https://index-translate.bilibili.com/v1"),
+                new("model", "模型", FieldKind.Text, true, "Index-Translate-35B-A3B"),
+                new("prompt", "系统提示词", FieldKind.Multiline, false, DefaultAiPrompt),
+                new("stream", "流式输出（打字机效果）", FieldKind.Bool, false, "true")
+            ], DefaultEnabled: true, NeedsKey: false, IsAi: true),
+
         new(ProviderKind.Lingva, "Lingva（谷歌镜像）", "L", "#3B7A57",
             "免费 · 无需 Key · 开源 Google 代理", "https://github.com/thedaviddelta/lingva-translate",
             [new("endpoint", "实例地址", FieldKind.Text, false, "https://lingva.ml", "可自建实例")],

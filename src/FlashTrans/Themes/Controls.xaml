@@ -97,54 +97,25 @@
         </Setter>
     </Style>
 
-    <!-- 复制按钮要和普通工具按钮拉开层次：译文用强调色，原文用亮色底。 -->
+    <!-- 译文保留强调色图标，底色只在交互时出现，避免多语言结果堆满色块。 -->
     <Style x:Key="TranslationCopyBtn" TargetType="Button" BasedOn="{StaticResource IconBtn}">
-        <Setter Property="Background" Value="{DynamicResource AccentSoft}" />
         <Setter Property="Foreground" Value="{DynamicResource Accent}" />
         <Setter Property="Width" Value="30" />
         <Setter Property="Height" Value="27" />
     </Style>
 
     <Style x:Key="SourceCopyBtn" TargetType="Button" BasedOn="{StaticResource IconBtn}">
-        <Setter Property="Background" Value="{DynamicResource BgAlt}" />
         <Setter Property="Foreground" Value="{DynamicResource Text}" />
         <Setter Property="Width" Value="30" />
         <Setter Property="Height" Value="27" />
     </Style>
 
-    <Style x:Key="ProviderCopyBtn" TargetType="Button" BasedOn="{StaticResource IconBtn}">
-        <Setter Property="Background" Value="{DynamicResource Accent}" />
-        <Setter Property="Foreground" Value="White" />
-        <Setter Property="Width" Value="30" />
-        <Setter Property="Height" Value="27" />
-        <!-- 普通 IconBtn 的按下触发器会把背景刷成 BgActive，源右侧按钮因此会丢掉蓝色。 -->
-        <Setter Property="Template">
-            <Setter.Value>
-                <ControlTemplate TargetType="Button">
-                    <Border x:Name="B" Background="{TemplateBinding Background}" CornerRadius="5"
-                            Padding="{TemplateBinding Padding}">
-                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
-                    </Border>
-                    <ControlTemplate.Triggers>
-                        <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="B" Property="Background" Value="{DynamicResource AccentDim}" />
-                        </Trigger>
-                        <Trigger Property="IsPressed" Value="True">
-                            <Setter TargetName="B" Property="Background" Value="{DynamicResource AccentDim}" />
-                        </Trigger>
-                        <Trigger Property="IsEnabled" Value="False">
-                            <Setter Property="Opacity" Value="0.4" />
-                        </Trigger>
-                    </ControlTemplate.Triggers>
-                </ControlTemplate>
-            </Setter.Value>
-        </Setter>
-    </Style>
+    <Style x:Key="ProviderCopyBtn" TargetType="Button" BasedOn="{StaticResource TranslationCopyBtn}" />
 
-    <!-- 朗读不加底色，悬停才出现：卡片右上角只留复制一个实心按钮，层次更清楚。 -->
+    <!-- 朗读沿用中性色，成功色仅表达操作状态。 -->
     <Style x:Key="SpeechBtn" TargetType="Button" BasedOn="{StaticResource IconBtn}">
         <Setter Property="Background" Value="Transparent" />
-        <Setter Property="Foreground" Value="{DynamicResource Success}" />
+        <Setter Property="Foreground" Value="{DynamicResource TextDim}" />
         <Setter Property="Width" Value="30" />
         <Setter Property="Height" Value="27" />
     </Style>
