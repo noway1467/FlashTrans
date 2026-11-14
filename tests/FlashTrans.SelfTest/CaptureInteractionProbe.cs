@@ -5,6 +5,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
+using FlashTrans.Core;
 using FlashTrans.Interop;
 using FlashTrans.Services;
 using FlashTrans.Views;
@@ -17,10 +18,154 @@ static class CaptureInteractionProbe
 
     public static void RunAll(Action<string, Action> step)
     {
+        RunLayout(step);
         step("取色：多 DPI 原像素、边界及 HEX/RGB 格式", SamplePixels);
         step("文字：真实输入框边缘直接拖动，提交后无需退出文字工具", TextDrag);
         step("取色：真实按钮、鼠标复制、Shift 格式与右键返回", ColorCopy);
         step("标注色板：真实拖选、HEX、取消、文字与图形换色及保存", AnnotationPalette);
+    }
+
+    public static void RunLayout(Action<string, Action> step)
+    {
+        step("截图工具栏：底部只够主栏时提前为二级栏留位", ToolbarReservation);
+        step("截图工具栏：展开参数、切换工具及全屏选区不越界", ToolbarExpansion);
+        step("截图工具栏：窗口缩小及长状态提示后仍完整可见", ToolbarResize);
+        step("截图工具栏：深浅主题下尺寸标签避让，100%–200% 布局", ToolbarLabel);
+    }
+
+    static void WithLayoutWindow(Action<CaptureOverlay, CaptureSelectionLayer, Canvas, Border> run)
+    {
+        var settings = SettingsService.Instance.Current;
+        var auto = settings.CaptureAutoRedact;
+        CaptureOverlay? window = null;
+        try
+        {
+            settings.CaptureAutoRedact = false;
+            window = new CaptureOverlay(Pattern(1280, 720), default)
+            {
+                Width = 1280, Height = 720, Left = 0, Top = 0, ShowActivated = false,
+            };
+            window.Show(); window.UpdateLayout();
+            var layer = Field<CaptureSelectionLayer>(window, "_layer");
+            SetSelection(window, layer, new Rect(40, 160, 700, 240));
+            run(window, layer, Field<Canvas>(window, "_canvas"), Field<Border>(window, "_toolbar"));
+        }
+        finally
+        {
+            window?.Close();
+            settings.CaptureAutoRedact = auto;
+        }
+    }
+
+    static void SetSelection(CaptureOverlay window, CaptureSelectionLayer layer, Rect selection)
+    {
+        layer.PresetSelection(selection);
+        Call(window, "OnSelectionChanged");
+        window.UpdateLayout();
+    }
+
+    static void CheckToolbarVisible(Canvas canvas, Border toolbar)
+    {
+        var bounds = toolbar.TransformToAncestor(canvas).TransformBounds(new Rect(toolbar.RenderSize));
+        Check(bounds.Left >= -.1 && bounds.Top >= -.1
+            && bounds.Right <= canvas.ActualWidth + .1 && bounds.Bottom <= canvas.ActualHeight + .1,
+            $"工具栏越界：{bounds}，画布={canvas.RenderSize}");
+    }
+
+    static void ToolbarReservation() => WithLayoutWindow((window, layer, canvas, bar) =>
+    {
+        var collapsedHeight = bar.ActualHeight;
+        SetSelection(window, layer, new Rect(40, 160, 700, canvas.ActualHeight - collapsedHeight - 12 - 160));
+        Preview(window, "toolbar-reserved.png");
+        Check(Canvas.GetTop(bar) + bar.ActualHeight < layer.Selection.Top,
+            "底部只够一行时仍将主栏放在下方，没有提前为二级栏留位");
+        var top = Canvas.GetTop(bar);
+        Call(window, "ToggleTool", CaptureTool.Rect);
+        window.UpdateLayout();
+        CheckToolbarVisible(canvas, bar);
+        Check(Math.Abs(Canvas.GetTop(bar) - top) < .1, "展开二级栏时主栏跳动，没有使用预留空间");
+        Check(Canvas.GetTop(bar) + bar.ActualHeight <= layer.Selection.Top - 7.9, "二级栏覆盖选区上边缘");
+        Preview(window, "toolbar-expanded-above.png");
+    });
+
+    static void ToolbarExpansion() => WithLayoutWindow((window, layer, canvas, bar) =>
+    {
+        var collapsedHeight = bar.ActualHeight;
+        SetSelection(window, layer, new Rect(40, 160, 700, canvas.ActualHeight - collapsedHeight - 12 - 160));
+        foreach (var tool in new[] { CaptureTool.Rect, CaptureTool.Text, CaptureTool.Mosaic, CaptureTool.Redact, CaptureTool.Pen })
+        {
+            Call(window, "ToggleTool", tool);
+            window.UpdateLayout();
+            CheckToolbarVisible(canvas, bar);
+            Check(Canvas.GetTop(bar) + bar.ActualHeight <= layer.Selection.Top - 7.9,
+                $"切换到 {tool} 后工具栏未完整放在选区上方");
+        }
+        layer.SelectAll(); window.UpdateLayout();
+        CheckToolbarVisible(canvas, bar);
+        Preview(window, "toolbar-fullscreen.png");
+        SetSelection(window, layer, new Rect(40, 5, 700, 100));
+        Check(Canvas.GetTop(bar) > layer.Selection.Bottom, "顶部选区没有优先向下摆放工具栏");
+        CheckToolbarVisible(canvas, bar);
+    });
+
+    static void ToolbarResize() => WithLayoutWindow((window, layer, canvas, bar) =>
+    {
+        Call(window, "ToggleTool", CaptureTool.Text);
+        window.UpdateLayout();
+        SetSelection(window, layer, new Rect(10, 150, 600, 280));
+        window.Width = 640;
+        window.Height = 500;
+        window.UpdateLayout();
+        CheckToolbarVisible(canvas, bar);
+        Call(window, "RedactionMessage", "本地检测完成，请检查遮挡结果。Check the selected area before exporting. "
+            + string.Concat(Enumerable.Repeat("长提示需要换行显示。", 8)));
+        window.UpdateLayout();
+        CheckToolbarVisible(canvas, bar);
+        foreach (var row in new[] { Field<Panel>(window, "_actionRow"), Field<Panel>(window, "_styleRow") })
+            foreach (FrameworkElement child in row.Children)
+            {
+                var bounds = child.TransformToAncestor(canvas).TransformBounds(new Rect(child.RenderSize));
+                Check(bounds.Right <= canvas.ActualWidth + .1 && bounds.Bottom <= canvas.ActualHeight + .1,
+                    "窄屏换行后按钮超出画布");
+            }
+        Preview(window, "toolbar-narrow-status.png");
+    });
+
+    static void ToolbarLabel()
+    {
+        try
+        {
+            foreach (var theme in new[] { AppTheme.Dark, AppTheme.Light })
+            {
+                ThemeService.ApplyTheme(theme);
+                WithLayoutWindow((window, layer, canvas, bar) =>
+                {
+                    foreach (var scale in new[] { 1d, 1.25, 1.5, 2 })
+                    {
+                        window.Width = 1280 / scale;
+                        window.Height = 720 / scale;
+                        window.UpdateLayout();
+                        SetSelection(window, layer, new Rect(20, 150, canvas.ActualWidth - 40,
+                            canvas.ActualHeight - 200));
+                        foreach (var tool in new[] { CaptureTool.None, CaptureTool.Text, CaptureTool.Rect })
+                        {
+                            layer.Tool = tool;
+                            Call(window, "SyncToolbar");
+                            window.UpdateLayout();
+                            CheckToolbarVisible(canvas, bar);
+                            var bitmap = new System.Windows.Media.Imaging.RenderTargetBitmap(1280, 720,
+                                96 * scale, 96 * scale, PixelFormats.Pbgra32);
+                            bitmap.Render(canvas);
+                            Check(!layer.SizeLabelBounds.IsEmpty && !layer.SizeLabelBounds.IntersectsWith(layer.ToolbarBounds)
+                                && new Rect(canvas.RenderSize).Contains(layer.SizeLabelBounds),
+                                $"{theme} / {scale:P0} / {tool} 的尺寸标签被工具栏遮挡或越界");
+                        }
+                        if (scale == 1) Preview(window, $"toolbar-label-{theme}.png");
+                    }
+                });
+            }
+        }
+        finally { ThemeService.ApplyTheme(AppTheme.Dark); }
     }
 
     static CapturedImage Pattern(int width, int height)
@@ -198,7 +343,9 @@ static class CaptureInteractionProbe
                 var hex = Field<TextBox>(panel, "_hex");
                 var surface = Field<Grid>(panel, "_surface");
                 Drag(surface, new Point(20, 20), new Vector(70, 30));
-                Check(AnnotationColorPalette.TryParseHex(hex.Text, out _) && hex.Text != oldColor, "拖选没有更新颜色");
+                Check(AnnotationColorPalette.TryParseHex(hex.Text, out _) && hex.Text != oldColor,
+                    $"拖选没有更新颜色：原色={oldColor}，当前={hex.Text}，色板={surface.RenderSize}，"
+                    + $"光标={Mouse.GetPosition(surface)}，命中={Mouse.DirectlyOver?.GetType().Name}");
                 Check(settings.CapturePenColor == oldColor, "未确认已改动设置");
                 hex.Text = "#bad";
                 var apply = ((StackPanel)panel.Child).Children.OfType<StackPanel>().Last().Children.OfType<Button>().First();

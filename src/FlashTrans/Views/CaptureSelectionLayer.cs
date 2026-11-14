@@ -138,6 +138,8 @@ sealed class CaptureSelectionLayer : FrameworkElement
 
     public bool HasSelection => _hasSel && _sel.Width >= 4 && _sel.Height >= 4;
     public Rect Selection => _sel;
+    internal Rect ToolbarBounds { get; set; } = Rect.Empty;
+    internal Rect SizeLabelBounds { get; private set; } = Rect.Empty;
     /// <summary>裁切、尺寸标签和贴图共用边界，不能把宽高另外取整后再拉伸回选区。</summary>
     internal RECT SelectionPixels
     {
@@ -933,8 +935,22 @@ sealed class CaptureSelectionLayer : FrameworkElement
         var y = sel.Top - h - 5;
         if (y < full.Top) y = sel.Bottom + 5;
         if (y + h > full.Bottom) y = Math.Max(full.Top, Math.Min(sel.Top + 5, full.Bottom - h));
-        dc.DrawRoundedRectangle(LabelBack, null, new Rect(x, y, w, h), 4, 4);
-        dc.DrawText(t, new Point(x + pad, y + pad / 2));
+        var label = new Rect(x, y, w, h);
+        if (label.IntersectsWith(ToolbarBounds))
+        {
+            // 工具栏翻到上方后会占用标签原来的位置，先让标签靠着工具栏外侧摆放。
+            foreach (var top in new[] { ToolbarBounds.Top - h - 5, sel.Bottom + 5,
+                         sel.Top + 5, ToolbarBounds.Bottom + 5, full.Top, full.Bottom - h })
+            {
+                var candidate = new Rect(x, top, w, h);
+                if (!full.Contains(candidate) || candidate.IntersectsWith(ToolbarBounds)) continue;
+                label = candidate;
+                break;
+            }
+        }
+        SizeLabelBounds = label;
+        dc.DrawRoundedRectangle(LabelBack, null, label, 4, 4);
+        dc.DrawText(t, new Point(label.X + pad, label.Y + pad / 2));
     }
 
     FormattedText Text(string s, double size) => new(s, CultureInfo.CurrentUICulture,

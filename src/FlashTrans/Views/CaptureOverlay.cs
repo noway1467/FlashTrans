@@ -104,6 +104,8 @@ public sealed partial class CaptureOverlay : Window
 
         _toolbar = BuildToolbar();
         _toolbar.Visibility = Visibility.Collapsed;
+        // 参数行和状态文字的尺寸在 WPF 布局完成后才确定，避免沿用展开前的高度。
+        _toolbar.SizeChanged += (_, _) => PlaceToolbar();
 
         _canvas.Children.Add(_layer);
         _canvas.Children.Add(_toolbar);
@@ -112,10 +114,11 @@ public sealed partial class CaptureOverlay : Window
         InitializeColorPicker();
 
         // 层要铺满整个画布。Canvas 不会自己撑孩子，得跟着尺寸走。
-        SizeChanged += (_, _) =>
+        _canvas.SizeChanged += (_, _) =>
         {
             _layer.Width = _canvas.ActualWidth;
             _layer.Height = _canvas.ActualHeight;
+            PlaceToolbar();
         };
 
         PreviewKeyDown += OnKey;

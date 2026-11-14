@@ -135,6 +135,13 @@ static class Program
             return _fail == 0 ? 0 : 1;
         }
 
+        if (args.Contains("--only-capture-layout"))
+        {
+            CaptureInteractionProbe.RunLayout(Step);
+            app.Shutdown();
+            return _fail == 0 ? 0 : 1;
+        }
+
         if (args.Contains("--only-capture"))
         {
             CaptureQualityProbe.RunAll(Step);

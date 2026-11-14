@@ -626,6 +626,7 @@ public sealed partial class CaptureOverlay
         if (!_layer.HasSelection)
         {
             _toolbar.Visibility = Visibility.Collapsed;
+            _layer.ToolbarBounds = Rect.Empty;
             CommitTextInput();
             return;
         }
@@ -636,8 +637,8 @@ public sealed partial class CaptureOverlay
     }
 
     /// <summary>
-    /// 摆工具条。高度不是定值——第二行出来时它高一截，所以每次都现量一遍，
-    /// 拿常量算的话参数行一出来就会把工具条顶出屏幕下沿。
+    /// 按实际布局定位，并提前预留参数行的位置；底部只够主栏时就整体放到选区上方。
+    /// 收起参数行只隐藏内容，不改变预留高度，避免切换工具时主栏来回跳动。
     /// </summary>
     void PlaceToolbar()
     {
@@ -647,6 +648,8 @@ public sealed partial class CaptureOverlay
         _toolbar.Measure(new Size(_toolbar.MaxWidth, double.PositiveInfinity));
         var w = _toolbar.DesiredSize.Width;
         var h = _toolbar.DesiredSize.Height;
+        if (_styleRowHost is { Visibility: Visibility.Collapsed } host)
+            h += StyleRowHeight + host.BorderThickness.Top + host.BorderThickness.Bottom;
         var sel = _layer.Selection;
 
         var x = Math.Clamp(sel.Right - w, 0, Math.Max(0, _canvas.ActualWidth - w));
@@ -656,6 +659,8 @@ public sealed partial class CaptureOverlay
 
         Canvas.SetLeft(_toolbar, x);
         Canvas.SetTop(_toolbar, y);
+        _layer.ToolbarBounds = new Rect(x, y, w, h);
+        _layer.InvalidateVisual();
     }
 
     // ------------------------------------------------------------- 文字工具
