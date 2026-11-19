@@ -1,3 +1,5 @@
+using System.Runtime.InteropServices;
+using System.Windows.Input;
 using FlashTrans.Core;
 using FlashTrans.Services;
 using FlashTrans.Views;
@@ -16,6 +18,9 @@ public sealed class HotkeyManager(IntPtr hwnd) : IDisposable
     readonly Dictionary<HotkeyAction, (int Id, HotkeySpec Spec)> _bindings = [];
     readonly List<string> _failures = [];
     int _next = 0xA100;
+    Win32.HookProc? _captureProc;
+    IntPtr _captureHook;
+    uint _capturePressedKey;
 
     public event Action<HotkeyAction>? Triggered;
     public IReadOnlyList<string> Failures => _failures;
@@ -119,16 +124,80 @@ public sealed class HotkeyManager(IntPtr hwnd) : IDisposable
         }
         Remove(action);
         _bindings[action] = (id, spec);
+        if (action == HotkeyAction.CaptureOcr) StartCaptureHook();
         return true;
     }
 
     void Remove(HotkeyAction action)
     {
         if (_bindings.Remove(action, out var binding)) Win32.UnregisterHotKey(hwnd, binding.Id);
+        if (action == HotkeyAction.CaptureOcr) StopCaptureHook();
+    }
+
+    void StartCaptureHook()
+    {
+        if (_captureHook != IntPtr.Zero) return;
+        _captureProc ??= CaptureHook;
+        _captureHook = Win32.SetWindowsHookEx(Win32.WH_KEYBOARD_LL, _captureProc, Win32.GetModuleHandle(null), 0);
+        if (_captureHook == IntPtr.Zero)
+            Log.Warn("截图键盘钩子安装失败，仍使用全局热键：" + Marshal.GetLastWin32Error());
+    }
+
+    void StopCaptureHook()
+    {
+        if (_captureHook != IntPtr.Zero) Win32.UnhookWindowsHookEx(_captureHook);
+        _captureHook = IntPtr.Zero;
+        _capturePressedKey = 0;
+    }
+
+    IntPtr CaptureHook(int code, IntPtr wParam, IntPtr lParam)
+    {
+        if (code < 0) return Win32.CallNextHookEx(_captureHook, code, wParam, lParam);
+        try
+        {
+            var message = wParam.ToInt32();
+            var key = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam).vkCode;
+            if (message is Win32.WM_KEYUP or Win32.WM_SYSKEYUP && key == _capturePressedKey)
+            {
+                _capturePressedKey = 0;
+                return new IntPtr(1);
+            }
+            if (message is Win32.WM_KEYDOWN or Win32.WM_SYSKEYDOWN)
+            {
+                if (key == _capturePressedKey) return new IntPtr(1);
+                if (_bindings.TryGetValue(HotkeyAction.CaptureOcr, out var binding)
+                    && key == binding.Spec.VirtualKey && CurrentModifiers() == binding.Spec.Modifiers)
+                {
+                    // 原生菜单可能把 F1 当帮助键处理，收不到 RegisterHotKey 的消息。
+                    // 注册仍负责检查占用；钩子在菜单处理前接管这一次按键并投递消息。
+                    // 不在钩子里抓屏/开窗口，避免阻塞钩子导致 Windows 将它移除。
+                    if (Win32.PostMessage(hwnd, Win32.WM_HOTKEY, new IntPtr(binding.Id), IntPtr.Zero))
+                    {
+                        _capturePressedKey = key;
+                        return new IntPtr(1); // 阻止原生热键再触发一次，也不把 F1 交给目标菜单。
+                    }
+                    Log.Warn("投递截图热键失败：" + Marshal.GetLastWin32Error());
+                }
+            }
+        }
+        catch (Exception ex) { Log.Error("截图键盘钩子处理失败", ex); }
+        return Win32.CallNextHookEx(_captureHook, code, wParam, lParam);
+    }
+
+    static ModifierKeys CurrentModifiers()
+    {
+        var modifiers = ModifierKeys.None;
+        if ((Win32.GetAsyncKeyState(Win32.VK_CONTROL) & 0x8000) != 0) modifiers |= ModifierKeys.Control;
+        if ((Win32.GetAsyncKeyState(Win32.VK_MENU) & 0x8000) != 0) modifiers |= ModifierKeys.Alt;
+        if ((Win32.GetAsyncKeyState(Win32.VK_SHIFT) & 0x8000) != 0) modifiers |= ModifierKeys.Shift;
+        if ((Win32.GetAsyncKeyState(Win32.VK_LWIN) & 0x8000) != 0
+            || (Win32.GetAsyncKeyState(0x5C) & 0x8000) != 0) modifiers |= ModifierKeys.Windows;
+        return modifiers;
     }
 
     public void UnbindAll()
     {
+        StopCaptureHook();
         foreach (var binding in _bindings.Values) Win32.UnregisterHotKey(hwnd, binding.Id);
         _bindings.Clear();
         _failures.Clear();

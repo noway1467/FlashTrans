@@ -297,7 +297,9 @@ public sealed partial class AppHost
         {
             result = await LongShotService.RunAsync(region,
                 onProgress: hud.Report,
-                cancelled: () => hud.Cancelled);
+                cancelled: () => hud.Cancelled,
+                automatic: () => hud.Automatic,
+                onAlignmentLost: hud.ReportAlignmentLost);
         }
         finally
         {
@@ -314,6 +316,7 @@ public sealed partial class AppHost
             LongShotStop.Cancelled => "已停在这里。",
             LongShotStop.Limit => "到长度上限了，后面的没接。",
             LongShotStop.Diverged => "页面仍在刷新，已停在最后完整区域。",
+            LongShotStop.Failed => "抓取画面失败，已保留截到的内容。",
             _ => "",
         };
         // 一帧都没接上（这块区域滚不动）也照样弹预览。以前这种情况直接按

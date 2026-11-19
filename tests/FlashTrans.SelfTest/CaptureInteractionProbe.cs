@@ -22,7 +22,7 @@ static class CaptureInteractionProbe
         step("取色：多 DPI 原像素、边界及 HEX/RGB 格式", SamplePixels);
         step("文字：真实输入框边缘直接拖动，提交后无需退出文字工具", TextDrag);
         step("取色：真实按钮、鼠标复制、Shift 格式与右键返回", ColorCopy);
-        step("标注色板：真实拖选、HEX、取消、文字与图形换色及保存", AnnotationPalette);
+        step("标注色板：预设与拖选即生效、HEX 校验、关闭与颜色保存", AnnotationPalette);
     }
 
     public static void RunLayout(Action<string, Action> step)
@@ -340,20 +340,33 @@ static class CaptureInteractionProbe
                     return (AnnotationColorPalette)popup.Child;
                 }
                 var panel = Open();
+                var preset = ((StackPanel)panel.Child).Children.OfType<System.Windows.Controls.Primitives.UniformGrid>()
+                    .Single().Children.OfType<Button>().Single(b => b.ToolTip is "#34C759");
+                Click(preset, new Point(preset.ActualWidth / 2, preset.ActualHeight / 2));
+                Check(settings.CapturePenColor == "#34C759"
+                    && !Field<System.Windows.Controls.Primitives.Popup>(window, "_colorPalette").IsOpen,
+                    "预设颜色单击后没有直接选取并关闭色板");
+                panel = Open();
                 var hex = Field<TextBox>(panel, "_hex");
                 var surface = Field<Grid>(panel, "_surface");
                 Drag(surface, new Point(20, 20), new Vector(70, 30));
                 Check(AnnotationColorPalette.TryParseHex(hex.Text, out _) && hex.Text != oldColor,
                     $"拖选没有更新颜色：原色={oldColor}，当前={hex.Text}，色板={surface.RenderSize}，"
                     + $"光标={Mouse.GetPosition(surface)}，命中={Mouse.DirectlyOver?.GetType().Name}");
-                Check(settings.CapturePenColor == oldColor, "未确认已改动设置");
+                Check(settings.CapturePenColor == hex.Text
+                    && !Field<System.Windows.Controls.Primitives.Popup>(window, "_colorPalette").IsOpen,
+                    "拖选松手后没有直接生效并关闭色板");
+                panel = Open();
+                hex = Field<TextBox>(panel, "_hex");
+                var beforeInvalid = settings.CapturePenColor;
                 hex.Text = "#bad";
-                var apply = ((StackPanel)panel.Child).Children.OfType<StackPanel>().Last().Children.OfType<Button>().First();
-                Click(apply, new Point(20, 15));
-                Check(Field<System.Windows.Controls.Primitives.Popup>(window, "_colorPalette").IsOpen, "非法颜色仍被应用");
+                Key(0x0D, true); Key(0x0D, false);
+                Check(Field<System.Windows.Controls.Primitives.Popup>(window, "_colorPalette").IsOpen
+                    && settings.CapturePenColor == beforeInvalid, "非法颜色仍被应用");
                 hex.Text = "#18a7b5";
+                Check(settings.CapturePenColor == "#18A7B5", "完整 HEX 输入未直接生效");
                 PreviewPalette(panel);
-                Click(apply, new Point(20, 15));
+                Key(0x1B, true); Key(0x1B, false);
                 var expected = Color.FromRgb(0x18, 0xA7, 0xB5);
                 Check(layer.PenColor == expected && ((SolidColorBrush)editor.Foreground).Color == expected
                     && editor.IsKeyboardFocusWithin && layer.AnnotationCount == 0, "文字编辑换色或焦点恢复失败");
@@ -366,14 +379,13 @@ static class CaptureInteractionProbe
                 Field<TextBox>(panel, "_hex").Text = "#2367DE";
                 Key(0x0D, true); Key(0x0D, false);
                 Check(window.IsVisible && rectangle.Color == Color.FromRgb(0x23, 0x67, 0xDE), "色板回车误导出或未改变图形");
-                var saved = SettingsService.Instance.Current.CapturePenColor;
                 panel = Open();
                 Field<TextBox>(panel, "_hex").Text = "#ABCDEF";
                 Key(0x1B, true); Key(0x1B, false);
                 Check(window.IsVisible && !Field<System.Windows.Controls.Primitives.Popup>(window, "_colorPalette").IsOpen
-                    && settings.CapturePenColor == saved && layer.Selection == new Rect(30, 30, 700, 270), "Esc 取消破坏颜色或选区");
+                    && settings.CapturePenColor == "#ABCDEF" && layer.Selection == new Rect(30, 30, 700, 270), "Esc 关闭回滚了已选颜色或破坏选区");
                 SettingsService.Instance.Load();
-                Check(SettingsService.Instance.Current.CapturePenColor == "#2367DE", "自选颜色没有保存到磁盘");
+                Check(SettingsService.Instance.Current.CapturePenColor == "#ABCDEF", "自选颜色没有保存到磁盘");
                 // 恢复原实例供 WithWindow 的 finally 还原测试开关。
                 SettingsService.Instance.Apply(settings);
             });

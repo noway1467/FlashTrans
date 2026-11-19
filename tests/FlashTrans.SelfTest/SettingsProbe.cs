@@ -62,8 +62,9 @@ static class SettingsProbe
                         .Where(s => s.RootVisual is not null).SelectMany(s => Descendants<AnnotationColorPalette>(s.RootVisual)).Single();
                     var hex = Descendants<TextBox>(palette).Single();
                     hex.Text = "#37B9A6";
-                    var apply = Descendants<Button>(palette).Single(b => b.Name == "ApplyColor");
-                    apply.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Pump();
+                    if (Descendants<Button>(palette).Any(b => b.Name == "ApplyColor"))
+                        throw new InvalidOperationException("色板仍要求二次确认");
+                    button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Pump();
                     if (SettingsService.Instance.Current.CapturePenColor != "#37B9A6")
                         throw new InvalidOperationException("设置页未应用自选颜色");
                     SettingsService.Instance.Load();

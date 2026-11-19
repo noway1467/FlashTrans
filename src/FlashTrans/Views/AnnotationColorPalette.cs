@@ -8,7 +8,7 @@ using System.Windows.Shapes;
 
 namespace FlashTrans.Views;
 
-/// <summary>设置与截图共用的不透明标注色板；确认前不改动当前标注。</summary>
+/// <summary>设置与截图共用的不透明标注色板；选色直接生效。</summary>
 internal sealed class AnnotationColorPalette : Border
 {
     internal static readonly string[] Presets =
@@ -30,7 +30,7 @@ internal sealed class AnnotationColorPalette : Border
     double _value;
     bool _updating;
     public event Action<Color>? Applied;
-    public event Action? Cancelled;
+    public event Action? CloseRequested;
 
     internal AnnotationColorPalette(Color initial, bool dark = false)
     {
@@ -59,7 +59,7 @@ internal sealed class AnnotationColorPalette : Border
             var button = new Button { Content = chip, ToolTip = hex, Padding = new Thickness(3), Height = 28 };
             button.SetResourceReference(StyleProperty, "GhostBtn");
             System.Windows.Automation.AutomationProperties.SetName(button, hex);
-            button.Click += (_, _) => SetColor(color);
+            button.Click += (_, _) => { SetColor(color); Apply(close: true); };
             presets.Children.Add(button);
         }
         content.Children.Add(presets);
@@ -81,7 +81,12 @@ internal sealed class AnnotationColorPalette : Border
         };
         _surface.MouseLeftButtonUp += (_, e) =>
         {
-            if (_surface.IsMouseCaptured) { SelectAt(e.GetPosition(_surface)); _surface.ReleaseMouseCapture(); }
+            if (_surface.IsMouseCaptured)
+            {
+                SelectAt(e.GetPosition(_surface));
+                _surface.ReleaseMouseCapture();
+                Apply(close: true);
+            }
             e.Handled = true;
         };
         _surface.KeyDown += (_, e) =>
@@ -89,14 +94,14 @@ internal sealed class AnnotationColorPalette : Border
             if (e.Key is not (Key.Left or Key.Right or Key.Up or Key.Down)) return;
             _saturation = Math.Clamp(_saturation + (e.Key == Key.Right ? .01 : e.Key == Key.Left ? -.01 : 0), 0, 1);
             _value = Math.Clamp(_value + (e.Key == Key.Up ? .01 : e.Key == Key.Down ? -.01 : 0), 0, 1);
-            RefreshColor(); e.Handled = true;
+            RefreshColor(); Apply(); e.Handled = true;
         };
         content.Children.Add(_surface);
         var spectrum = new LinearGradientBrush { StartPoint = new Point(0, .5), EndPoint = new Point(1, .5) };
         for (var i = 0; i <= 6; i++) spectrum.GradientStops.Add(new GradientStop(FromHsv(i * 60, 1, 1), i / 6d));
         content.Children.Add(new Border { Height = 7, Background = spectrum, CornerRadius = new CornerRadius(3),
             Margin = new Thickness(0, 10, 0, 0) });
-        _hue.ValueChanged += (_, _) => { if (!_updating) RefreshColor(); };
+        _hue.ValueChanged += (_, _) => { if (!_updating) { RefreshColor(); Apply(); } };
         System.Windows.Automation.AutomationProperties.SetName(_hue, "色相");
         content.Children.Add(_hue);
         _preview.SetResourceReference(BorderBrushProperty, "Border");
@@ -105,31 +110,33 @@ internal sealed class AnnotationColorPalette : Border
         _hex.TextChanged += (_, _) =>
         {
             if (_updating) return;
-            if (TryParseHex(_hex.Text, out var color)) { SetColor(color, updateHex: false); _error.Text = ""; }
+            if (TryParseHex(_hex.Text, out var color))
+            {
+                SetColor(color, updateHex: false);
+                _error.Text = "";
+                Applied?.Invoke(color);
+            }
             else _error.Text = "请输入 6 位 HEX 颜色";
         };
         content.Children.Add(UiKit.Row(8, _preview, UiKit.Text("HEX", 11, "TextDim"), _hex));
         _error.Height = 20;
         content.Children.Add(_error);
-        var apply = new Button { Name = "ApplyColor", Content = "使用此颜色", Height = 30, Padding = new Thickness(14, 0, 14, 0) };
-        apply.SetResourceReference(StyleProperty, "PrimaryBtn");
-        apply.Click += (_, _) => Apply();
-        var cancel = new Button { Content = "取消", Height = 30, Padding = new Thickness(12, 0, 12, 0) };
-        cancel.SetResourceReference(StyleProperty, "GhostBtn");
-        cancel.Click += (_, _) => Cancelled?.Invoke();
-        content.Children.Add(UiKit.Row(8, apply, cancel));
         Child = content;
         KeyDown += (_, e) =>
         {
-            if (e.Key == Key.Escape) { Cancelled?.Invoke(); e.Handled = true; }
-            else if (e.Key == Key.Enter) { Apply(); e.Handled = true; }
+            if (e.Key == Key.Escape) { CloseRequested?.Invoke(); e.Handled = true; }
+            else if (e.Key == Key.Enter) { Apply(close: true); e.Handled = true; }
         };
         SetColor(initial);
     }
 
-    void Apply()
+    void Apply(bool close = false)
     {
-        if (TryParseHex(_hex.Text, out var color)) Applied?.Invoke(color);
+        if (TryParseHex(_hex.Text, out var color))
+        {
+            Applied?.Invoke(color);
+            if (close) CloseRequested?.Invoke();
+        }
         else { _error.Text = "请输入 6 位 HEX 颜色"; _hex.Focus(); }
     }
 
@@ -205,8 +212,8 @@ internal sealed class AnnotationColorPalette : Border
         {
             if (popup.IsOpen) { popup.IsOpen = false; return; }
             var palette = new AnnotationColorPalette(current(), dark);
-            palette.Applied += color => { apply(color); popup.IsOpen = false; };
-            palette.Cancelled += () => popup.IsOpen = false;
+            palette.Applied += apply;
+            palette.CloseRequested += () => popup.IsOpen = false;
             popup.Child = palette;
             popup.IsOpen = true;
             palette._hex.Focus();

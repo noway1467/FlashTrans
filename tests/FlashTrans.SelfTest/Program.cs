@@ -144,9 +144,17 @@ static class Program
 
         if (args.Contains("--only-capture"))
         {
+            CaptureHotkeyProbe.RunAll(Step);
             CaptureQualityProbe.RunAll(Step);
             CaptureInteractionProbe.RunAll(Step);
             UiProbe.RunClipboardProbes(Step);
+            app.Shutdown();
+            return _fail == 0 ? 0 : 1;
+        }
+
+        if (args.Contains("--only-capture-hotkeys"))
+        {
+            CaptureHotkeyProbe.RunAll(Step);
             app.Shutdown();
             return _fail == 0 ? 0 : 1;
         }
@@ -217,6 +225,7 @@ static class Program
         SettingsProbe.RunUi(Step);
         var host = new AppHost();
         UiProbe.RunAll(host, Step);
+        CaptureHotkeyProbe.RunAll(Step);
         CaptureQualityProbe.RunAll(Step);
         CaptureInteractionProbe.RunAll(Step);
         RedactionProbe.RunAll(Step);

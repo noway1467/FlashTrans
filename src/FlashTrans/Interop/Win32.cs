@@ -190,6 +190,8 @@ public static class Win32
     public static extern bool RegisterHotKey(IntPtr hWnd, int id, uint mod, uint vk);
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool PostMessage(IntPtr hWnd, int message, IntPtr wParam, IntPtr lParam);
 
     // ---- 钩子 ----
     public delegate IntPtr HookProc(int nCode, IntPtr wParam, IntPtr lParam);
