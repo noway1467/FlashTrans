@@ -22,22 +22,21 @@ public enum LongShotStop
 /// <summary>
 /// 长截图：在一块固定区域上反复「滚一点、抓一帧、跟上一帧对齐、把新露出来的接上去」。
 ///
-/// 对齐不靠猜滚了多少像素——鼠标滚一格在不同程序里走的距离天差地别，平滑滚动还会
-/// 滚到一半。办法是拿上一帧底部一条窄带去新帧里找它落到了哪儿，找到就知道真实位移。
+/// 用分散在正文中的局部块确定纵向位移，视频或动图没有匹配上的块不参与投票。
+/// 拼接时在重叠区选择低差异接缝，保留单帧原像素，不混合文字或不同时刻的视频。
 /// </summary>
 public static class LongShotService
 {
-    /// <summary>拿来对齐的窄带有多高（像素）。太窄容易在重复纹理上认错，太宽费时间。</summary>
+    /// <summary>检测正文纹理和固定边界的采样带高度，也用于限制自动滚动步长。</summary>
     const int Band = 40;
-    /// <summary>对齐时每隔几列取一个点。整行逐像素比没必要，抽样already够分辨。</summary>
+    /// <summary>像素比较的采样间隔，保留足够的细节而不逐像素扫描每个候选位移。</summary>
     const int ColStep = 3;
     /// <summary>一行里允许多少比例的点对不上还算同一行。抗一点渲染抖动和亚像素文字。</summary>
     const double RowTolerance = 0.06;
     const int ScrollKickDelayMs = 100;
     const int ScrollPollMs = 60;
     const int TransitionSamples = 36;
-    const int StableSamples = 5;
-    const int ForwardConfirmSamples = 5;
+    const int ShiftConfirmSamples = 10;
     const int BottomSamples = 12;
     const int MaxStationaryAttempts = 3;
     const int RecoveryAttempts = 2;
@@ -58,7 +57,8 @@ public static class LongShotService
                                                       Action<int, int>? onProgress = null,
                                                       Func<bool>? cancelled = null,
                                                       Func<bool>? automatic = null,
-                                                      Action<bool>? onAlignmentLost = null)
+                                                      Action<bool>? onAlignmentLost = null,
+                                                      Action<LongShotStop>? onAutomaticPaused = null)
     {
         var restoreCursor = Win32.GetCursorPos(out var originalCursor);
         var session = ScreenCaptureSession.Open(
@@ -70,7 +70,7 @@ public static class LongShotService
                 : new Func<RECT, CapturedImage?>(_ => session.Grab());
             return await RunCoreAsync(region, onProgress, cancelled,
                                       capture, Wheel, DelayAsync, prepareWindow: true,
-                                      automatic, onAlignmentLost);
+                                      automatic, onAlignmentLost, onAutomaticPaused);
         }
         finally
         {
@@ -88,10 +88,11 @@ public static class LongShotService
         Func<bool>? cancelled = null,
         Func<int, Task>? delay = null,
         Func<bool>? automatic = null,
-        Action<bool>? onAlignmentLost = null)
+        Action<bool>? onAlignmentLost = null,
+        Action<LongShotStop>? onAutomaticPaused = null)
         => await RunCoreAsync(region, onProgress, cancelled, capture, scroll,
                               delay ?? DelayAsync, prepareWindow: false,
-                              automatic, onAlignmentLost);
+                              automatic, onAlignmentLost, onAutomaticPaused);
 
     static Task DelayAsync(int milliseconds) => Task.Delay(milliseconds);
 
@@ -104,7 +105,8 @@ public static class LongShotService
         Func<int, Task> delay,
         bool prepareWindow,
         Func<bool>? automatic,
-        Action<bool>? onAlignmentLost)
+        Action<bool>? onAlignmentLost,
+        Action<LongShotStop>? onAutomaticPaused)
     {
         var w = region.Right - region.Left;
         var h = region.Bottom - region.Top;
@@ -120,7 +122,8 @@ public static class LongShotService
             await delay(120);
         }
 
-        var first = await SettledGrabAsync(region, capture, delay, cancelled);
+        if (cancelled?.Invoke() == true) return new LongShotResult(null, 0, LongShotStop.Cancelled);
+        var first = await Task.Run(() => capture(region));
         if (first is null) return new LongShotResult(null, 0, LongShotStop.Failed);
 
         // 边接边攒。每段都是「新露出来的那几行」，最后一次性拼成一张。
@@ -132,12 +135,12 @@ public static class LongShotService
         var frames = 1;
         var automaticFrames = 1;
         // 先小步试。一格滚多远各家程序不一样，测出来之后下面会自己调。
-        var notches = band > 150 ? 2 : 1;
+        var notches = 1;
         var stop = LongShotStop.Bottom;
         var stationaryAttempts = 0;
-        ScrollFrame? manualCandidate = null;
-        var manualStable = 0;
-        var finishingSamples = -1;
+        var viewportLocked = false;
+        var unalignedFrames = 0;
+        var lastSliceTop = 0;
         onProgress?.Invoke(total, frames);
 
         while (true)
@@ -145,10 +148,8 @@ public static class LongShotService
             var autoScroll = automatic?.Invoke() ?? true;
             if (cancelled?.Invoke() == true)
             {
-                // 手动点完成时，给最后一段一次有界的稳定机会；刷新中的尾部不强行入图。
-                if (autoScroll || finishingSamples == 0) { stop = LongShotStop.Cancelled; break; }
-                if (finishingSamples < 0) finishingSamples = StableSamples + ForwardConfirmSamples + 2;
-                finishingSamples--;
+                stop = LongShotStop.Cancelled;
+                break;
             }
             // 手动平滑滚动会产生许多很短的分片，沿用自动的次数限制会过早截断。
             if (total >= MaxHeight || (autoScroll && automaticFrames >= MaxFrames)) { stop = LongShotStop.Limit; break; }
@@ -159,46 +160,31 @@ public static class LongShotService
                 await delay(ScrollPollMs);
                 var frame = await Task.Run(() => capture(region));
                 if (frame is null) { stop = LongShotStop.Failed; break; }
+                if (frames == 1 && !viewportLocked)
+                {
+                    var viewport = await Task.Run(() => FindScrollViewport(prev, frame));
+                    if (viewport is { } area)
+                    {
+                        frame = Crop(frame, area);
+                        UseViewport(area);
+                    }
+                }
                 var moved = await Task.Run(() =>
                 {
-                    var found = FindShift(prev, frame, band);
+                    var found = FindShift(prev, frame);
                     return found >= 0 || !Similar(prev, frame) ? found : 0;
                 });
-                onAlignmentLost?.Invoke(moved < 0);
+                unalignedFrames = moved < 0 ? unalignedFrames + 1 : 0;
+                // 暂时缺少静态参照时先保留已有内容，局部动画本身不是失败条件。
+                onAlignmentLost?.Invoke(unalignedFrames >= ShiftConfirmSamples);
                 // 暂停、回滚或拖得太远时保留最后接好的帧，等用户回到仍有重叠的位置。
-                if (moved <= 0) { manualStable = 0; continue; }
-                if (manualCandidate is { } pending)
-                {
-                    var advance = moved - pending.Shift;
-                    if (advance < 0)
-                    {
-                        manualCandidate = new ScrollFrame(frame, moved);
-                        manualStable = 0;
-                        continue;
-                    }
-                    var footer = Math.Max(Math.Max(0, fixedBottom), FindFixedBottom(prev, pending.Frame, pending.Shift));
-                    var matches = await Task.Run(() => SimilarRows(pending.Frame, frame,
-                        h - footer - pending.Shift, pending.Shift, advance));
-                    manualStable = matches ? manualStable + 1 : 0;
-                    // 连续滚动时，用后一帧中已上移的正文验证待拼区域；停住时等刷新稳定。
-                    // 只对齐一条窄带就立刻接底部，会永久留下半帧、悬浮特效和透明横条。
-                    if (matches && (advance > 0 || manualStable >= StableSamples + ForwardConfirmSamples))
-                    {
-                        transition = pending;
-                        manualCandidate = advance > 0 ? new ScrollFrame(frame, advance) : null;
-                        manualStable = 0;
-                    }
-                }
-                if (transition is null)
-                {
-                    manualCandidate = new ScrollFrame(frame, moved);
-                    continue;
-                }
+                if (moved == 0) { RefreshCurrent(frame); continue; }
+                if (moved < 0) continue;
+                transition = new ScrollFrame(frame, moved);
             }
             else
             {
-                manualCandidate = null;
-                manualStable = 0;
+                unalignedFrames = 0;
                 onAlignmentLost?.Invoke(false);
                 for (var attempt = 0; attempt <= RecoveryAttempts; attempt++)
                 {
@@ -214,14 +200,21 @@ public static class LongShotService
                     }
 
                     transition = await WaitForScrollAsync(
-                        region, prev, band, capture, delay,
-                        () => cancelled?.Invoke() == true || automatic?.Invoke() == false);
+                        region, prev, capture, delay,
+                        () => cancelled?.Invoke() == true || automatic?.Invoke() == false,
+                        detectViewport: frames == 1 && !viewportLocked);
                     if (transition is not null) break;
                 }
                 if (automatic?.Invoke() == false) continue;
             }
             if (transition is null)
             {
+                if (cancelled?.Invoke() != true && automatic is not null && onAutomaticPaused is not null)
+                {
+                    Log.Warn($"长截图自动转手动：未对齐，已接 {frames} 段，{w}×{total} 像素。");
+                    onAutomaticPaused(LongShotStop.Diverged);
+                    continue;
+                }
                 stop = cancelled?.Invoke() == true
                     ? LongShotStop.Cancelled
                     : LongShotStop.Diverged;
@@ -230,11 +223,25 @@ public static class LongShotService
 
             var next = transition.Value.Frame;
             var shift = transition.Value.Shift;
+            if (transition.Value.Viewport is { } selectedViewport)
+            {
+                next = Crop(next, selectedViewport);
+                UseViewport(selectedViewport);
+            }
             if (shift == 0)
             {
+                RefreshCurrent(next);
                 if (++stationaryAttempts < MaxStationaryAttempts)
                 {
                     notches = 1;
+                    continue;
+                }
+                if (automatic is not null && onAutomaticPaused is not null)
+                {
+                    // 屏幕不动只能说明本次滚轮没产生位移，不能证明嵌套页面已经到底。
+                    Log.Warn($"长截图自动转手动：连续无位移，已接 {frames} 段，{w}×{total} 像素。");
+                    onAutomaticPaused(LongShotStop.Bottom);
+                    stationaryAttempts = 0;
                     continue;
                 }
                 break;                                  // 连续多次没动，才判定到底
@@ -259,18 +266,35 @@ public static class LongShotService
             }
             fixedBottom = nextFixedBottom;
 
-            // 只留新露出来的那部分。裁到剩余额度以内，别冲过高度上限。
-            var take = Math.Min(shift, MaxHeight - total);
-            var slice = Crop(next, next.Height - Math.Max(0, fixedBottom) - take, take);
+            // 新内容之外可替换重叠的尾部，让接缝绕过视频/动图；整段来自同一帧，
+            // 不把旧帧的视频上半部与新帧下半部机械地切在视口底边。
+            var contentBottom = next.Height - fixedBottom;
+            var overlap = contentBottom - shift;
+            var seam = await Task.Run(() => FindSeam(prev, next, shift, contentBottom));
+            var replace = overlap - seam;
+            if (replace > 0)
+            {
+                total -= replace;
+                var remaining = replace;
+                while (remaining > 0)
+                {
+                    var tail = parts[^1];
+                    if (remaining < tail.Height) { parts[^1] = Crop(tail, 0, tail.Height - remaining)!; break; }
+                    remaining -= tail.Height;
+                    parts.RemoveAt(parts.Count - 1);
+                }
+            }
+            var take = Math.Min(replace + shift, MaxHeight - total);
+            var slice = Crop(next, seam, take);
             if (slice is null) break;
 
             parts.Add(slice);
-            total += take;
+            lastSliceTop = seam;
+            total += slice.Height;
             frames++;
             prev = next;
             band = PickBand(next);
             onProgress?.Invoke(total, frames);
-            if (finishingSamples >= 0) { stop = LongShotStop.Cancelled; break; }
 
             // 下一次滚多少跟着实测走。上限是窄带能认出的最大位移，再多就对不上了，
             // 留三成余量。
@@ -284,47 +308,87 @@ public static class LongShotService
         }
 
         return new LongShotResult(Stack(parts, w), frames, stop);
+
+        void UseViewport(RECT area)
+        {
+            // 内层正文滚动、外层固定时，先锁定正文视口。后面的对齐和抓取都用同一边界，
+            // 不把固定侧栏、输入框或另一层滚动条重复拼进长图。
+            var sourceCapture = capture;
+            var sourceRegion = region;
+            capture = _ => sourceCapture(sourceRegion) is { } image ? Crop(image, area) : null;
+            region = new RECT
+            {
+                Left = sourceRegion.Left + area.Left, Top = sourceRegion.Top + area.Top,
+                Right = sourceRegion.Left + area.Right, Bottom = sourceRegion.Top + area.Bottom,
+            };
+            first = Crop(first, area);
+            viewportLocked = true;
+            parts[0] = first;
+            prev = first;
+            w = first.Width;
+            h = total = first.Height;
+            band = PickBand(first);
+            lastSliceTop = 0;
+            onProgress?.Invoke(total, frames);
+        }
+
+        void RefreshCurrent(CapturedImage frame)
+        {
+            // 位移为零时不增加长度，但让当前可见分片更新到最新完整画面。
+            // 懒加载刚出现的空白可在加载后被替换，无需把“像素不变”当作拼接门槛。
+            parts[^1] = Crop(frame, lastSliceTop, parts[^1].Height)!;
+            prev = frame;
+            if (frames == 1) first = frame;
+        }
     }
 
     // ------------------------------------------------------------- 抓帧
 
     /// <summary>
-    /// 抓一帧，但要等画面稳住。平滑滚动会滚一小会儿，太早抓会拍到滚动中间的样子，
-    /// 跟下一帧对不上。连续观察到画面足够接近才算稳。
+    /// 自动模式只等待滚动位移结束，不要求视频等局部内容停止变化。
     /// </summary>
-    readonly record struct ScrollFrame(CapturedImage Frame, int Shift);
+    readonly record struct ScrollFrame(CapturedImage Frame, int Shift, RECT? Viewport = null);
 
     static async Task<ScrollFrame?> WaitForScrollAsync(
         RECT region,
         CapturedImage previous,
-        int bandTop,
         Func<RECT, CapturedImage?> capture,
         Func<int, Task> delay,
-        Func<bool>? cancelled)
+        Func<bool>? cancelled,
+        bool detectViewport = false)
     {
         await delay(ScrollKickDelayMs);
-        CapturedImage? last = null;
         var lastShift = int.MinValue;
         var sameShift = 0;
-        var sameFrame = 0;
         var zeroFrames = 0;
+        RECT? viewport = null;
 
         for (var i = 0; i < TransitionSamples; i++)
         {
             if (cancelled?.Invoke() == true) return null;
-            var now = await Task.Run(() => capture(region));
-            if (now is null) return null;
+            var raw = await Task.Run(() => capture(region));
+            if (raw is null) return null;
+            if (detectViewport && viewport is null)
+            {
+                viewport = await Task.Run(() => FindScrollViewport(previous, raw));
+                if (viewport is { } area)
+                {
+                    previous = Crop(previous, area);
+                    lastShift = int.MinValue;
+                    sameShift = zeroFrames = 0;
+                }
+            }
+            var now = viewport is { } bounds ? Crop(raw, bounds) : raw;
 
             var shift = await Task.Run(() =>
             {
-                var found = FindShift(previous, now, bandTop);
+                var found = FindShift(previous, now);
                 return found >= 0 || !Similar(previous, now) ? found : 0;
             });
             if (shift < 0)
             {
                 lastShift = int.MinValue;
                 sameShift = 0;
-                sameFrame = 0;
                 zeroFrames = 0;
             }
             else
@@ -332,23 +396,15 @@ public static class LongShotService
                 if (shift == lastShift) sameShift++;
                 else { lastShift = shift; sameShift = 1; }
 
-                var similar = last is not null && await Task.Run(() => shift == 0
-                    ? Similar(last, now)
-                    : SimilarRows(last, now, now.Height - shift, shift));
-                if (similar)
-                    sameFrame++;
-                else sameFrame = 1;
-
                 if (shift == 0)
                 {
                     zeroFrames++;
-                    if (zeroFrames >= BottomSamples && sameFrame >= StableSamples)
-                        return new ScrollFrame(now, 0);
+                    if (zeroFrames >= BottomSamples)
+                        return new ScrollFrame(raw, 0, viewport);
                 }
-                else if (sameShift >= StableSamples + ForwardConfirmSamples
-                         && sameFrame >= StableSamples + ForwardConfirmSamples)
+                else if (sameShift >= ShiftConfirmSamples)
                 {
-                    return new ScrollFrame(now, shift);
+                    return new ScrollFrame(raw, shift, viewport);
                 }
                 else
                 {
@@ -356,37 +412,10 @@ public static class LongShotService
                 }
             }
 
-            last = now;
             await delay(ScrollPollMs);
         }
 
         return null;
-    }
-
-    static async Task<CapturedImage?> SettledGrabAsync(
-        RECT region,
-        Func<RECT, CapturedImage?> capture,
-        Func<int, Task> delay,
-        Func<bool>? cancelled = null)
-    {
-        if (cancelled?.Invoke() == true) return null;
-        var prev = await Task.Run(() => capture(region));
-        if (prev is null) return null;
-        var stable = 0;
-
-        for (var i = 0; i < 12; i++)
-        {
-            if (cancelled?.Invoke() == true) return null;
-            await delay(40);
-            var now = await Task.Run(() => capture(region));
-            if (now is null) return prev;
-            if (await Task.Run(() => Similar(prev, now))) stable++;
-            else stable = 0;
-            if (stable >= StableSamples) return now;
-            prev = now;
-        }
-        // 一直在动（视频、动画）。就用最后这张，对齐那步会去判断能不能接上。
-        return prev;
     }
 
     /// <summary>两帧是不是一样。抽样比，不用逐字节。</summary>
@@ -412,68 +441,189 @@ public static class LongShotService
         return true;
     }
 
-    static bool SimilarRows(CapturedImage a, CapturedImage b, int top, int height, int upwardShift = 0)
-    {
-        if (a.Width != b.Width || a.Height != b.Height) return false;
-        top = Math.Clamp(top, 0, a.Height);
-        if (upwardShift < 0 || top < upwardShift) return false;
-        var bottom = Math.Clamp(top + height, top, a.Height);
-        if (top >= bottom) return true;
-
-        var rows = 0;
-        var different = 0;
-        for (var y = top; y < bottom; y += 4)
-        {
-            rows++;
-            if (!RowMatches(a, y, b, y - upwardShift, a.Width, 0.02)
-                && ++different > Math.Max(1, rows / 20))
-                return false;
-        }
-        return true;
-    }
-
     // ------------------------------------------------------------- 对齐
 
+    /// <summary>从首次滚动的画面差异定位内层视口，再用一致的纵向位移确认。</summary>
+    internal static RECT? FindScrollViewport(CapturedImage previous, CapturedImage next)
+    {
+        if (previous.Width != next.Width || previous.Height != next.Height || Same(previous, next)) return null;
+        var width = previous.Width;
+        var height = previous.Height;
+        var columns = new int[width];
+        var top = height;
+        var bottom = 0;
+        for (var y = 0; y < height; y++)
+        {
+            var changed = 0;
+            for (var x = 0; x < width; x++)
+            {
+                var i = y * previous.Stride + x * 4;
+                if (Math.Abs(previous.Pixels[i] - next.Pixels[i]) <= 8
+                    && Math.Abs(previous.Pixels[i + 1] - next.Pixels[i + 1]) <= 8
+                    && Math.Abs(previous.Pixels[i + 2] - next.Pixels[i + 2]) <= 8) continue;
+                columns[x]++;
+                changed++;
+            }
+            if (changed < Math.Max(2, width / 100)) continue;
+            top = Math.Min(top, y);
+            bottom = y + 1;
+        }
+        var left = Array.FindIndex(columns, count => count >= Math.Max(2, height / 100));
+        var right = Array.FindLastIndex(columns, count => count >= Math.Max(2, height / 100)) + 1;
+        if (left < 0 || right - left < Band || bottom - top < Band * 2) return null;
+        // 一块小动图或状态动画不能把整幅选区重定向到自己；小面板应单独框选。
+        if ((long)(right - left) * (bottom - top) < (long)width * height / 8) return null;
+        // 普通整块滚动继续走原路径，只有明显的固定边界才收窄视口。
+        if (left == 0 && right == width && top < Band && bottom > height - Band) return null;
+
+        // 探测时避开两侧的滚动条；确认位移后再逐列扩回正文和空白边距。
+        var inset = Math.Min(16, (right - left) / 10);
+        var probe = new RECT { Left = left + inset, Top = top, Right = right - inset, Bottom = bottom };
+        var before = Crop(previous, probe);
+        var after = Crop(next, probe);
+        var shift = FindShift(before, after);
+        if (shift <= 0) return null;
+
+        left = probe.Left;
+        right = probe.Right;
+        while (left > 0 && ColumnMoves(left - 1, left)) left--;
+        while (right < width && ColumnMoves(right, right - 1)) right++;
+        var strip = new RECT { Left = left, Top = 0, Right = right, Bottom = height };
+        before = Crop(previous, strip);
+        after = Crop(next, strip);
+        while (top > 0 && top - 1 + shift < height
+            && RowMatches(before, top - 1 + shift, after, top - 1, before.Width, RowTolerance)) top--;
+        while (bottom < height && bottom >= shift
+            && RowMatches(before, bottom, after, bottom - shift, before.Width, RowTolerance)) bottom++;
+
+        if (left == 0 && right == width && top == 0 && bottom == height) return null;
+        var viewport = new RECT { Left = left, Top = top, Right = right, Bottom = bottom };
+        before = Crop(previous, viewport);
+        after = Crop(next, viewport);
+        if (FindShift(before, after) != shift) return null;
+        var fixedEvidence = 0;
+        for (var y = 4; y < height - 4; y += 4)
+            for (var x = 0; x < width; x += ColStep)
+            {
+                // 留白在零位移和滚动位移下都可能相同，不能据此缩窄用户选区。
+                var outside = (left >= Band && x < left) || (width - right >= Band && x >= right)
+                    || (top >= Band && y < top) || (height - bottom >= Band && y >= bottom);
+                if (!outside || !PixelMatches(previous, x, y, next, x, y)
+                    || PixelMatches(previous, x, y, previous, x, y + 3)) continue;
+                if (y >= shift && !PixelMatches(previous, x, y, next, x, y - shift)) fixedEvidence++;
+            }
+        return fixedEvidence >= 12 ? viewport : null;
+
+        bool ColumnMoves(int x, int neighbor)
+        {
+            var samples = 0;
+            var different = 0;
+            var moving = 0;
+            var edge = 0;
+            for (var y = top + shift; y < bottom; y += ColStep)
+            {
+                samples++;
+                var a = y * previous.Stride + x * 4;
+                var b = (y - shift) * next.Stride + x * 4;
+                var same = y * next.Stride + x * 4;
+                var beside = y * previous.Stride + neighbor * 4;
+                if (Math.Abs(previous.Pixels[a] - next.Pixels[b]) > 8
+                    || Math.Abs(previous.Pixels[a + 1] - next.Pixels[b + 1]) > 8
+                    || Math.Abs(previous.Pixels[a + 2] - next.Pixels[b + 2]) > 8) different++;
+                if (Math.Abs(previous.Pixels[a] - next.Pixels[same]) > 8
+                    || Math.Abs(previous.Pixels[a + 1] - next.Pixels[same + 1]) > 8
+                    || Math.Abs(previous.Pixels[a + 2] - next.Pixels[same + 2]) > 8) moving++;
+                if (Math.Abs(previous.Pixels[a] - previous.Pixels[beside]) > 8
+                    || Math.Abs(previous.Pixels[a + 1] - previous.Pixels[beside + 1]) > 8
+                    || Math.Abs(previous.Pixels[a + 2] - previous.Pixels[beside + 2]) > 8) edge++;
+            }
+            // 文字列中只有部分行带字；空白边距只需与相邻列的段落留白相接。
+            // 滚动条轨道与正文空白之间通常有连续色差，不能把它扩进截图。
+            return samples > 0 && different <= samples * RowTolerance
+                && (moving > 0 || edge <= samples * 0.8);
+        }
+    }
+
     /// <summary>
-    /// prev 里那条窄带在 next 里往上移了多少像素。
+    /// 多个有纹理的小块独立搜索纵向位移；共同支持的位移才可用于拼接。
     /// 返回 0 表示没动（到底了），返回 -1 表示找不到——画面已经不是同一批内容了。
     ///
     /// 拼接对不对全看这个数。自测直接拿它和 PickBand / Stack 对着造好的图验，
     /// 不然只能靠真滚一遍屏幕，那测不出边界。
     /// </summary>
-    internal static int FindShift(CapturedImage prev, CapturedImage next, int bandTop)
+    internal static int FindShift(CapturedImage prev, CapturedImage next)
     {
         if (prev.Width != next.Width || prev.Height != next.Height) return -1;
         if (Same(prev, next)) return 0;
-
-        var bottom = prev.Height - Band;
-        if (bottom < Band) return -1;
-
-        var start = Math.Clamp(bandTop, Band, bottom);
-        var votes = new Dictionary<int, int>();
-        var step = Math.Max(1, Band / 2);
-        var anchors = new HashSet<int>();
-
-        for (var t = start; t >= Band; t -= step)
-            if (BandHasVariation(prev, t)) anchors.Add(t);
-        if (BandHasVariation(prev, bottom)) anchors.Add(bottom);
-
-        foreach (var t in anchors)
+        const int patchHeight = 16;
+        var patchWidth = Math.Min(prev.Width, Math.Clamp(prev.Width / 16, 8, 24));
+        var columns = Math.Min(16, Math.Max(1, prev.Width / patchWidth));
+        var anchors = new List<(int X, int Y)>();
+        for (var column = 0; column < columns; column++)
         {
-            var maxShift = Math.Min(t, bottom);
-            for (var d = 0; d <= maxShift; d++)
+            var x = columns == 1 ? 0 : column * (prev.Width - patchWidth) / (columns - 1);
+            for (var y = prev.Height - patchHeight; y >= 0; y -= Math.Max(patchHeight, prev.Height / 24))
             {
-                if (!BandMatches(prev, t, next, t - d, prev.Width)) continue;
-                votes[d] = votes.TryGetValue(d, out var count) ? count + 1 : 1;
+                var variation = 0;
+                for (var dy = 3; dy < patchHeight; dy += 3)
+                    for (var dx = 0; dx < patchWidth; dx += 3)
+                        if (!PixelMatches(prev, x + dx, y, prev, x + dx, y + dy)) variation++;
+                if (variation >= 3) anchors.Add((x, y));
             }
         }
+        var votes = new double[prev.Height];
+        var uniqueVotes = new int[prev.Height];
+        foreach (var (x, y) in anchors)
+        {
+            var matches = new List<int>();
+            // 连反方向候选也用来判断是否重复，避免顶部重复文字因为不能再向上
+            // 搜索，就被误认成“唯一的零位移”。最终只接受向下滚动产生的非负位移。
+            for (var shift = y - (next.Height - patchHeight); shift <= y; shift++)
+            {
+                if (!PatchMatches(x, y, y - shift)) continue;
+                matches.Add(shift);
+            }
+            foreach (var shift in matches)
+            {
+                if (shift < 0) continue;
+                votes[shift] += 1.0 / matches.Count;
+                if (matches.Count == 1 && y >= Band * 2) uniqueVotes[shift]++;
+            }
+        }
+        var best = 0;
+        for (var shift = 1; shift < votes.Length; shift++)
+            if (uniqueVotes[shift] > uniqueVotes[best]
+                || (uniqueVotes[shift] == uniqueVotes[best] && votes[shift] > votes[best])) best = shift;
+        var eligible = anchors.Count(anchor => anchor.Y >= best);
+        // 持续变化的块是离群值，不要求它们与正文一致；仍需多个独立块支持。
+        if (uniqueVotes[best] < 3 && votes[best] < Math.Max(3, eligible * 0.1)) return -1;
+        return best;
 
-        if (votes.Count == 0) return -1;
-        // 把零位移也参与比较：到底后的小动画不能让重复行被误当成又滚了一屏。
-        var best = votes.OrderByDescending(p => p.Value).ThenBy(p => p.Key).First();
-        var eligible = anchors.Count(top => top >= best.Key);
-        if (best.Value < Math.Max(1, (int)Math.Ceiling(eligible * 0.6))) return -1;
-        return best.Key;
+        bool PatchMatches(int x, int beforeY, int afterY)
+        {
+            // 首末行先否掉多数错误位移，减少大选区的逐像素工作量。
+            if (!PixelMatches(prev, x, beforeY, next, x, afterY)
+                || !PixelMatches(prev, x + patchWidth - 1, beforeY + patchHeight - 1,
+                    next, x + patchWidth - 1, afterY + patchHeight - 1)) return false;
+            var samples = 0;
+            var different = 0;
+            for (var dy = 0; dy < patchHeight; dy += 3)
+                for (var dx = 0; dx < patchWidth; dx += 3)
+                {
+                    samples++;
+                    if (!PixelMatches(prev, x + dx, beforeY + dy, next, x + dx, afterY + dy)) different++;
+                }
+            return different <= samples * RowTolerance;
+        }
+    }
+
+    static bool PixelMatches(CapturedImage a, int ax, int ay, CapturedImage b, int bx, int by)
+    {
+        var pa = ay * a.Stride + ax * 4;
+        var pb = by * b.Stride + bx * 4;
+        return Math.Abs(a.Pixels[pa] - b.Pixels[pb]) <= 8
+            && Math.Abs(a.Pixels[pa + 1] - b.Pixels[pb + 1]) <= 8
+            && Math.Abs(a.Pixels[pa + 2] - b.Pixels[pb + 2]) <= 8;
     }
 
     /// <summary>
@@ -503,17 +653,6 @@ public static class LongShotService
         for (var i = 2; i < Band; i += 2)
             if (!RowMatches(img, top, img, top + i, img.Width, RowTolerance)) varied++;
         return varied >= 3;
-    }
-
-    static bool BandMatches(CapturedImage a, int ay, CapturedImage b, int by, int w)
-    {
-        // 先看首尾两行，不合就不用比中间了——绝大多数错位在这里就被否掉
-        if (!RowMatches(a, ay, b, by, w, RowTolerance)) return false;
-        if (!RowMatches(a, ay + Band - 1, b, by + Band - 1, w, RowTolerance)) return false;
-
-        for (var i = 1; i < Band - 1; i += 2)
-            if (!RowMatches(a, ay + i, b, by + i, w, RowTolerance)) return false;
-        return true;
     }
 
     /// <summary>
@@ -553,7 +692,7 @@ public static class LongShotService
 
         for (var y = height - 1; y >= top; y--)
         {
-            if (RowMatches(prev, y, next, y - shift, prev.Width, RowTolerance)) mismatchRun = 0;
+            if (RowMatches(prev, y, next, y - shift, prev.Width, 0.9)) mismatchRun = 0;
             else if (++mismatchRun >= 2) boundary = y;
         }
 
@@ -565,7 +704,75 @@ public static class LongShotService
             if (!RowMatches(prev, y, next, y - shift, prev.Width, RowTolerance)) break;
             cleanRows++;
         }
-        return cleanRows >= Math.Min(Band, Math.Max(2, boundary - shift)) ? height - boundary : 0;
+        if (cleanRows < Math.Min(Band, Math.Max(2, boundary - shift))) return 0;
+        var fixedRows = 0;
+        for (var y = boundary; y < height; y++)
+            if (RowMatches(prev, y, next, y, prev.Width, RowTolerance)) fixedRows++;
+        if (fixedRows >= (height - boundary) * 0.9) return height - boundary;
+        return IsTranslucentFooter(prev, next, shift, boundary) ? height - boundary : 0;
+    }
+
+    static bool IsTranslucentFooter(CapturedImage previous, CapturedImage next, int shift, int boundary)
+    {
+        // 半透明固定底栏会把正文作近似线性混色。只有这种证据才裁除，
+        // 普通视频帧之间“不相同”不能被当成底栏，否则会把整个视频裁掉。
+        var end = Math.Min(previous.Height, boundary + Math.Min(shift, Band));
+        var informativeChannels = 0;
+        for (var channel = 0; channel < 3; channel++)
+        {
+            double sumA = 0, sumB = 0, sumAA = 0, sumAB = 0;
+            var count = 0;
+            for (var y = boundary; y < end; y++)
+                for (var x = 0; x < previous.Width; x += ColStep)
+                {
+                    var a = next.Pixels[(y - shift) * next.Stride + x * 4 + channel];
+                    var b = previous.Pixels[y * previous.Stride + x * 4 + channel];
+                    sumA += a; sumB += b; sumAA += a * a; sumAB += a * b; count++;
+                }
+            var variance = sumAA - sumA * sumA / count;
+            if (variance < count * 16) continue;
+            informativeChannels++;
+            var slope = (sumAB - sumA * sumB / count) / variance;
+            if (slope is < 0.1 or > 0.9) return false;
+            var intercept = (sumB - slope * sumA) / count;
+            var different = 0;
+            for (var y = boundary; y < end; y++)
+                for (var x = 0; x < previous.Width; x += ColStep)
+                {
+                    var a = next.Pixels[(y - shift) * next.Stride + x * 4 + channel];
+                    var b = previous.Pixels[y * previous.Stride + x * 4 + channel];
+                    if (Math.Abs(b - (slope * a + intercept)) > 8) different++;
+                }
+            if (different > count * RowTolerance) return false;
+        }
+        return informativeChannels > 0;
+    }
+
+    /// <summary>选择重叠区最靠后的低差异横向接缝；不同帧的视频只保留接缝一侧。</summary>
+    internal static int FindSeam(CapturedImage previous, CapturedImage next, int shift, int contentBottom)
+    {
+        var overlap = contentBottom - shift;
+        if (overlap <= 0) return 0;
+        var best = overlap;
+        var bestDifference = double.MaxValue;
+        for (var seam = overlap; seam > 0; seam--)
+        {
+            var different = 0;
+            var samples = 0;
+            for (var y = Math.Max(0, seam - 3); y < Math.Min(contentBottom, seam + 3); y++)
+            {
+                if (y + shift >= previous.Height) break;
+                for (var x = 0; x < previous.Width; x += ColStep)
+                {
+                    samples++;
+                    if (!PixelMatches(previous, x, y + shift, next, x, y)) different++;
+                }
+            }
+            var cost = samples == 0 ? 1 : (double)different / samples;
+            if (cost < bestDifference) { bestDifference = cost; best = seam; }
+            if (cost <= 0.02) return seam;
+        }
+        return best;
     }
 
     // ------------------------------------------------------------- 拼接
@@ -579,6 +786,16 @@ public static class LongShotService
         return new CapturedImage(src.Width, h, buf);
     }
 
+    internal static CapturedImage Crop(CapturedImage source, RECT area)
+    {
+        var width = area.Right - area.Left;
+        var height = area.Bottom - area.Top;
+        var stride = width * 4;
+        var pixels = new byte[stride * height];
+        for (var y = 0; y < height; y++)
+            Array.Copy(source.Pixels, (area.Top + y) * source.Stride + area.Left * 4, pixels, y * stride, stride);
+        return new CapturedImage(width, height, pixels);
+    }
     /// <summary>把一叠等宽的图上下摞起来。</summary>
     internal static CapturedImage? Stack(List<CapturedImage> parts, int w)
     {
@@ -629,7 +846,8 @@ public static class LongShotService
     {
         var width = Math.Max(1, region.Right - region.Left);
         var height = Math.Max(1, region.Bottom - region.Top);
-        var x = Math.Clamp(region.Right - Math.Min(6, width), region.Left, region.Right - 1);
+        // 嵌套页面最右侧往往是外层滚动条，滚正文中心才会落到内层容器。
+        var x = region.Left + width / 2;
         var y = region.Top + height / 2;
         Win32.SetCursorPos(x, y);
     }

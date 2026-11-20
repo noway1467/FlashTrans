@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Media;
 using FlashTrans.Interop;
+using FlashTrans.Services;
 
 namespace FlashTrans.Views;
 
@@ -22,6 +23,7 @@ public sealed class LongShotHud : Window
     int _frames;
     bool _alignmentLost;
     bool _escArmed;
+    string? _automaticPause;
 
     /// <summary>躲不开选区。见 <see cref="Report"/>：这时候不能再改字。</summary>
     bool _quiet;
@@ -72,6 +74,7 @@ public sealed class LongShotHud : Window
             _mode.ToolTip = Automatic ? "停止自动滚动，改用滚轮或拖动页面滚动条。"
                 : "自动向下滚动；页面不响应时可切回手动滚动。";
             _alignmentLost = false;
+            _automaticPause = null;
             RefreshStatus();
         };
 
@@ -142,6 +145,7 @@ public sealed class LongShotHud : Window
     /// </summary>
     public void Report(int height, int frames)
     {
+        if (frames > _frames) _automaticPause = null;
         _height = height;
         _frames = frames;
         _mode.IsEnabled = true;
@@ -155,11 +159,24 @@ public sealed class LongShotHud : Window
         RefreshStatus();
     }
 
+    public void PauseAutomatic(LongShotStop reason)
+    {
+        Automatic = false;
+        _mode.Content = "自动滚动";
+        _mode.ToolTip = "重新尝试自动滚动，也可继续手动滚动或点击完成。";
+        _alignmentLost = false;
+        _automaticPause = reason == LongShotStop.Bottom
+            ? "画面未继续滚动，已切到手动"
+            : "画面暂未对齐，已切到手动";
+        RefreshStatus();
+    }
+
     void RefreshStatus()
     {
         if (_quiet) return;
-        _size.Text = _alignmentLost ? "接不上：请向上回滚少许"
-            : $"{(Automatic ? "自动滚动" : "手动：向下慢滚")} · {_height} 像素（{_frames} 段）";
+        var state = _alignmentLost ? "未找到共同内容：请保留更多重叠区域"
+            : _automaticPause ?? (Automatic ? "自动滚动" : "手动：向下慢滚");
+        _size.Text = $"{state} · {_height} 像素（{_frames} 段）";
         // 字变长了，位置得跟着重算，不然会从选区边上长回选区里
         Place();
     }

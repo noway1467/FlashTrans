@@ -19,6 +19,7 @@ static class LongShotProbe
 {
     public static void RunAll(Action<string, Action> step)
     {
+        RunDynamic(step);
         step("长截图：固定底栏不会被重复拼进长图", FixedBottomProbe);
         step("长截图：普通底部留白不会被误裁", FixedBottomFalsePositiveProbe);
         step("长截图：能算出滚了多少像素", ShiftProbe);
@@ -27,24 +28,100 @@ static class LongShotProbe
         step("长截图：留白处不会被当成滚到底", FlatBandProbe);
         step("长截图：接起来的长图行数和内容都对", StackProbe);
         step("长截图：固定浮层不会被误判成滚到底", FixedOverlayProbe);
-        step("长截图：滚动距离超过初始窄带也能对齐", LargeShiftProbe);
+        step("长截图：较大位移仍用保留的局部重叠对齐", LargeShiftProbe);
         step("长截图：动态刷新和回弹期间不反向滚、不拼半帧", DynamicRefreshProbe);
         step("长截图：到底后的局部动画不把重复纹理当成继续滚动", BottomAnimationProbe);
-        step("长截图：手动等待刷新后再拼接，不留下透明横条和半帧", ManualRefreshProbe);
-        step("长截图：持续变化的尾部不会被强行拼接", AnimatedTailProbe);
+        step("长截图：手动停留时刷新当前分片，加载后替换临时空白", ManualRefreshProbe);
+        step("长截图：持续变化的尾部允许拼接，静态正文不重复", AnimatedTailProbe);
         step("长截图：透明底栏和中途出现的底栏不重复入图", TranslucentFooterProbe);
+        step("长截图：手动与自动锁定内层滚动，排除固定外框和两层滚动条", () => NestedViewportProbe());
+        step("长截图：嵌套文字区域保留空白边距和段落间隔", () => NestedViewportProbe(whitespace: true));
+        step("长截图：局部动画不会把截图区域缩成动图", ViewportAnimationProbe);
         step("长截图：滚动事件延迟时不会提前判定到底", DelayedScrollProbe);
         step("长截图：手动停顿不结束，连续滚动逐像素拼接且不发送滚轮", ManualScrollProbe);
         step("长截图：手动回滚和过快滚动可恢复，不重复拼接或跳过内容", ManualRecoveryProbe);
         step("长截图：手动连续小幅滚动不提前触发自动次数上限", ManualSmallStepsProbe);
         step("长截图：自动等待期间切回手动，再开启自动不丢帧", ModeSwitchProbe);
+        step("长截图：自动中断保留现场，手动继续后再完成", AutomaticPauseProbe);
+        step("长截图：短暂失配不提示回滚，持续失配提示可恢复", AlignmentFeedbackProbe);
         step("长截图：手动/自动浮条、完成按钮及深浅主题布局", HudProbe);
         step("长截图：100% 预览在不同 DPI 下保持物理像素一比一", PreviewDpiProbe);
         step("长截图：超长图分片虚拟化，缩放和滚到底后仍保留原像素", PreviewTilesProbe);
+        step("长截图：默认适应宽度，记住窗口尺寸且最大化不覆盖普通尺寸", PreviewWindowSizeProbe);
         step("长截图：无损 PNG 往返不缩图、不改细线像素", LosslessExportProbe);
         step("长截图：真实 WPF 滚动、GDI 抓屏和拼接保持原像素", () => RealScrollPixelsProbe());
         step("长截图：真实 WPF 半透明底部浮层不进入拼接结果", () => RealScrollPixelsProbe(footerHeight: 32));
-        step("长截图：真实手动滚轮和拖动滚动条，鼠标位置不被接管", RealManualScrollProbe);
+        step("动态长截图：真实窗口动画持续播放时，GDI 抓屏仍完整拼接", () => RealScrollPixelsProbe(animated: true));
+        step("长截图：真实手动滚轮和拖动滚动条，鼠标位置不被接管", () => RealManualScrollProbe());
+        step("长截图：真实双层滚动条中手动滚轮和拖动内层仍能连续拼接", () => RealManualScrollProbe(nested: true));
+    }
+
+    public static void RunDynamic(Action<string, Action> step)
+    {
+        step("动态长截图：周围正文确定滚动位移，视频每帧变化不影响对齐", MovingVideoShiftProbe);
+        step("动态长截图：自动和手动都能接完，视频保留一个完整时刻", () => MovingVideoStitchProbe());
+        step("动态长截图：通栏播放的视频不会被误裁成固定底栏", () => MovingVideoStitchProbe(fullWidth: true));
+        step("动态长截图：没有静态参照的全屏动画不伪造滚动", UnanchoredAnimationProbe);
+        var args = Environment.GetCommandLineArgs();
+        var index = Array.IndexOf(args, "--longshot-browser-corpus");
+        if (index >= 0 && index + 1 < args.Length)
+            step("动态长截图：真实浏览器播放视频的抓帧重放，正文与视频完整性验证",
+                () => BrowserVideoProbe(args[index + 1]));
+    }
+
+    static void BrowserVideoProbe(string directory)
+    {
+        CapturedImage Load(string name)
+        {
+            var bitmap = AnimEncoder.LoadFrame(Path.Combine(directory, name));
+            var pixels = new byte[bitmap.PixelWidth * bitmap.PixelHeight * 4];
+            new FormatConvertedBitmap(bitmap, PixelFormats.Bgra32, null, 0).CopyPixels(pixels, bitmap.PixelWidth * 4, 0);
+            return new CapturedImage(bitmap.PixelWidth, bitmap.PixelHeight, pixels);
+        }
+        var reference = Load("browser-reference.png");
+        var frames = Enumerable.Range(0, 11).Select(i => Load($"browser-{i * 200:D4}.png")).ToArray();
+        Check(reference.Width == 900 && reference.Height == 2600 && frames.All(f => f.Width == 900 && f.Height == 600),
+            "浏览器抓帧集尺寸不符合场景");
+        Console.WriteLine("       相邻抓帧位移：" + string.Join(",", Enumerable.Range(1, frames.Length - 1)
+            .Select(i => LongShotService.FindShift(frames[i - 1], frames[i]))));
+        foreach (var automatic in new[] { false, true })
+        {
+            var index = 0;
+            var ready = false;
+            var samples = 0;
+            var timer = System.Diagnostics.Stopwatch.StartNew();
+            var result = Task.Run(() => LongShotService.RunForTestAsync(new RECT { Right = 900, Bottom = 600 },
+                _ =>
+                {
+                    if (ready && !automatic) index = Math.Min(++samples, frames.Length - 1);
+                    return frames[index];
+                }, _ => index = Math.Min(index + 1, frames.Length - 1),
+                onProgress: (_, _) => ready = true, cancelled: () => samples > 15,
+                delay: _ => Task.CompletedTask, automatic: () => automatic)).GetAwaiter().GetResult();
+            Check(result.Image is not null && result.Image.Width == reference.Width && result.Image.Height == reference.Height,
+                $"浏览器动态截图尺寸错误：{result.Image?.Width}×{result.Image?.Height}，{result.Stopped}");
+            var image = result.Image!;
+            for (var y = 0; y < image.Height; y++)
+                for (var x = 0; x < image.Width; x++)
+                {
+                    // Chromium 在非整数设备比例下会把 video 边缘合成到相邻一个像素。
+                    if (x is >= 89 and < 811 && (y is >= 349 and < 571 || y is >= 1449 and < 1671)) continue;
+                    var pixel = y * image.Stride + x * 4;
+                    Check(image.Pixels.AsSpan(pixel, 4).SequenceEqual(reference.Pixels.AsSpan(pixel, 4)),
+                        $"浏览器正文在 {x},{y} 出现重复、缺行或像素改变");
+                }
+            foreach (var top in new[] { 349, 1449 })
+            {
+                var intact = frames.Select((frame, i) => (Frame: frame, Offset: i * 200))
+                    .Where(item => item.Offset <= top && item.Offset + 600 >= top + 222)
+                    .Any(item => Enumerable.Range(0, 222).All(y => image.Pixels
+                        .AsSpan((top + y) * image.Stride + 89 * 4, 722 * 4)
+                        .SequenceEqual(item.Frame.Pixels.AsSpan((top - item.Offset + y) * image.Stride + 89 * 4, 722 * 4))));
+                Check(intact, $"浏览器视频 {top} 被切成多个时刻，出现横向断层");
+            }
+            image.SavePng(Path.Combine(directory, automatic ? "browser-result-auto.png" : "browser-result-manual.png"));
+            Console.WriteLine($"       {(automatic ? "自动" : "手动")}：{result.Frames} 段，900×2600，正文逐像素一致，两段视频均为完整单帧，{timer.ElapsedMilliseconds}ms");
+        }
     }
 
     // ------------------------------------------------------------- 造图
@@ -92,6 +169,75 @@ static class LongShotProbe
         return h;
     }
 
+    static CapturedImage VideoFrame(CapturedImage page, int offset, int tick, bool fullWidth = false)
+    {
+        var frame = Frame(page, offset);
+        const int videoTop = 180, videoBottom = 350;
+        for (var y = Math.Max(0, videoTop - offset); y < Math.Min(H, videoBottom - offset); y++)
+            for (var x = fullWidth ? 0 : 24; x < (fullWidth ? W : W - 24); x++)
+            {
+                var i = y * frame.Stride + x * 4;
+                frame.Pixels[i] = (byte)(30 + tick % 5 * 40);
+                frame.Pixels[i + 1] = (byte)(210 - tick % 5 * 35);
+                frame.Pixels[i + 2] = (byte)(x % 2 == 0 ? 50 : 240);
+            }
+        return frame;
+    }
+
+    static void MovingVideoShiftProbe()
+    {
+        var page = Page(1200);
+        foreach (var fullWidth in new[] { false, true })
+        foreach (var shift in new[] { 0, 17, 60, 90, 150 })
+        {
+            var before = VideoFrame(page, 0, 0, fullWidth);
+            var after = VideoFrame(page, shift, 2, fullWidth);
+            Check(LongShotService.FindShift(before, after) == shift,
+                $"视频变化时无法正确识别 {shift} 像素位移");
+        }
+    }
+
+    static void MovingVideoStitchProbe(bool fullWidth = false)
+    {
+        var page = Page(1200);
+        foreach (var automatic in new[] { false, true })
+        {
+            var ready = false;
+            var offset = 0;
+            var tick = 0;
+            var samples = 0;
+            var result = Task.Run(() => LongShotService.RunForTestAsync(new RECT { Right = W, Bottom = H },
+                _ =>
+                {
+                    if (!automatic && ready) offset = Math.Min(600, ++samples * 30);
+                    return VideoFrame(page, offset, ++tick, fullWidth);
+                }, _ => offset = Math.Min(600, offset + 60),
+                onProgress: (_, _) => ready = true, cancelled: () => samples >= 40 || tick >= 300,
+                delay: _ => Task.CompletedTask, automatic: () => automatic)).GetAwaiter().GetResult();
+            Check(result.Image is not null && result.Image.Width == W && result.Image.Height == H + 600,
+                $"{(automatic ? "自动" : "手动")}遇到播放中的视频就停住：{result.Stopped}，{result.Image?.Height} 行");
+            var image = result.Image!;
+            var videoColor = image.Pixels[180 * image.Stride + 24 * 4];
+            for (var y = 0; y < image.Height; y++)
+                for (var x = 0; x < image.Width; x++)
+                {
+                    var i = y * image.Stride + x * 4;
+                    if (y is >= 180 and < 350 && (fullWidth || x is >= 24 and < W - 24))
+                        Check(image.Pixels[i] == videoColor, "同一个视频被不同时刻切成多段，产生横向折痕");
+                    else Check(image.Pixels.AsSpan(i, 4).SequenceEqual(page.Pixels.AsSpan(i, 4)),
+                        $"静态正文第 {y} 行缺失、重复或像素改变");
+                }
+        }
+    }
+
+    static void UnanchoredAnimationProbe()
+    {
+        var previous = Frame(Page(1200), 0);
+        var next = new CapturedImage(W, H, previous.Pixels.Reverse().ToArray());
+        Check(LongShotService.FindShift(previous, next) < 0,
+            "全屏动画没有共同参照却猜出了滚动位移");
+    }
+
     /// <summary>从长页面里截一屏，模拟滚到 offset 处看到的画面。</summary>
     static CapturedImage Frame(CapturedImage page, int offset)
         => LongShotService.Crop(page, offset, H)
@@ -121,7 +267,7 @@ static class LongShotProbe
         foreach (var moved in new[] { 1, 17, 120, band - 1, band })
         {
             var next = Frame(page, moved);
-            var got = LongShotService.FindShift(prev, next, band);
+            var got = LongShotService.FindShift(prev, next);
             if (got != moved)
                 throw new InvalidOperationException($"滚了 {moved} 行，算出来是 {got}");
         }
@@ -132,20 +278,17 @@ static class LongShotProbe
     {
         var page = Page(1200);
         var frame = Frame(page, 400);
-        var band = LongShotService.PickBand(frame);
         // 同一帧比自己：没动，应该是 0，调用方据此判定到底
-        var got = LongShotService.FindShift(frame, frame, band);
+        var got = LongShotService.FindShift(frame, frame);
         if (got != 0) throw new InvalidOperationException($"画面没变却算出滚了 {got} 行");
     }
 
     static void DivergeProbe()
     {
         var prev = Frame(Page(1200), 0);
-        var band = LongShotService.PickBand(prev);
-
         // 另一张毫不相干的页面：接不上就该说接不上，硬拼会在长图里留一段空缺
         var other = new CapturedImage(W, H, Page(1200).Pixels.Reverse().ToArray());
-        var got = LongShotService.FindShift(prev, other, band);
+        var got = LongShotService.FindShift(prev, other);
         if (got >= 0) throw new InvalidOperationException($"画面换了内容，却算出滚了 {got} 行");
     }
 
@@ -202,7 +345,7 @@ static class LongShotProbe
         Array.Copy(prev.Pixels, (H - overlayHeight) * prev.Stride,
             pixels, (H - overlayHeight) * prev.Stride, overlayHeight * prev.Stride);
         var next = new CapturedImage(W, H, pixels);
-        var got = LongShotService.FindShift(prev, next, LongShotService.PickBand(prev));
+        var got = LongShotService.FindShift(prev, next);
         if (got != 90)
             throw new InvalidOperationException($"固定浮层遮住底部时应算出 90，实际是 {got}");
     }
@@ -211,10 +354,10 @@ static class LongShotProbe
     {
         var page = Page(1200);
         var prev = Frame(page, 0);
-        var next = Frame(page, 150);
-        var got = LongShotService.FindShift(prev, next, bandTop: 80);
-        if (got != 150)
-            throw new InvalidOperationException($"滚了 150 行、初始窄带在 80 行时应算出 150，实际是 {got}");
+        var next = Frame(page, 268);
+        var got = LongShotService.FindShift(prev, next);
+        if (got != 268)
+            throw new InvalidOperationException($"滚了 268 行、仍有 32 行重叠时应算出 268，实际是 {got}");
     }
 
     static void DynamicRefreshProbe()
@@ -324,7 +467,7 @@ static class LongShotProbe
                 var i = y * next.Stride + x * 4;
                 next.Pixels[i] = next.Pixels[i + 1] = next.Pixels[i + 2] = 255;
             }
-        Check(LongShotService.FindShift(previous, next, LongShotService.PickBand(previous)) == 0,
+        Check(LongShotService.FindShift(previous, next) == 0,
             "页面未滚动，底部小动画却让重复纹理被识别成滚动");
     }
 
@@ -332,7 +475,6 @@ static class LongShotProbe
     {
         var page = Page(1200);
         var ready = false;
-        var accepted = 0;
         var samples = 0;
         var captures = 0;
         var result = Task.Run(() => LongShotService.RunForTestAsync(
@@ -341,12 +483,14 @@ static class LongShotProbe
             {
                 if (!ready) return Frame(page, 0);
                 captures++;
-                var next = Frame(page, Math.Min(270, accepted + 90));
+                var offset = Math.Min(270, ((captures - 1) / 16 + 1) * 90);
+                var next = Frame(page, offset);
                 // 模拟浏览器下半部尚未完成合成；前几帧带半透明残影，之后才刷新干净。
-                return ++samples <= 6 ? WithTranslucentFooter(next, 55) : next;
+                samples = (captures - 1) % 16;
+                return captures <= 48 && samples < 6 ? WithTranslucentFooter(next, 55) : next;
             }, _ => throw new InvalidOperationException("手动模式发送了滚轮"),
-            onProgress: (height, _) => { ready = true; accepted = height - H; samples = 0; },
-            cancelled: () => accepted >= 270 || captures >= 160,
+            onProgress: (_, _) => ready = true,
+            cancelled: () => captures >= 60,
             delay: _ => Task.CompletedTask, automatic: () => false)).GetAwaiter().GetResult();
         Check(result.Image is not null && result.Image.Height == H + 270
             && result.Image.Pixels.AsSpan().SequenceEqual(LongShotService.Crop(page, 0, H + 270)!.Pixels),
@@ -370,8 +514,11 @@ static class LongShotProbe
                 }, _ => { }, onProgress: (_, _) => ready = true,
                 cancelled: () => !automatic && samples >= 40,
                 delay: _ => Task.CompletedTask, automatic: () => automatic)).GetAwaiter().GetResult();
-            Check(result.Frames == 1 && result.Image!.Pixels.AsSpan().SequenceEqual(Frame(page, 0).Pixels),
-                $"{(automatic ? "自动" : "手动")}模式把持续变化的尾部强行接进结果");
+            Check(result.Frames == 2 && result.Image!.Height == H + 90,
+                $"{(automatic ? "自动" : "手动")}因动态尾部无法拼接或重复增长");
+            Check(result.Image!.Pixels.AsSpan(0, (H + 90 - 55) * page.Stride)
+                .SequenceEqual(page.Pixels.AsSpan(0, (H + 90 - 55) * page.Stride)),
+                "动态尾部影响了静态正文的拼接");
         }
     }
 
@@ -432,6 +579,62 @@ static class LongShotProbe
         return new CapturedImage(frame.Width, frame.Height, pixels);
     }
 
+    static void NestedViewportProbe(bool whitespace = false)
+    {
+        var page = Page(1200);
+        if (whitespace)
+            for (var y = 0; y < page.Height; y++)
+                for (var x = 0; x < page.Width; x++)
+                {
+                    if (x >= 24 && x < W - 24 && y % 32 < 14) continue;
+                    var i = y * page.Stride + x * 4;
+                    page.Pixels[i] = page.Pixels[i + 1] = page.Pixels[i + 2] = 255;
+                }
+        const int left = 70, top = 70, width = W + 160, height = H + 200;
+        CapturedImage Nested(int offset)
+        {
+            var pixels = new byte[width * height * 4];
+            for (var y = 0; y < height; y++)
+                for (var x = 0; x < width; x++)
+                {
+                    var i = (y * width + x) * 4;
+                    var color = RowColor((uint)(y + 5000));
+                    pixels[i] = (byte)color;
+                    pixels[i + 1] = (byte)(color >> 8);
+                    pixels[i + 2] = (byte)(color >> 16);
+                    pixels[i + 3] = 255;
+                    if (x >= left + W && x < left + W + 16 && y >= top && y < top + H)
+                    {
+                        var thumb = y >= top + offset / 4 && y < top + offset / 4 + 50;
+                        pixels[i] = pixels[i + 1] = pixels[i + 2] = thumb ? (byte)80 : (byte)210;
+                    }
+                }
+            var inner = Frame(page, offset);
+            for (var y = 0; y < H; y++)
+                Array.Copy(inner.Pixels, y * inner.Stride, pixels, ((top + y) * width + left) * 4, inner.Stride);
+            return new CapturedImage(width, height, pixels);
+        }
+        foreach (var automatic in new[] { false, true })
+        {
+            var ready = false;
+            var samples = 0;
+            var offset = 0;
+            var result = Task.Run(() => LongShotService.RunForTestAsync(
+                new RECT { Right = width, Bottom = height },
+                _ =>
+                {
+                    if (ready && !automatic) offset = Math.Min(240, ++samples / 4 * 30);
+                    return Nested(offset);
+                }, _ => offset = Math.Min(240, offset + 60),
+                onProgress: (_, _) => ready = true, cancelled: () => !automatic && samples >= 70,
+                delay: _ => Task.CompletedTask, automatic: () => automatic)).GetAwaiter().GetResult();
+            Check(result.Image is not null && result.Image.Width == W && result.Image.Height == H + 240,
+                $"嵌套区域边界错误：{result.Image?.Width}×{result.Image?.Height}，{result.Stopped}");
+            Check(result.Image!.Pixels.AsSpan().SequenceEqual(LongShotService.Crop(page, 0, H + 240)!.Pixels),
+                "嵌套滚动有缺行、固定边栏或滚动条残留");
+        }
+    }
+
     static void ManualScrollProbe()
     {
         var page = Page(1200);
@@ -452,6 +655,19 @@ static class LongShotProbe
             "连续手动滚动没有及时拼接，导致缺行或重复");
     }
 
+    static void ViewportAnimationProbe()
+    {
+        var page = Page(1200);
+        var previous = Frame(page, 0);
+        var next = Frame(page, 0);
+        var animation = Frame(page, 30);
+        for (var y = 120; y < 220; y++)
+            Array.Copy(animation.Pixels, y * animation.Stride + 40 * 4,
+                next.Pixels, y * next.Stride + 40 * 4, 60 * 4);
+        Check(LongShotService.FindScrollViewport(previous, next) is null,
+            "局部动图被当成了内层滚动区域，导致裁掉正文");
+    }
+
     static void ManualRecoveryProbe()
     {
         var page = Page(1200);
@@ -466,7 +682,7 @@ static class LongShotProbe
             onProgress: (_, _) => ready = true, cancelled: () => samples >= offsets.Length,
             delay: _ => Task.CompletedTask, automatic: () => false, onAlignmentLost: lost.Add))
             .GetAwaiter().GetResult();
-        Check(lost.Contains(true) && !lost.Last(), "接不上时没有提示，或恢复后提示未消失");
+        Check(!lost.Any(value => value), "短暂回弹和失配不应立即要求用户回滚");
         Check(result.Stopped == LongShotStop.Cancelled && result.Frames == 4
             && result.Image!.Pixels.AsSpan().SequenceEqual(LongShotService.Crop(page, 0, H + 270)!.Pixels),
             "回滚或滚动过快后丢失了原有拼接基准");
@@ -491,6 +707,57 @@ static class LongShotProbe
         Check(result.Stopped == LongShotStop.Cancelled && scrolls == 2 && result.Frames == 3
             && result.Image!.Pixels.AsSpan().SequenceEqual(LongShotService.Crop(page, 0, H + 180)!.Pixels),
             "切换滚动模式导致提前结束或丢帧");
+    }
+
+    static void AutomaticPauseProbe()
+    {
+        foreach (var diverged in new[] { false, true })
+        {
+            var page = Page(6000);
+            var offset = 0;
+            var automatic = true;
+            var paused = false;
+            var manualSamples = 0;
+            var frames = 0;
+            var result = Task.Run(() => LongShotService.RunForTestAsync(new RECT { Right = W, Bottom = H },
+                _ =>
+                {
+                    if (paused && ++manualSamples == 1) offset += 90;
+                    if (automatic && offset == 1080 && diverged) return Flat(H, 40);
+                    return Frame(page, offset);
+                },
+                _ => { if (offset < 1080) offset += 90; },
+                onProgress: (_, count) => frames = count,
+                cancelled: () => frames >= (diverged ? 13 : 14) || manualSamples > 40,
+                delay: _ => Task.CompletedTask, automatic: () => automatic,
+                onAutomaticPaused: reason =>
+                {
+                    Check(reason == (diverged ? LongShotStop.Diverged : LongShotStop.Bottom), "自动暂停原因错误");
+                    automatic = false;
+                    paused = true;
+                })).GetAwaiter().GetResult();
+            Check(paused && result.Stopped == LongShotStop.Cancelled && result.Frames == (diverged ? 13 : 14),
+                "自动未对齐或未继续滚动时直接结束，没有保留手动接管机会");
+            Check(result.Image!.Pixels.AsSpan().SequenceEqual(LongShotService.Crop(page, 0, H + 1170)!.Pixels),
+                "自动转手动丢失了已有长图或接错了新内容");
+        }
+    }
+
+    static void AlignmentFeedbackProbe()
+    {
+        var page = Page(1200);
+        var ready = false;
+        var samples = 0;
+        var feedback = new List<bool>();
+        var result = Task.Run(() => LongShotService.RunForTestAsync(new RECT { Right = W, Bottom = H },
+            _ => !ready ? Frame(page, 0) : ++samples <= 14 ? Flat(H, 30) : Frame(page, 90),
+            _ => { }, onProgress: (_, _) => ready = true,
+            cancelled: () => samples >= 35, delay: _ => Task.CompletedTask,
+            automatic: () => false, onAlignmentLost: feedback.Add)).GetAwaiter().GetResult();
+        Check(feedback.Take(9).All(value => !value) && feedback.Skip(9).Any(value => value) && !feedback.Last(),
+            "短暂失配未等待、持续失配无提示或恢复后提示未清除");
+        Check(result.Image!.Pixels.AsSpan().SequenceEqual(LongShotService.Crop(page, 0, H + 90)!.Pixels),
+            "失配恢复后拼接内容错误");
     }
 
     static void ManualSmallStepsProbe()
@@ -530,8 +797,13 @@ static class LongShotProbe
                     SaveHud(hud, $"longshot-hud-{theme}-auto.png");
                     mode.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                     hud.ReportAlignmentLost(true); Layout(hud);
-                    Check(!hud.Automatic && Descendants<TextBlock>(hud).Any(t => t.Text.Contains("回滚")), "手动接不上时缺少操作提示");
+                    Check(!hud.Automatic && Descendants<TextBlock>(hud).Any(t => t.Text.Contains("重叠区域"))
+                        && !Descendants<TextBlock>(hud).Any(t => t.Text.Contains("回滚")), "手动失配提示仍武断地要求回滚");
                     SaveHud(hud, $"longshot-hud-{theme}-recover.png");
+                    hud.PauseAutomatic(LongShotStop.Diverged); Layout(hud);
+                    Check(!hud.Automatic && !hud.Cancelled && mode.Content is "自动滚动"
+                        && Descendants<TextBlock>(hud).Any(t => t.Text.Contains("已切到手动")), "自动暂停未保留手动继续入口");
+                    SaveHud(hud, $"longshot-hud-{theme}-paused.png");
                     foreach (var width in new[] { 360d, 768d, 1280d })
                     {
                         hud.SizeToContent = SizeToContent.Height;
@@ -578,7 +850,7 @@ static class LongShotProbe
         const int fixedHeight = 12;
         var prev = WithFixedBottom(Frame(page, 0), fixedHeight);
         var next = WithFixedBottom(Frame(page, moved), fixedHeight);
-        var shift = LongShotService.FindShift(prev, next, LongShotService.PickBand(prev));
+        var shift = LongShotService.FindShift(prev, next);
         var fixedBottom = LongShotService.FindFixedBottom(prev, next, shift);
         if (shift != moved || fixedBottom != fixedHeight)
             throw new InvalidOperationException(
@@ -665,6 +937,9 @@ static class LongShotProbe
 
     static void PreviewTilesProbe()
     {
+        var settings = SettingsService.Instance.Current;
+        var originalWidth = settings.LongShotPreviewWidth;
+        var originalHeight = settings.LongShotPreviewHeight;
         var page = DetailedPage(513, 40017);
         var window = new LongShotWindow(page, "原始像素测试")
         {
@@ -678,6 +953,8 @@ static class LongShotProbe
             var list = Descendants<ListBox>(window).Single(l => l.Name == "LongShotPreview");
             var scroll = Descendants<ScrollViewer>(list).First();
             var dpi = VisualTreeHelper.GetDpi(window);
+            Check(scroll.ExtentWidth <= scroll.ViewportWidth + 2, "首次打开预览没有适应宽度");
+            window.SetPreviewZoom(1); Layout(window);
 
             void VerifyTiles()
             {
@@ -726,7 +1003,59 @@ static class LongShotProbe
                 encoder.Save(output);
             }
         }
-        finally { window.Close(); }
+        finally
+        {
+            window.Close();
+            settings.LongShotPreviewWidth = originalWidth;
+            settings.LongShotPreviewHeight = originalHeight;
+            SettingsService.Instance.Save();
+        }
+    }
+
+    static void PreviewWindowSizeProbe()
+    {
+        var settings = SettingsService.Instance.Current;
+        var originalWidth = settings.LongShotPreviewWidth;
+        var originalHeight = settings.LongShotPreviewHeight;
+        try
+        {
+            settings.LongShotPreviewWidth = 760;
+            settings.LongShotPreviewHeight = 540;
+            var image = DetailedPage(1800, 3200);
+            foreach (var theme in new[] { FlashTrans.Core.AppTheme.Light, FlashTrans.Core.AppTheme.Dark })
+            {
+                ThemeService.ApplyTheme(theme);
+                var window = new LongShotWindow(image, "宽图预览 Wide image") { ShowActivated = false };
+                try
+                {
+                    window.Show(); Layout(window);
+                    Check(Math.Abs(window.Width - 760) < 1 && Math.Abs(window.Height - 540) < 1, "没有恢复上次窗口尺寸");
+                    foreach (var size in new[] { (360d, 320d), (760d, 540d) })
+                    {
+                        window.Width = size.Item1; window.Height = size.Item2; Layout(window);
+                        var scroll = Descendants<ScrollViewer>(window).First();
+                        Check(scroll.ExtentWidth <= scroll.ViewportWidth + 2, "调整窗口后宽图仍被横向截断");
+                    }
+                    SaveHud(window, $"longshot-fit-{theme}.png");
+                    window.WindowState = WindowState.Maximized; Layout(window);
+                    var full = Descendants<ScrollViewer>(window).First();
+                    Check(full.ExtentWidth <= full.ViewportWidth + 2, "最大化后预览没有适应宽度");
+                }
+                finally { window.Close(); }
+                SettingsService.Instance.Load();
+                Check(Math.Abs(SettingsService.Instance.Current.LongShotPreviewWidth - 760) < 1
+                    && Math.Abs(SettingsService.Instance.Current.LongShotPreviewHeight - 540) < 1,
+                    "最大化关闭后错误地保存了全屏尺寸，或尺寸未写入配置");
+                SettingsService.Instance.Apply(settings);
+            }
+        }
+        finally
+        {
+            settings.LongShotPreviewWidth = originalWidth;
+            settings.LongShotPreviewHeight = originalHeight;
+            SettingsService.Instance.Apply(settings);
+            ThemeService.Apply(settings);
+        }
     }
 
     static void LosslessExportProbe()
@@ -751,7 +1080,7 @@ static class LongShotProbe
         }
     }
 
-    static void RealScrollPixelsProbe(int footerHeight = 0)
+    static void RealScrollPixelsProbe(int footerHeight = 0, bool animated = false)
     {
         var page = Page(900);
         var picture = new Image { Source = page.ToBitmap(), Stretch = Stretch.Fill, SnapsToDevicePixels = true };
@@ -778,12 +1107,35 @@ static class LongShotProbe
             WindowStartupLocation = WindowStartupLocation.Manual, Left = 80, Top = 80, Width = 300, Height = 360,
         };
         using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var animation = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(30) };
+        var video = new Border();
+        var animationTicks = 0;
+        animation.Tick += (_, _) =>
+        {
+            animationTicks++;
+            video.Background = new SolidColorBrush(Color.FromRgb((byte)(30 + animationTicks % 5 * 40), 80, 180));
+        };
         try
         {
             window.Show(); Layout(window);
             var dpi = VisualTreeHelper.GetDpi(window);
             picture.Width = page.Width / dpi.DpiScaleX;
             picture.Height = page.Height / dpi.DpiScaleY;
+            if (animated)
+            {
+                scroll.Content = null;
+                var document = new Grid { Width = picture.Width, Height = picture.Height };
+                document.Children.Add(picture);
+                video.Width = (W - 48) / dpi.DpiScaleX;
+                video.Height = 170 / dpi.DpiScaleY;
+                video.HorizontalAlignment = HorizontalAlignment.Left;
+                video.VerticalAlignment = VerticalAlignment.Top;
+                video.Margin = new Thickness(24 / dpi.DpiScaleX, 180 / dpi.DpiScaleY, 0, 0);
+                video.Background = new SolidColorBrush(Color.FromRgb(30, 80, 180));
+                document.Children.Add(video);
+                scroll.Content = document;
+                animation.Start();
+            }
             scroll.Width = W / dpi.DpiScaleX;
             scroll.Height = H / dpi.DpiScaleY;
             footer.Height = footerHeight / dpi.DpiScaleY;
@@ -808,13 +1160,31 @@ static class LongShotProbe
                 $"真实滚动未完成：{result.Stopped}，{result.Frames} 屏");
             var expected = LongShotService.Crop(page, 0, page.Height - footerHeight)!;
             Check(result.Image!.Width == page.Width && result.Image.Height == expected.Height, "真实滚动拼接丢失了原始尺寸");
-            Check(result.Image.Pixels.AsSpan().SequenceEqual(expected.Pixels), "真实抓屏或拼接发生缩放、模糊、底栏残留或像素错位");
-            Console.WriteLine($"       实际底部浮层 {footerHeight} 像素，输出 {result.Image.Height} 行与原始正文逐像素一致");
+            if (animated)
+            {
+                Check(animationTicks >= 10, "实际动画没有持续播放，测试无效");
+                var color = result.Image.Pixels[180 * result.Image.Stride + 24 * 4];
+                for (var y = 0; y < result.Image.Height; y++)
+                    for (var x = 0; x < W; x++)
+                    {
+                        var i = y * result.Image.Stride + x * 4;
+                        if (y is >= 180 and < 350 && x is >= 24 and < W - 24)
+                            Check(result.Image.Pixels[i] == color, "真实动画被拼成不同时刻的条带");
+                        else Check(result.Image.Pixels.AsSpan(i, 4).SequenceEqual(expected.Pixels.AsSpan(i, 4)),
+                            $"真实动态截图的正文在 {x},{y} 错位");
+                    }
+                Console.WriteLine($"       动画变化 {animationTicks} 次，输出 {result.Image.Height} 行，静态正文逐像素一致，动画单帧完整");
+            }
+            else
+            {
+                Check(result.Image.Pixels.AsSpan().SequenceEqual(expected.Pixels), "真实抓屏或拼接发生缩放、模糊、底栏残留或像素错位");
+                Console.WriteLine($"       实际底部浮层 {footerHeight} 像素，输出 {result.Image.Height} 行与原始正文逐像素一致");
+            }
         }
-        finally { stop.Cancel(); window.Close(); }
+        finally { animation.Stop(); stop.Cancel(); window.Close(); }
     }
 
-    static void RealManualScrollProbe()
+    static void RealManualScrollProbe(bool nested = false)
     {
         var page = Page(1200);
         var picture = new Image
@@ -842,6 +1212,7 @@ static class LongShotProbe
         Task<LongShotResult>? task = null;
         LongShotHud? hud = null;
         var height = 0;
+        var stitched = 1;
         try
         {
             window.Show(); window.Activate(); Layout(window);
@@ -851,11 +1222,60 @@ static class LongShotProbe
             scroll.Width = W / dpi.DpiScaleX + 24;
             scroll.Height = H / dpi.DpiScaleY;
             Layout(window);
+            FrameworkElement captureSurface = picture;
+            var captureWidth = W;
+            var captureHeight = H;
+            if (nested)
+            {
+                const int outerWidth = 400, outerHeight = 700;
+                var pixels = new byte[outerWidth * outerHeight * 4];
+                for (var y = 0; y < outerHeight; y++)
+                    for (var x = 0; x < outerWidth; x++)
+                    {
+                        var i = (y * outerWidth + x) * 4;
+                        var color = RowColor((uint)(y + 5000));
+                        pixels[i] = (byte)color; pixels[i + 1] = (byte)(color >> 8);
+                        pixels[i + 2] = (byte)(color >> 16); pixels[i + 3] = 255;
+                    }
+                var background = new Image { Source = new CapturedImage(outerWidth, outerHeight, pixels).ToBitmap(), Stretch = Stretch.Fill };
+                RenderOptions.SetBitmapScalingMode(background, BitmapScalingMode.NearestNeighbor);
+                var surface = new Grid { Width = outerWidth / dpi.DpiScaleX, Height = outerHeight / dpi.DpiScaleY };
+                var border = (Border)window.Content;
+                border.Child = null;
+                border.Padding = new Thickness(0);
+                surface.Children.Add(background);
+                scroll.HorizontalAlignment = HorizontalAlignment.Left;
+                scroll.VerticalAlignment = VerticalAlignment.Top;
+                scroll.Margin = new Thickness(70 / dpi.DpiScaleX, 70 / dpi.DpiScaleY, 0, 0);
+                scroll.Padding = new Thickness(0);
+                scroll.BorderThickness = new Thickness(0);
+                scroll.Width = W / dpi.DpiScaleX + SystemParameters.VerticalScrollBarWidth;
+                surface.Children.Add(scroll);
+                var outer = new ScrollViewer
+                {
+                    Content = surface, CanContentScroll = false, Padding = new Thickness(0), BorderThickness = new Thickness(0),
+                    VerticalScrollBarVisibility = ScrollBarVisibility.Visible,
+                    HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                };
+                border.Child = outer;
+                window.Width = outerWidth / dpi.DpiScaleX + SystemParameters.VerticalScrollBarWidth;
+                window.Height = 500 / dpi.DpiScaleY;
+                Layout(window);
+                var viewport = Descendants<ScrollContentPresenter>(scroll).Single();
+                scroll.Width += W / dpi.DpiScaleX - viewport.ActualWidth;
+                Layout(window);
+                Check(outer.ScrollableHeight > 0 && scroll.ScrollableHeight > 0, "未形成真实双层可滚动控件");
+                captureSurface = outer;
+                captureWidth = (int)Math.Round(outer.ActualWidth * dpi.DpiScaleX);
+                captureHeight = (int)Math.Round(outer.ActualHeight * dpi.DpiScaleY);
+                SaveHud(window, "longshot-nested-controls.png");
+            }
             var origin = picture.PointToScreen(new Point(0, 0));
+            var captureOrigin = captureSurface.PointToScreen(new Point(0, 0));
             var region = new RECT
             {
-                Left = (int)Math.Round(origin.X), Top = (int)Math.Round(origin.Y),
-                Right = (int)Math.Round(origin.X) + W, Bottom = (int)Math.Round(origin.Y) + H,
+                Left = (int)Math.Round(captureOrigin.X), Top = (int)Math.Round(captureOrigin.Y),
+                Right = (int)Math.Round(captureOrigin.X) + captureWidth, Bottom = (int)Math.Round(captureOrigin.Y) + captureHeight,
             };
             var targetHandle = new System.Windows.Interop.WindowInteropHelper(window).Handle;
             Win32.SetCursorPos(region.Left + 8, region.Top + 8);
@@ -870,17 +1290,18 @@ static class LongShotProbe
             Check(!hud.Automatic && !hud.Cancelled, "真实点击手动滚动没有切回模式");
             Check(Win32.GetForegroundWindow() == targetHandle,
                 $"浮条按钮抢走了被截窗口的焦点：目标={targetHandle}，浮条={new System.Windows.Interop.WindowInteropHelper(hud).Handle}，实际={Win32.GetForegroundWindow()}");
-            Win32.SetCursorPos(region.Left + W / 2, region.Top + H / 2);
+            Win32.SetCursorPos((int)origin.X + W / 2, (int)origin.Y + H / 2);
             task = Task.Run(() => LongShotService.RunAsync(region,
                 onProgress: (value, frames) =>
                 {
                     Volatile.Write(ref height, value);
+                    Volatile.Write(ref stitched, frames);
                     window.Dispatcher.Invoke(() => hud.Report(value, frames));
                 },
                 cancelled: () => stop.IsCancellationRequested || hud.Cancelled, automatic: () => hud.Automatic));
-            Wait(() => Volatile.Read(ref height) == H, "手动截图首帧没有就绪");
+            Wait(() => Volatile.Read(ref height) == captureHeight, "手动截图首帧没有就绪");
             SendMouse(Win32.MOUSEEVENTF_WHEEL, unchecked((uint)-Win32.WHEEL_DELTA));
-            Wait(() => Volatile.Read(ref height) > H, "真实鼠标滚轮没有拼出新内容");
+            Wait(() => Volatile.Read(ref stitched) > 1, "真实鼠标滚轮没有拼出新内容");
 
             var bar = Descendants<System.Windows.Controls.Primitives.ScrollBar>(scroll)
                 .Single(b => b.Orientation == Orientation.Vertical);
@@ -910,8 +1331,8 @@ static class LongShotProbe
             Check(afterFinish.X == atFinish.X && afterFinish.Y == atFinish.Y, "手动结束后鼠标被移回起点");
             Check(result.Stopped == LongShotStop.Cancelled && result.Frames >= 3
                 && result.Image!.Pixels.AsSpan().SequenceEqual(LongShotService.Crop(page, 0, expectedHeight)!.Pixels),
-                "真实手动滚动拼接发生缺行、重复或像素变化");
-            Console.WriteLine($"       手动滚轮 + 拖动滚动条：{result.Frames} 段，{expectedHeight} 行逐像素一致");
+                $"真实手动滚动拼接发生缺行、重复或像素变化：{result.Image?.Width}×{result.Image?.Height}");
+            Console.WriteLine($"       {(nested ? "双层嵌套" : "普通页面")}手动滚轮 + 拖动滚动条：{result.Frames} 段，{expectedHeight} 行逐像素一致");
         }
         finally
         {

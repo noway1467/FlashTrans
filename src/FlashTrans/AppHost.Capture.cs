@@ -63,7 +63,16 @@ public sealed partial class AppHost
         switch (action)
         {
             case CaptureAction.Copy:
-                if (TrySetClipboardImage(image)) Toast($"截图 {image.Width}×{image.Height} 已复制");
+                try
+                {
+                    await Task.Run(() => SelectionReader.SetImage(image));
+                    Toast($"截图 {image.Width}×{image.Height} 已复制");
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn("复制图片失败：" + ex.Message);
+                    ShowLongShotPreview(image, "复制未完成：" + ex.Message + " 可重试复制或保存。");
+                }
                 break;
 
             case CaptureAction.Save:
@@ -299,7 +308,8 @@ public sealed partial class AppHost
                 onProgress: hud.Report,
                 cancelled: () => hud.Cancelled,
                 automatic: () => hud.Automatic,
-                onAlignmentLost: hud.ReportAlignmentLost);
+                onAlignmentLost: hud.ReportAlignmentLost,
+                onAutomaticPaused: hud.PauseAutomatic);
         }
         finally
         {
@@ -315,7 +325,7 @@ public sealed partial class AppHost
         {
             LongShotStop.Cancelled => "已停在这里。",
             LongShotStop.Limit => "到长度上限了，后面的没接。",
-            LongShotStop.Diverged => "页面仍在刷新，已停在最后完整区域。",
+            LongShotStop.Diverged => "未找到足够的共同内容，已保留接好的部分。",
             LongShotStop.Failed => "抓取画面失败，已保留截到的内容。",
             _ => "",
         };
@@ -444,6 +454,11 @@ public sealed partial class AppHost
     void ShowLongShotPreview(CapturedImage image, string note)
     {
         var win = new LongShotWindow(image, note);
+        win.CopyRequested = async () =>
+        {
+            await Task.Run(() => SelectionReader.SetImage(image));
+            Toast($"截图 {image.Width}×{image.Height} 已复制");
+        };
         win.Action += action => _ = HandleAsync(action, image);
         win.Show();
         win.Activate();

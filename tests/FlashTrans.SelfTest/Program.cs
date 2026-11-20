@@ -20,6 +20,8 @@ static class Program
             return QuickLaunchProbe.Child(args);
         if (args.Contains("--checkpoint-child")) return DocumentProbe.CheckpointChild(args);
         if (args.Contains("--read-clipboard-child")) return ProtectionProbe.ReadClipboardChild();
+        if (args.Length > 0 && args[0] is "--capture-clipboard-lock-child" or "--capture-clipboard-read-child")
+            return CaptureClipboardProbe.Child(args);
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
 
         SettingsService.Instance.Load();
@@ -147,6 +149,7 @@ static class Program
             CaptureHotkeyProbe.RunAll(Step);
             CaptureQualityProbe.RunAll(Step);
             CaptureInteractionProbe.RunAll(Step);
+            CaptureClipboardProbe.RunAll(Step);
             UiProbe.RunClipboardProbes(Step);
             app.Shutdown();
             return _fail == 0 ? 0 : 1;
@@ -155,6 +158,13 @@ static class Program
         if (args.Contains("--only-capture-hotkeys"))
         {
             CaptureHotkeyProbe.RunAll(Step);
+            app.Shutdown();
+            return _fail == 0 ? 0 : 1;
+        }
+
+        if (args.Contains("--only-capture-clipboard"))
+        {
+            CaptureClipboardProbe.RunAll(Step);
             app.Shutdown();
             return _fail == 0 ? 0 : 1;
         }
@@ -188,6 +198,13 @@ static class Program
         if (args.Contains("--only-longshot"))
         {
             LongShotProbe.RunAll(Step);
+            app.Shutdown();
+            return _fail == 0 ? 0 : 1;
+        }
+
+        if (args.Contains("--only-dynamic-longshot"))
+        {
+            LongShotProbe.RunDynamic(Step);
             app.Shutdown();
             return _fail == 0 ? 0 : 1;
         }
@@ -228,6 +245,7 @@ static class Program
         CaptureHotkeyProbe.RunAll(Step);
         CaptureQualityProbe.RunAll(Step);
         CaptureInteractionProbe.RunAll(Step);
+        CaptureClipboardProbe.RunAll(Step);
         RedactionProbe.RunAll(Step);
         OcrProbe.RunAll(Step);
         LongShotProbe.RunAll(Step);

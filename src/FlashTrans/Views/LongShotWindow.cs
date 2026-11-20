@@ -20,22 +20,28 @@ public sealed class LongShotWindow : Window
     readonly CapturedImage _image;
     readonly ListBox _preview;
     readonly TextBlock _zoomLabel;
+    readonly TextBlock _copyStatus;
+    readonly Button _copyButton;
+    readonly WrapPanel _actions;
     ScrollViewer? _scroll;
     double _zoom = 1;
     DpiScale _previewDpi = new(1, 1);
-    bool _fitWidth;
+    bool _fitWidth = true;
     int _previewRevision;
     double? _pendingSourceOffset;
 
     /// <summary>用户挑了哪个动作。宿主接着走和普通截图一样的处理。</summary>
     public event Action<CaptureAction>? Action;
 
+    /// <summary>复制成功后才关闭窗口；失败时保留图片供重试或保存。</summary>
+    public Func<Task>? CopyRequested { get; set; }
+
     public LongShotWindow(CapturedImage image, string note)
     {
         _image = image;
         Title = $"长截图 {image.Width}×{image.Height}";
-        Width = 520;
-        Height = 660;
+        Width = SettingsService.Instance.Current.LongShotPreviewWidth;
+        Height = SettingsService.Instance.Current.LongShotPreviewHeight;
         MinWidth = 360;
         MinHeight = 320;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
@@ -96,8 +102,12 @@ public sealed class LongShotWindow : Window
         var header = new StackPanel();
         header.Children.Add(head);
         header.Children.Add(zoomBar);
+        _copyStatus = UiKit.Text("", 12.5, "Danger", wrap: true);
+        _copyStatus.Margin = new Thickness(14, 4, 14, 4);
+        _copyStatus.Visibility = Visibility.Collapsed;
+        header.Children.Add(_copyStatus);
 
-        var bar = new WrapPanel
+        var bar = _actions = new WrapPanel
         {
             Orientation = Orientation.Horizontal,
             HorizontalAlignment = HorizontalAlignment.Right,
@@ -106,7 +116,8 @@ public sealed class LongShotWindow : Window
         bar.Children.Add(Btn("识别文字", CaptureAction.Ocr, "GhostBtn"));
         bar.Children.Add(Btn("识别并翻译", CaptureAction.OcrTranslate, "GhostBtn"));
         bar.Children.Add(Btn("钉住", CaptureAction.Pin, "GhostBtn"));
-        bar.Children.Add(Btn("复制", CaptureAction.Copy, "OutlineBtn"));
+        _copyButton = Btn("复制", CaptureAction.Copy, "OutlineBtn");
+        bar.Children.Add(_copyButton);
         bar.Children.Add(Btn("保存", CaptureAction.Save, "PrimaryBtn"));
 
         var grid = new Grid();
@@ -120,12 +131,32 @@ public sealed class LongShotWindow : Window
         grid.Children.Add(_preview);
         grid.Children.Add(bar);
         Content = grid;
-        UpdatePreview(1, fitWidth: false);
+        UpdatePreview(1, fitWidth: true);
         Loaded += (_, _) =>
         {
+            var work = ScreenHelper.WorkAreaOf(this);
+            Width = Math.Clamp(Width, MinWidth, Math.Max(MinWidth, work.Width));
+            Height = Math.Clamp(Height, MinHeight, Math.Max(MinHeight, work.Height));
+            if (WindowStartupLocation != WindowStartupLocation.Manual)
+            {
+                Left = Math.Clamp(Left, work.Left, Math.Max(work.Left, work.Right - Width));
+                Top = Math.Clamp(Top, work.Top, Math.Max(work.Top, work.Bottom - Height));
+            }
             _scroll = FindScrollViewer(_preview);
             UpdatePreview(_zoom, _fitWidth);
         };
+        Closing += (_, _) =>
+        {
+            // 最大化时保存普通窗口的尺寸，避免下次把屏幕大小当作手动调整的宽高。
+            var size = WindowState == WindowState.Normal ? new Size(ActualWidth, ActualHeight) : RestoreBounds.Size;
+            if (!double.IsFinite(size.Width) || !double.IsFinite(size.Height)
+                || size.Width < MinWidth || size.Height < MinHeight) return;
+            var settings = SettingsService.Instance.Current;
+            settings.LongShotPreviewWidth = size.Width;
+            settings.LongShotPreviewHeight = size.Height;
+            SettingsService.Instance.Save();
+        };
+        Closed += (_, _) => { _closed = true; _fired = true; };
         _preview.SizeChanged += (_, _) => { if (_fitWidth) UpdatePreview(_zoom, fitWidth: true); };
         DpiChanged += (_, _) => Dispatcher.BeginInvoke(new Action(() => UpdatePreview(_zoom, _fitWidth)));
         PreviewMouseWheel += (_, e) =>
@@ -251,13 +282,36 @@ public sealed class LongShotWindow : Window
         return b;
     }
 
-    void Fire(CaptureAction action)
+    async void Fire(CaptureAction action)
     {
         // 只认第一次。Close 到窗口真的消失之间还会处理消息，这中间再按一下
         // Ctrl+S 就会走第二遍：动作干两回（弹两个「另存为」），
         // 而且第二次的 Close 撞在正在关闭的窗口上会抛异常。
         if (_fired) return;
         _fired = true;
+
+        if (action == CaptureAction.Copy && CopyRequested is { } copy)
+        {
+            _actions.IsEnabled = false;
+            _copyButton.Content = "复制中…";
+            _copyStatus.Visibility = Visibility.Collapsed;
+            try
+            {
+                await copy();
+                if (!_closed) Close();
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("长截图复制失败：" + ex.Message);
+                if (_closed) return;
+                _copyStatus.Text = "复制失败：" + ex.Message + " 图片仍在预览中，可重试或保存。";
+                _copyStatus.Visibility = Visibility.Visible;
+                _copyButton.Content = "重试复制";
+                _actions.IsEnabled = true;
+                _fired = false;
+            }
+            return;
+        }
 
         // 先收起自己再干活：存图会弹「另存为」，识别会开主窗口，
         // 这个预览留在后面只是挡视线。
@@ -266,4 +320,5 @@ public sealed class LongShotWindow : Window
     }
 
     bool _fired;
+    bool _closed;
 }

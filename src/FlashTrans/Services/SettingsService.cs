@@ -243,6 +243,12 @@ public sealed class SettingsService
             s.Version = 15;
             changed = true;
         }
+        if (s.Version < 16)
+        {
+            // 缺失的预览尺寸由模型默认值补齐；迁移只标记落盘，不覆盖已有尺寸。
+            s.Version = 16;
+            changed = true;
+        }
         return changed;
     }
 
@@ -302,6 +308,8 @@ public sealed class SettingsService
         s.WinHeight = Math.Clamp(s.WinHeight, 260, 1800);
         s.OcrResultWidth = NormalizeOcrResultDimension(s.OcrResultWidth, 520, 360, 2400);
         s.OcrResultHeight = NormalizeOcrResultDimension(s.OcrResultHeight, 360, 220, 1800);
+        s.LongShotPreviewWidth = double.IsFinite(s.LongShotPreviewWidth) ? Math.Clamp(s.LongShotPreviewWidth, 360, 3840) : 720;
+        s.LongShotPreviewHeight = double.IsFinite(s.LongShotPreviewHeight) ? Math.Clamp(s.LongShotPreviewHeight, 320, 2160) : 660;
         s.TypeDelayMs = Math.Clamp(s.TypeDelayMs, AppSettings.MinTypeDelayMs, AppSettings.MaxTypeDelayMs);
         s.CacheSize = Math.Clamp(s.CacheSize, 0, 20000);
         s.CacheTtlHours = Math.Clamp(s.CacheTtlHours, 1, 168);

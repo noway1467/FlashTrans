@@ -324,6 +324,19 @@ static class SettingsProbe
         SettingsService.Normalize(brokenOcrSize);
         if (brokenOcrSize.OcrResultWidth != 520 || brokenOcrSize.OcrResultHeight != 360)
             throw new InvalidOperationException("损坏的 OCR 结果窗口尺寸没有回退到默认值");
+        var oldPreview = JsonSerializer.Deserialize("{}", SettingsJson.Default.AppSettings)!;
+        if (oldPreview.LongShotPreviewWidth != 720 || oldPreview.LongShotPreviewHeight != 660)
+            throw new InvalidOperationException("旧配置缺少长截图窗口尺寸时未使用默认值");
+        oldPreview.Version = 15;
+        oldPreview.LongShotPreviewWidth = 900;
+        if (!SettingsService.Migrate(oldPreview) || oldPreview.Version != AppSettings.CurrentVersion
+            || oldPreview.LongShotPreviewWidth != 900 || SettingsService.Migrate(oldPreview))
+            throw new InvalidOperationException("长截图尺寸迁移未保持已有宽度或重复迁移");
+        oldPreview.LongShotPreviewWidth = double.NaN;
+        oldPreview.LongShotPreviewHeight = double.PositiveInfinity;
+        SettingsService.Normalize(oldPreview);
+        if (oldPreview.LongShotPreviewWidth != 720 || oldPreview.LongShotPreviewHeight != 660)
+            throw new InvalidOperationException("损坏的长截图窗口尺寸没有恢复默认值");
 
         static void Check(string what, int min, int max, Action<AppSettings, int> set, Func<AppSettings, int> get)
         {

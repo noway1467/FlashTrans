@@ -1,3 +1,5 @@
+using System.ComponentModel;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using FlashTrans.Services;
 
@@ -168,63 +170,62 @@ public static class SelectionReader
 
         var pixelBytes = checked(image.Stride * image.Height);
         var totalBytes = checked((long)40 + pixelBytes);
-        Exception? last = null;
-
-        for (var attempt = 0; attempt < 8; attempt++)
+        IntPtr dib = IntPtr.Zero;
+        IntPtr textMem = IntPtr.Zero;
+        // EmptyClipboard 后必须有有效拥有者；不能依赖已经关闭的截图窗口或空 HWND。
+        var owner = CreateWindowEx(0, "STATIC", "", 0, 0, 0, 0, 0, new IntPtr(-3), IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+        if (owner == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error(), "创建图片剪贴板拥有者失败。");
+        try
         {
-            if (!Win32.OpenClipboard(IntPtr.Zero))
+            // 大图先准备好像素，再短暂持有系统剪贴板锁，避免写图期间阻塞其它程序。
+            dib = Win32.GlobalAlloc(Win32.GMEM_MOVEABLE, (IntPtr)totalBytes);
+            if (dib == IntPtr.Zero) throw new InvalidOperationException("分配图片剪贴板内存失败。");
+            WriteDib(dib, image, pixelBytes);
+            if (!string.IsNullOrEmpty(text))
             {
-                Thread.Sleep(15);
-                continue;
+                var textBytes = checked((text.Length + 1) * 2);
+                textMem = Win32.GlobalAlloc(Win32.GMEM_MOVEABLE, (IntPtr)textBytes);
+                if (textMem == IntPtr.Zero) throw new InvalidOperationException("分配文字剪贴板内存失败。");
+                WriteText(textMem, text);
             }
 
-            IntPtr dib = IntPtr.Zero;
-            IntPtr textMem = IntPtr.Zero;
+            var wait = Stopwatch.StartNew();
+            while (!Win32.OpenClipboard(owner))
+            {
+                if (wait.ElapsedMilliseconds >= 1500)
+                    throw new InvalidOperationException("剪贴板正被其他程序占用，图片未复制。");
+                Thread.Sleep(25);
+            }
             try
             {
-                dib = Win32.GlobalAlloc(Win32.GMEM_MOVEABLE, (IntPtr)totalBytes);
-                if (dib == IntPtr.Zero) throw new InvalidOperationException("分配图片剪贴板内存失败。");
-                WriteDib(dib, image, pixelBytes);
-
-                if (!string.IsNullOrEmpty(text))
-                {
-                    var textBytes = checked((text.Length + 1) * 2);
-                    textMem = Win32.GlobalAlloc(Win32.GMEM_MOVEABLE, (IntPtr)textBytes);
-                    if (textMem == IntPtr.Zero)
-                        throw new InvalidOperationException("分配文字剪贴板内存失败。");
-                    WriteText(textMem, text);
-                }
-
                 if (!Win32.EmptyClipboard())
-                    throw new InvalidOperationException("清空剪贴板失败。");
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "清空剪贴板失败。");
                 if (Win32.SetClipboardData(Win32.CF_DIB, dib) == IntPtr.Zero)
-                    throw new InvalidOperationException("写入图片剪贴板数据失败。");
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "写入图片剪贴板数据失败。");
                 dib = IntPtr.Zero;
 
                 if (textMem != IntPtr.Zero)
                 {
                     if (Win32.SetClipboardData(Win32.CF_UNICODETEXT, textMem) == IntPtr.Zero)
-                        throw new InvalidOperationException("写入文字剪贴板数据失败。");
+                        throw new Win32Exception(Marshal.GetLastWin32Error(), "写入文字剪贴板数据失败。");
                     textMem = IntPtr.Zero;
                 }
-                return;
+                InternalSequence = Win32.GetClipboardSequenceNumber();
             }
-            catch (Exception ex)
-            {
-                last = ex;
-            }
-            finally
-            {
-                if (dib != IntPtr.Zero) Win32.GlobalFree(dib);
-                if (textMem != IntPtr.Zero) Win32.GlobalFree(textMem);
-                Win32.CloseClipboard();
-            }
-
-            Thread.Sleep(15);
+            finally { Win32.CloseClipboard(); }
         }
-
-        throw new InvalidOperationException("剪贴板正被其他程序占用，图片未复制。", last);
+        finally
+        {
+            if (dib != IntPtr.Zero) Win32.GlobalFree(dib);
+            if (textMem != IntPtr.Zero) Win32.GlobalFree(textMem);
+            DestroyWindow(owner);
+        }
     }
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern IntPtr CreateWindowEx(int ex, string cls, string name, int style, int x, int y, int w, int h,
+        IntPtr parent, IntPtr menu, IntPtr instance, IntPtr param);
+    [DllImport("user32.dll")] static extern bool DestroyWindow(IntPtr window);
 
     static void WriteDib(IntPtr hMem, CapturedImage image, int pixelBytes)
     {
