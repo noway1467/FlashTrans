@@ -2,7 +2,7 @@
 
 Windows 划词翻译、文件翻译与截图工具。
 
-## 下载安装 [![Release](https://img.shields.io/badge/release-v1.9.9-0088cc)](https://github.com/noway1467/FlashTrans/releases/latest)
+## 下载安装 [![Release](https://img.shields.io/badge/release-v1.9.10-0088cc)](https://github.com/noway1467/FlashTrans/releases/latest)
 
 点击上方版本徽章下载，解压后运行 `FlashTrans.exe`。默认启用免费翻译源，无需填写 API Key。
 
@@ -66,6 +66,8 @@ Windows 划词翻译、文件翻译与截图工具。
 
 可在「设置 → 快捷键」中修改；冲突会提示并保留原快捷键。在「设置 → 快速启动」中开启功能并添加项目，开启后也可从托盘菜单打开面板。
 
+需要在任务管理器、火绒等高权限窗口中截图时，在「设置 → 通用」打开「开机自动启动」和「以管理员权限自启动」，按提示完成一次 Windows 授权，下次登录自动以管理员权限启动到托盘。关闭或切换启动方式也在这里操作；取消授权会保留原设置。当前正在运行的普通权限实例不会立即提权，需要从托盘退出后以管理员身份重新运行。
+
 ## 从源码构建
 
 需要 Windows 和 .NET 9 SDK，在仓库根目录执行：
@@ -79,7 +81,7 @@ dotnet build .\src\FlashTrans\FlashTrans.csproj -c Release --nologo
 ```powershell
 .\tools\publish.cmd fast   # 自包含版本
 .\tools\publish.cmd small  # 依赖 .NET 9 Desktop Runtime
-powershell -NoProfile -File .\tools\pack-release.ps1 -Version 1.9.9
+powershell -NoProfile -File .\tools\pack-release.ps1 -Version 1.9.10
 ```
 
 发布目录位于 `dist/`，压缩包位于 `dist/release/`。发布会原位更新已有目录，并保留便携数据和用户文件；压缩仅收录本次构建的程序文件。

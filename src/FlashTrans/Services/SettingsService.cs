@@ -249,6 +249,12 @@ public sealed class SettingsService
             s.Version = 16;
             changed = true;
         }
+        if (s.Version < 17)
+        {
+            // 缺失的管理员自启开关默认关闭，不因升级改变原来的运行权限。
+            s.Version = 17;
+            changed = true;
+        }
         return changed;
     }
 

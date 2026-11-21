@@ -221,6 +221,7 @@ static class SettingsProbe
         step("开机自启：从 Run 项的命令里取出 exe 路径", ParseCommand);
         step("开机自启：程序换了目录要认出来路径已经失效", DetectsMovedExe);
         step("开机自启：自测程序不许去改用户的 Run 项", RefusesFromForeignProcess);
+        StartupProbe.RunAll(step);
     }
 
     /// <summary>

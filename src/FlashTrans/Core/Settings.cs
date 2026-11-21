@@ -67,7 +67,7 @@ public sealed class AppSettings
     public int Version { get; set; } = CurrentVersion;
 
     /// <summary>加新的默认源/字段时 +1，并在 Migrate 里补一段。</summary>
-    public const int CurrentVersion = 16;
+    public const int CurrentVersion = 17;
 
     // 只保存用户选择的路径，不扫描磁盘或自动收集已安装程序。
     public List<QuickLaunchEntry> QuickLaunchItems { get; set; } = [];
@@ -139,6 +139,8 @@ public sealed class AppSettings
     public bool CloseToTray { get; set; } = true;
     public bool StartMinimized { get; set; } = true;
     public bool RunAtStartup { get; set; }
+    /// <summary>默认普通权限；仅用户明确开启后配置管理员登录任务。</summary>
+    public bool StartupAsAdmin { get; set; }
     public bool TranslateOnType { get; set; } = true;
     // 550ms 太肉：打完最后一个字还要干等半秒多才开始请求。300ms 够滤掉连续击键，
     // 又不会让人觉得卡。真正的耗时在网络那边，防抖不该再叠一大截。

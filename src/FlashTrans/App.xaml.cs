@@ -17,6 +17,12 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
+        if (StartupService.HandleConfigurationCommand(e.Args) is { } exitCode)
+        {
+            Shutdown(exitCode);
+            return;
+        }
+
         var benchmark = e.Args.Contains("--benchmark");
         // 诊断用匿名互斥量，不唤醒用户正在使用的实例，也不与它争抢唤醒事件。
         _mutex = new Mutex(initiallyOwned: true, benchmark ? null : MutexName, out var isFirst);

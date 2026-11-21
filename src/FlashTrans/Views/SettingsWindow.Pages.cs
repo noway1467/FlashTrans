@@ -17,15 +17,7 @@ public sealed partial class SettingsWindow
         var page = Page();
 
         Section(page, "启动",
-            // 勾选状态取自 settings.json，不取注册表：Run 项里存的是绝对路径，
-            // 程序换过目录之后那条命令就废了，拿它当勾选依据只会显示「开着」而实际启不动。
-            // 真正把注册表对齐到这个值的地方是 AppHost（每次启动 + 每次改设置）。
-            Check("开机自动启动", S.RunAtStartup, on =>
-            {
-                S.RunAtStartup = on;
-                if (!StartupService.Sync(on))
-                    Toast(on ? "写入启动项失败，可能被安全软件拦截" : "移除启动项失败，可能被安全软件拦截");
-            }, StartupHint()),
+            BuildStartupOptions(),
             Check("启动时最小化到托盘", S.StartMinimized, on => S.StartMinimized = on),
             Check("关闭窗口时回到托盘", S.CloseToTray, on => S.CloseToTray = on),
             Check("启动时预热网络连接", S.WarmupOnStart, on => S.WarmupOnStart = on,
@@ -93,15 +85,6 @@ public sealed partial class SettingsWindow
     }
 
     // ------------------------------------------------------------- 截图
-
-    /// <summary>
-    /// 开机自启那一行底下的说明。只在「勾着但注册表里没有这条」时出现：
-    /// 那种情况以前完全没有提示，用户只能等下次开机才发现没启动。
-    /// </summary>
-    static string? StartupHint()
-        => S.RunAtStartup && !StartupService.IsRegistered()
-            ? "启动项没能写进注册表，可能被安全软件拦截了"
-            : null;
 
     /// <summary>截图页：动作默认值、画笔及蒙层快捷键；识别选项在独立 OCR 页。</summary>
     UIElement BuildCapturePage()

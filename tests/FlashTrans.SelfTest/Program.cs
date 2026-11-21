@@ -16,6 +16,11 @@ static class Program
     [STAThread]
     static int Main(string[] args)
     {
+        if (args.Length == 2 && args[0] == "--startup-task-child")
+        {
+            System.IO.File.WriteAllText(args[1], "started");
+            return 0;
+        }
         if (args.Length > 0 && args[0] is "--quick-launch-child" or "--quick-launch-hotkey-child")
             return QuickLaunchProbe.Child(args);
         if (args.Contains("--checkpoint-child")) return DocumentProbe.CheckpointChild(args);
@@ -59,6 +64,16 @@ static class Program
         if (args.Contains("--only-startup"))
         {
             WindowStartupProbe.RunAll(Step, args.Contains("--preload-startup"));
+            app.Shutdown();
+            return _fail == 0 ? 0 : 1;
+        }
+
+        if (args.Contains("--only-autostart"))
+        {
+            StartupProbe.RunAll(Step);
+            var index = Array.IndexOf(args, "--preview-dir");
+            StartupProbe.RunUi(Step, index >= 0 && index + 1 < args.Length ? args[index + 1] : null);
+            if (args.Contains("--task-integration")) Step("自启动：隔离计划任务真实登记、更新、执行和移除", StartupProbe.TaskIntegration);
             app.Shutdown();
             return _fail == 0 ? 0 : 1;
         }

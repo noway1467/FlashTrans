@@ -30,6 +30,7 @@ public sealed partial class AppHost : IDisposable
     bool _diagnosticMode;
     CancellationTokenSource? _selectionCts;
     DispatcherTimer? _preloadTimer;
+    (bool Enabled, bool Administrator)? _startupChoice;
 
     static AppSettings S => SettingsService.Instance.Current;
 
@@ -302,7 +303,16 @@ public sealed partial class AppHost : IDisposable
         else _quickLaunch?.Close();
         SyncDesktopShelf();
         // 「重置为默认设置」这类不经过那个复选框的改动也要跟着落地
-        if (!_diagnosticMode) StartupService.Sync(s.RunAtStartup);
+        if (!_diagnosticMode) SyncStartup();
+    }
+
+    void SyncStartup()
+    {
+        var choice = (S.RunAtStartup, S.StartupAsAdmin);
+        if (_startupChoice == choice) return;
+        _startupChoice = choice;
+        if (!StartupService.Sync(choice.RunAtStartup, choice.StartupAsAdmin))
+            Toast(StartupService.LastError ?? "自启动设置未生效，请在设置 → 通用重新应用。", () => ShowSettings("general"));
     }
 
     /// <summary>
@@ -319,7 +329,7 @@ public sealed partial class AppHost : IDisposable
         timer.Tick += (_, _) =>
         {
             timer.Stop();
-            try { StartupService.Sync(S.RunAtStartup); }
+            try { SyncStartup(); }
             catch (Exception ex) { Log.Warn("对齐开机自启项失败：" + ex.Message); }
         };
         timer.Start();

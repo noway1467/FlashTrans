@@ -1,22 +1,43 @@
 using System.IO;
 using System.Reflection;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Security.Principal;
 using Microsoft.Win32;
 
 namespace FlashTrans.Services;
 
 /// <summary>
-/// 开机自启（写当前用户的 Run 项，不需要管理员权限）。
-///
-/// Run 项里存的是**绝对路径**，而这是个绿色包：换个目录、升级换成带版本号的文件夹，
-/// 那条命令就指向一个不存在的 exe —— 开机什么都不会启动，设置里却还勾着。
-/// 所以开关的真实状态存在 settings.json 的 RunAtStartup 里，注册表只是它的投影，
-/// 每次启动对齐一次（AppHost.SyncStartupWhenIdle），路径变了就改写。
+/// 普通自启使用当前用户的 Run 项，管理员自启使用同一用户的登录任务。
+/// 后台同步绝不弹 UAC；只有用户操作设置时才启动提权助手。
 /// </summary>
-public static class StartupService
+public static partial class StartupService
 {
     const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
     const string ValueName = "FlashTrans";
     const string ExeName = "FlashTrans";
+    internal const string ConfigureArgument = "--configure-startup";
+
+    public static string? LastError { get; private set; }
+    static bool _changing;
+    public static bool IsAdministrator
+    {
+        get
+        {
+            using var identity = WindowsIdentity.GetCurrent();
+            return new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
+        }
+    }
+
+    internal static string CurrentUserSid
+    {
+        get
+        {
+            using var identity = WindowsIdentity.GetCurrent();
+            return identity.User?.Value ?? throw new InvalidOperationException("无法确定当前 Windows 账号。");
+        }
+    }
 
     /// <summary>静默启动到托盘，不弹主窗口。</summary>
     public const string TrayArg = "--tray";
@@ -69,34 +90,139 @@ public static class StartupService
     /// </summary>
     public static bool IsEnabled() => Aligned(CurrentCommand(), ExePath);
 
-    /// <summary>
-    /// 把注册表对齐到 want：该有的写上（顺带把旧路径改写成当前 exe），不该有的删掉。
-    /// 已经一致就一个字节都不动。返回是否落地成功。
-    /// </summary>
-    public static bool Sync(bool want)
+    static bool CanConfigure => RunningAsApp && !Environment.GetCommandLineArgs().Contains("--benchmark");
+
+    /// <summary>启动和导入配置时静默对齐；需要授权时返回失败，交给设置页明确处理。</summary>
+    public static bool Sync(bool want, bool administrator = false)
     {
-        // 自测程序的 bin 目录里也有一份 FlashTrans.exe。真让它写进 Run 项，
-        // 用户的开机自启就被指到测试输出目录去了，所以不是本程序在跑就不碰注册表。
-        // --benchmark 会从临时发布目录启动后立即退出，也必须保持用户自启登记只读。
-        if (!RunningAsApp || Environment.GetCommandLineArgs().Contains("--benchmark")) return false;
-
-        var current = CurrentCommand();
-        var exe = ExePath;
-
-        if (want && Aligned(current, exe)) return true;
-        if (!want && current is null) return true;
-
-        if (want && !File.Exists(exe))
+        // 用户正在授权时，关闭设置窗口或修改外观也会触发保存；不能用旧值抢先覆盖新任务。
+        if (_changing) return true;
+        LastError = null;
+        if (!CanConfigure)
         {
-            // 宁可不写，也别在 Run 里留一条指向不存在文件的命令 —— 那正是要修的毛病
-            Log.Warn($"找不到 {exe}，没写开机自启项");
+            LastError = "诊断或自测进程不能修改开机自启动。";
             return false;
         }
+        try { Configure(want, administrator); return true; }
+        catch (Exception ex)
+        {
+            LastError = NeedsElevation(ex)
+                ? "启动方式需要管理员授权，请到设置 → 通用点击「重新应用启动设置」。"
+                : "设置自启动失败：" + ex.Message;
+            Log.Warn(LastError);
+            return false;
+        }
+    }
 
-        var ok = Write(want, CommandFor(exe));
-        if (ok && want && current is not null)
-            Log.Warn($"开机自启的路径变了，已改写：{PathOf(current)} → {exe}");
-        return ok;
+    /// <summary>用户主动改开关时允许一次系统授权；取消或失败不修改内存中的设置。</summary>
+    public static async Task<string?> ChangeAsync(bool want, bool administrator)
+    {
+        if (!CanConfigure) return "诊断或自测进程不能修改开机自启动。";
+        if (_changing) return "正在应用启动设置，请稍候。";
+        _changing = true;
+        try
+        {
+            try { await Task.Run(() => Configure(want, administrator)); }
+            catch (Exception ex) when (NeedsElevation(ex) && !IsAdministrator)
+            {
+                var start = new ProcessStartInfo(ExePath) { UseShellExecute = true, Verb = "runas" };
+                start.ArgumentList.Add(ConfigureArgument);
+                start.ArgumentList.Add(want ? administrator ? "admin" : "normal" : "off");
+                start.ArgumentList.Add(CurrentUserSid);
+                using var helper = Process.Start(start) ?? throw new InvalidOperationException("无法启动授权助手。");
+                await helper.WaitForExitAsync();
+                if (helper.ExitCode != 0)
+                    throw new InvalidOperationException(helper.ExitCode == 2
+                        ? "请使用当前 Windows 账号授权，不能改用其他管理员账号。"
+                        : "管理员启动任务设置失败，请检查任务计划程序服务或安全软件的拦截提示。");
+            }
+            if (!IsConfigured(want, administrator))
+                throw new InvalidOperationException("启动设置未通过核验，请重新应用。");
+            LastError = null;
+            return null;
+        }
+        catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
+        {
+            return LastError = "已取消管理员授权，启动设置保持原样。";
+        }
+        catch (Exception ex)
+        {
+            Log.Warn("更改启动方式失败：" + ex.Message);
+            return LastError = "设置失败：" + ex.Message;
+        }
+        finally { _changing = false; }
+    }
+
+    /// <summary>必须在单实例检查前执行；助手只改启动登记，不加载或保存用户配置。</summary>
+    internal static int? HandleConfigurationCommand(string[] args)
+    {
+        if (args.Length == 0 || args[0] != ConfigureArgument) return null;
+        if (!CanConfigure || args.Length != 3 || args[1] is not ("admin" or "normal" or "off")
+            || args[2] != CurrentUserSid) return 2;
+        if (!IsAdministrator) return 1;
+        return Sync(args[1] != "off", args[1] == "admin") ? 0 : 1;
+    }
+
+    static bool NeedsElevation(Exception ex) => ex is UnauthorizedAccessException
+        || ex is COMException { HResult: unchecked((int)0x80070005) };
+
+    public static bool IsConfigured(bool want, bool administrator)
+    {
+        try
+        {
+            using var tasks = new StartupTaskStore();
+            var xml = tasks.Read(TaskName(CurrentUserSid));
+            var command = ReadRunCommand();
+            return want && administrator
+                ? command is null && TaskAligned(xml, ExePath, CurrentUserSid)
+                : xml is null && (want ? Aligned(command, ExePath) : command is null);
+        }
+        catch (Exception ex) { Log.Warn("核验自启动失败：" + ex.Message); return false; }
+    }
+
+    static void Configure(bool want, bool administrator)
+    {
+        var exe = ExePath;
+        if (want && !File.Exists(exe)) throw new FileNotFoundException("找不到当前程序，未修改启动项。", exe);
+        var sid = CurrentUserSid;
+        var name = TaskName(sid);
+        using var tasks = new StartupTaskStore();
+        var previousTask = tasks.Read(name);
+        if (previousTask is not null && !TaskOwnedBy(previousTask, sid))
+            throw new InvalidOperationException("同名计划任务不属于 FlashTrans，未覆盖；请检查任务计划程序。");
+        var previousCommand = ReadRunCommand();
+        var elevated = want && administrator;
+        var changeTask = elevated ? !TaskAligned(previousTask, exe, sid) : previousTask is not null;
+        if (changeTask && !IsAdministrator) throw new UnauthorizedAccessException("需要管理员授权才能更改登录任务。");
+
+        if (changeTask)
+        {
+            if (elevated) tasks.Register(name, BuildTaskXml(exe, sid));
+            else tasks.Delete(name);
+        }
+        try
+        {
+            // 两种自启互斥；先让目标任务落地，再移除普通启动项，避免普通实例抢先占位。
+            var desiredCommand = want && !administrator ? CommandFor(exe) : null;
+            if (previousCommand != desiredCommand) WriteRunCommand(desiredCommand);
+        }
+        catch (Exception failure)
+        {
+            if (changeTask)
+            {
+                try
+                {
+                    if (previousTask is null) tasks.Delete(name);
+                    else tasks.Register(name, previousTask);
+                }
+                catch (Exception rollback)
+                {
+                    throw new InvalidOperationException("启动项写入失败，恢复计划任务也失败；请重新应用启动设置。",
+                        new AggregateException(failure, rollback));
+                }
+            }
+            throw;
+        }
     }
 
     /// <summary>那条命令是否已经指向 exePath，且带着 --tray。</summary>
@@ -134,22 +260,17 @@ public static class StartupService
         }
     }
 
-    static bool Write(bool enabled, string command)
+    static string? ReadRunCommand()
     {
-        try
-        {
-            using var key = Registry.CurrentUser.OpenSubKey(RunKey, writable: true)
-                         ?? Registry.CurrentUser.CreateSubKey(RunKey);
-            if (key is null) return false;
+        using var key = Registry.CurrentUser.OpenSubKey(RunKey);
+        return key?.GetValue(ValueName) as string;
+    }
 
-            if (enabled) key.SetValue(ValueName, command, RegistryValueKind.String);
-            else key.DeleteValue(ValueName, throwOnMissingValue: false);
-            return true;
-        }
-        catch (Exception ex)
-        {
-            Log.Warn("设置开机自启失败：" + ex.Message);
-            return false;
-        }
+    static void WriteRunCommand(string? command)
+    {
+        using var key = Registry.CurrentUser.CreateSubKey(RunKey, writable: true)
+            ?? throw new IOException("无法打开当前用户的启动项。");
+        if (command is not null) key.SetValue(ValueName, command, RegistryValueKind.String);
+        else key.DeleteValue(ValueName, throwOnMissingValue: false);
     }
 }
