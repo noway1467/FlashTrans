@@ -21,28 +21,9 @@ static class FlipCheck
         return dec.Frames[0];
     }
 
-    /// <summary>从 WinRT 的流里解一帧（GetThumbnailAsync 给的是 PNG/JPEG 字节流）。</summary>
-    public static BitmapSource Decode(Windows.Storage.Streams.IRandomAccessStream stream)
-    {
-        using var net = stream.AsStreamForRead();
-        var ms = new MemoryStream();
-        net.CopyTo(ms);
-        ms.Position = 0;
-        var dec = BitmapDecoder.Create(ms, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
-        return dec.Frames[0];
-    }
-
     /// <summary>把 MP4 的第一帧解回来。</summary>
-    public static async Task<BitmapSource> FirstMp4FrameAsync(string path)
-    {
-        var file = await Windows.Storage.StorageFile.GetFileFromPathAsync(Path.GetFullPath(path));
-        var clip = await Windows.Media.Editing.MediaClip.CreateFromFileAsync(file);
-        var comp = new Windows.Media.Editing.MediaComposition();
-        comp.Clips.Add(clip);
-        using var stream = await comp.GetThumbnailAsync(
-            TimeSpan.Zero, 0, 0, Windows.Media.Editing.VideoFramePrecision.NearestFrame);
-        return Decode(stream);
-    }
+    public static Task<BitmapSource> FirstMp4FrameAsync(string path) =>
+        Task.Run(() => FlashTrans.Interop.MediaFoundation.FirstVideoFrame(path));
 
     /// <summary>
     /// 一帧四个角亮度都不一样的图：左上最亮，往右往下依次变暗。

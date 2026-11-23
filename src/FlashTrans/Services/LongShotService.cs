@@ -19,6 +19,14 @@ public enum LongShotStop
     Failed,
 }
 
+public sealed record LongShotOptions(
+    int MaxHeight = LongShotService.MaxHeight,
+    int ScrollIntervalMs = LongShotService.DefaultScrollIntervalMs);
+
+/// <summary>原像素尾部替换/追加，缩略预览自行缩放；Reset 用于首帧与视口收窄。</summary>
+public sealed record LongShotPreviewPatch(
+    int TrimTailRows, CapturedImage? AddedSlice, int TotalWidth, int TotalHeight, int Frames, bool Reset = false);
+
 /// <summary>
 /// 长截图：在一块固定区域上反复「滚一点、抓一帧、跟上一帧对齐、把新露出来的接上去」。
 ///
@@ -33,7 +41,6 @@ public static class LongShotService
     const int ColStep = 3;
     /// <summary>一行里允许多少比例的点对不上还算同一行。抗一点渲染抖动和亚像素文字。</summary>
     const double RowTolerance = 0.06;
-    const int ScrollKickDelayMs = 100;
     const int ScrollPollMs = 60;
     const int TransitionSamples = 36;
     const int ShiftConfirmSamples = 10;
@@ -42,8 +49,18 @@ public static class LongShotService
     const int RecoveryAttempts = 2;
     const int MaxNotchesPerStep = 2;
 
-    /// <summary>拼出来最高多少像素。再长就没人看了，也怕无限滚动的页面停不下来。</summary>
+    public const int MinMaxHeight = 4000;
+    public const int MaxMaxHeight = 60000;
+    public const int DefaultMaxHeight = MaxHeight;
+    /// <summary>保留旧调用的默认上限；运行时可通过 LongShotOptions 调整。</summary>
     public const int MaxHeight = 40000;
+    public const int MinScrollIntervalMs = 60;
+    public const int MaxScrollIntervalMs = 600;
+    public const int DefaultScrollIntervalMs = 100;
+    public const string DefaultToggleHotkey = "F2";
+
+    public static int ClampMaxHeight(int value) => Math.Clamp(value, MinMaxHeight, MaxMaxHeight);
+    public static int ClampScrollIntervalMs(int value) => Math.Clamp(value, MinScrollIntervalMs, MaxScrollIntervalMs);
     /// <summary>最多滚多少次。</summary>
     public const int MaxFrames = 200;
 
@@ -58,7 +75,10 @@ public static class LongShotService
                                                       Func<bool>? cancelled = null,
                                                       Func<bool>? automatic = null,
                                                       Action<bool>? onAlignmentLost = null,
-                                                      Action<LongShotStop>? onAutomaticPaused = null)
+                                                      Action<LongShotStop>? onAutomaticPaused = null,
+                                                      Func<bool>? paused = null,
+                                                      LongShotOptions? options = null,
+                                                      Action<LongShotPreviewPatch>? onPreview = null)
     {
         var restoreCursor = Win32.GetCursorPos(out var originalCursor);
         var session = ScreenCaptureSession.Open(
@@ -70,7 +90,7 @@ public static class LongShotService
                 : new Func<RECT, CapturedImage?>(_ => session.Grab());
             return await RunCoreAsync(region, onProgress, cancelled,
                                       capture, Wheel, DelayAsync, prepareWindow: true,
-                                      automatic, onAlignmentLost, onAutomaticPaused);
+                                      automatic, onAlignmentLost, onAutomaticPaused, paused, options, onPreview);
         }
         finally
         {
@@ -89,10 +109,13 @@ public static class LongShotService
         Func<int, Task>? delay = null,
         Func<bool>? automatic = null,
         Action<bool>? onAlignmentLost = null,
-        Action<LongShotStop>? onAutomaticPaused = null)
+        Action<LongShotStop>? onAutomaticPaused = null,
+        Func<bool>? paused = null,
+        LongShotOptions? options = null,
+        Action<LongShotPreviewPatch>? onPreview = null)
         => await RunCoreAsync(region, onProgress, cancelled, capture, scroll,
                               delay ?? DelayAsync, prepareWindow: false,
-                              automatic, onAlignmentLost, onAutomaticPaused);
+                              automatic, onAlignmentLost, onAutomaticPaused, paused, options, onPreview);
 
     static Task DelayAsync(int milliseconds) => Task.Delay(milliseconds);
 
@@ -106,8 +129,13 @@ public static class LongShotService
         bool prepareWindow,
         Func<bool>? automatic,
         Action<bool>? onAlignmentLost,
-        Action<LongShotStop>? onAutomaticPaused)
+        Action<LongShotStop>? onAutomaticPaused,
+        Func<bool>? paused,
+        LongShotOptions? options,
+        Action<LongShotPreviewPatch>? onPreview)
     {
+        var maxHeight = ClampMaxHeight(options?.MaxHeight ?? MaxHeight);
+        var scrollKickDelayMs = ClampScrollIntervalMs(options?.ScrollIntervalMs ?? DefaultScrollIntervalMs);
         var w = region.Right - region.Left;
         var h = region.Bottom - region.Top;
         if (w <= 0 || h <= Band) return new LongShotResult(null, 0, LongShotStop.Failed);
@@ -122,13 +150,15 @@ public static class LongShotService
             await delay(120);
         }
 
+        while (paused?.Invoke() == true && cancelled?.Invoke() != true) await delay(ScrollPollMs);
         if (cancelled?.Invoke() == true) return new LongShotResult(null, 0, LongShotStop.Cancelled);
         var first = await Task.Run(() => capture(region));
         if (first is null) return new LongShotResult(null, 0, LongShotStop.Failed);
+        if (first.Height > maxHeight) first = Crop(first, 0, maxHeight)!;
 
         // 边接边攒。每段都是「新露出来的那几行」，最后一次性拼成一张。
         var parts = new List<CapturedImage> { first };
-        var total = h;
+        var total = first.Height;
         var prev = first;
         var band = PickBand(first);
         var fixedBottom = -1;
@@ -141,28 +171,40 @@ public static class LongShotService
         var viewportLocked = false;
         var unalignedFrames = 0;
         var lastSliceTop = 0;
+        // 暂停可能打断已经发出滚轮的稳定采样；恢复先接完这一步，不能再多滚一次。
+        var scrollPending = false;
+        ReportPreview(new LongShotPreviewPatch(0, first, w, total, frames, Reset: true));
         onProgress?.Invoke(total, frames);
 
         while (true)
         {
-            var autoScroll = automatic?.Invoke() ?? true;
             if (cancelled?.Invoke() == true)
             {
                 stop = LongShotStop.Cancelled;
                 break;
             }
+            if (paused?.Invoke() == true)
+            {
+                await delay(ScrollPollMs);
+                continue;
+            }
+            var autoScroll = automatic?.Invoke() ?? true;
             // 手动平滑滚动会产生许多很短的分片，沿用自动的次数限制会过早截断。
-            if (total >= MaxHeight || (autoScroll && automaticFrames >= MaxFrames)) { stop = LongShotStop.Limit; break; }
+            if (total >= maxHeight || (autoScroll && automaticFrames >= MaxFrames)) { stop = LongShotStop.Limit; break; }
             ScrollFrame? transition = null;
             if (!autoScroll)
             {
                 stationaryAttempts = 0;
+                scrollPending = false;
                 await delay(ScrollPollMs);
+                if (paused?.Invoke() == true || cancelled?.Invoke() == true) continue;
                 var frame = await Task.Run(() => capture(region));
+                if (paused?.Invoke() == true || cancelled?.Invoke() == true) continue;
                 if (frame is null) { stop = LongShotStop.Failed; break; }
                 if (frames == 1 && !viewportLocked)
                 {
                     var viewport = await Task.Run(() => FindScrollViewport(prev, frame));
+                    if (paused?.Invoke() == true || cancelled?.Invoke() == true) continue;
                     if (viewport is { } area)
                     {
                         frame = Crop(frame, area);
@@ -174,6 +216,7 @@ public static class LongShotService
                     var found = FindShift(prev, frame);
                     return found >= 0 || !Similar(prev, frame) ? found : 0;
                 });
+                if (paused?.Invoke() == true || cancelled?.Invoke() == true) continue;
                 unalignedFrames = moved < 0 ? unalignedFrames + 1 : 0;
                 // 暂时缺少静态参照时先保留已有内容，局部动画本身不是失败条件。
                 onAlignmentLost?.Invoke(unalignedFrames >= ShiftConfirmSamples);
@@ -188,27 +231,32 @@ public static class LongShotService
                 onAlignmentLost?.Invoke(false);
                 for (var attempt = 0; attempt <= RecoveryAttempts; attempt++)
                 {
-                    if (cancelled?.Invoke() == true || automatic?.Invoke() == false) break;
-                    if (attempt == 0)
+                    if (cancelled?.Invoke() == true || paused?.Invoke() == true || automatic?.Invoke() == false) break;
+                    if (attempt == 0 && !scrollPending)
                     {
                         if (prepareWindow)
                         {
                             FocusWindowAt(region.Left + w / 2, region.Top + h / 2);
                             MoveCursorToScrollSpot(region);
                         }
+                        scrollPending = true;
                         scroll(-notches);
                     }
 
                     transition = await WaitForScrollAsync(
                         region, prev, capture, delay,
-                        () => cancelled?.Invoke() == true || automatic?.Invoke() == false,
+                        () => cancelled?.Invoke() == true || paused?.Invoke() == true || automatic?.Invoke() == false,
+                        scrollKickDelayMs,
                         detectViewport: frames == 1 && !viewportLocked);
                     if (transition is not null) break;
                 }
-                if (automatic?.Invoke() == false) continue;
+                if (paused?.Invoke() == true) continue;
+                if (automatic?.Invoke() == false) { scrollPending = false; continue; }
             }
+            if (paused?.Invoke() == true) continue;
             if (transition is null)
             {
+                scrollPending = false;
                 if (cancelled?.Invoke() != true && automatic is not null && onAutomaticPaused is not null)
                 {
                     Log.Warn($"长截图自动转手动：未对齐，已接 {frames} 段，{w}×{total} 像素。");
@@ -230,6 +278,7 @@ public static class LongShotService
             }
             if (shift == 0)
             {
+                scrollPending = false;
                 RefreshCurrent(next);
                 if (++stationaryAttempts < MaxStationaryAttempts)
                 {
@@ -252,6 +301,12 @@ public static class LongShotService
             // 截 shift 行，它会在每个分片末尾重复一次，同时漏掉同等高度的正文。
             var nextFixedBottom = Math.Max(Math.Max(0, fixedBottom), FindFixedBottom(prev, next, shift));
             var trim = nextFixedBottom - Math.Max(0, fixedBottom);
+            var contentBottom = next.Height - nextFixedBottom;
+            var overlap = contentBottom - shift;
+            var seam = await Task.Run(() => FindSeam(prev, next, shift, contentBottom));
+            if (paused?.Invoke() == true || cancelled?.Invoke() == true) continue;
+            var replace = overlap - seam;
+            var trimmedTail = trim + Math.Max(0, replace);
             if (trim > 0)
             {
                 // 浮动底栏可能在滚动后才出现；补裁上次接入的尾部，不能只检测首屏。
@@ -268,10 +323,6 @@ public static class LongShotService
 
             // 新内容之外可替换重叠的尾部，让接缝绕过视频/动图；整段来自同一帧，
             // 不把旧帧的视频上半部与新帧下半部机械地切在视口底边。
-            var contentBottom = next.Height - fixedBottom;
-            var overlap = contentBottom - shift;
-            var seam = await Task.Run(() => FindSeam(prev, next, shift, contentBottom));
-            var replace = overlap - seam;
             if (replace > 0)
             {
                 total -= replace;
@@ -284,7 +335,7 @@ public static class LongShotService
                     parts.RemoveAt(parts.Count - 1);
                 }
             }
-            var take = Math.Min(replace + shift, MaxHeight - total);
+            var take = Math.Min(replace + shift, maxHeight - total);
             var slice = Crop(next, seam, take);
             if (slice is null) break;
 
@@ -294,6 +345,8 @@ public static class LongShotService
             frames++;
             prev = next;
             band = PickBand(next);
+            scrollPending = false;
+            ReportPreview(new LongShotPreviewPatch(trimmedTail, slice, w, total, frames));
             onProgress?.Invoke(total, frames);
 
             // 下一次滚多少跟着实测走。上限是窄带能认出的最大位移，再多就对不上了，
@@ -329,6 +382,7 @@ public static class LongShotService
             h = total = first.Height;
             band = PickBand(first);
             lastSliceTop = 0;
+            ReportPreview(new LongShotPreviewPatch(0, first, w, total, frames, Reset: true));
             onProgress?.Invoke(total, frames);
         }
 
@@ -339,6 +393,13 @@ public static class LongShotService
             parts[^1] = Crop(frame, lastSliceTop, parts[^1].Height)!;
             prev = frame;
             if (frames == 1) first = frame;
+            ReportPreview(new LongShotPreviewPatch(parts[^1].Height, parts[^1], w, total, frames));
+        }
+
+        void ReportPreview(LongShotPreviewPatch patch)
+        {
+            try { onPreview?.Invoke(patch); }
+            catch (Exception ex) { Log.Warn("长截图实时预览回调失败：" + ex.Message); }
         }
     }
 
@@ -355,9 +416,17 @@ public static class LongShotService
         Func<RECT, CapturedImage?> capture,
         Func<int, Task> delay,
         Func<bool>? cancelled,
+        int scrollKickDelayMs,
         bool detectViewport = false)
     {
-        await delay(ScrollKickDelayMs);
+        // 可调等待仍每 60ms 检查暂停/取消，不让较慢的滚动间隔拖住快捷键响应。
+        for (var remaining = scrollKickDelayMs; remaining > 0;)
+        {
+            if (cancelled?.Invoke() == true) return null;
+            var wait = Math.Min(ScrollPollMs, remaining);
+            await delay(wait);
+            remaining -= wait;
+        }
         var lastShift = int.MinValue;
         var sameShift = 0;
         var zeroFrames = 0;
@@ -366,11 +435,13 @@ public static class LongShotService
         for (var i = 0; i < TransitionSamples; i++)
         {
             if (cancelled?.Invoke() == true) return null;
-            var raw = await Task.Run(() => capture(region));
+            var raw = await Task.Run(() => cancelled?.Invoke() == true ? null : capture(region));
+            if (cancelled?.Invoke() == true) return null;
             if (raw is null) return null;
             if (detectViewport && viewport is null)
             {
                 viewport = await Task.Run(() => FindScrollViewport(previous, raw));
+                if (cancelled?.Invoke() == true) return null;
                 if (viewport is { } area)
                 {
                     previous = Crop(previous, area);
@@ -385,6 +456,7 @@ public static class LongShotService
                 var found = FindShift(previous, now);
                 return found >= 0 || !Similar(previous, now) ? found : 0;
             });
+            if (cancelled?.Invoke() == true) return null;
             if (shift < 0)
             {
                 lastShift = int.MinValue;

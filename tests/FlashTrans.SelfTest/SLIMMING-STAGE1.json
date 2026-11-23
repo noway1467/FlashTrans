@@ -1,0 +1,1060 @@
+[
+  {
+    "Name": "baseline-fast",
+    "Version": "1.9.10.0",
+    "Bytes": 224289784,
+    "ExeBytes": 163337940,
+    "ZipBytes": 103469200,
+    "FileCount": 23,
+    "ReadyMs": 949,
+    "IdleMs": 1003.5,
+    "WorkingSetMiB": 78,
+    "Runs": [
+      {
+        "ReadyMs": 1105,
+        "IdleMs": 1157,
+        "WorkingSetMiB": 76
+      },
+      {
+        "ReadyMs": 1301,
+        "IdleMs": 1342,
+        "WorkingSetMiB": 75
+      },
+      {
+        "ReadyMs": 905,
+        "IdleMs": 951,
+        "WorkingSetMiB": 78
+      },
+      {
+        "ReadyMs": 975,
+        "IdleMs": 1025,
+        "WorkingSetMiB": 78
+      },
+      {
+        "ReadyMs": 1013,
+        "IdleMs": 1062,
+        "WorkingSetMiB": 78
+      },
+      {
+        "ReadyMs": 1201,
+        "IdleMs": 1243,
+        "WorkingSetMiB": 78
+      },
+      {
+        "ReadyMs": 923,
+        "IdleMs": 963,
+        "WorkingSetMiB": 77
+      },
+      {
+        "ReadyMs": 894,
+        "IdleMs": 945,
+        "WorkingSetMiB": 78
+      },
+      {
+        "ReadyMs": 922,
+        "IdleMs": 982,
+        "WorkingSetMiB": 78
+      }
+    ],
+    "Models": [
+      {
+        "Name": "ch_PP-LCNet_x0_25_textline_ori_cls_mobile.onnx",
+        "SHA256": "54379AE5174D026780215FC748A7F31910DEE36818E63D49E17DC598ECC82DF7"
+      },
+      {
+        "Name": "PP-OCRv6_det_tiny.onnx",
+        "SHA256": "F42C0FBD294D95EAC1A550E131B277DAC97462C8025FA4B6C3CEC1B7894BD3D5"
+      },
+      {
+        "Name": "PP-OCRv6_rec_small.onnx",
+        "SHA256": "6F327246B50388F3C176AE304BD95767EA6DC0C9AE92153EF8CBE210B3C14884"
+      },
+      {
+        "Name": "ppocrv6_small_dict.txt",
+        "SHA256": "B5F2BFE2BDD9448429E3E82B51C789775D9B42F2403D082B00662EB77E401C5D"
+      },
+      {
+        "Name": "README.txt",
+        "SHA256": "B95E8B8A44513A7C01F3025B7B73B42F295C7E5BD3BE5B053995576004ADFA67"
+      }
+    ],
+    "Files": [
+      {
+        "Path": "D3DCompiler_47_cor3.dll",
+        "Bytes": 4916840
+      },
+      {
+        "Path": "FlashTrans.exe",
+        "Bytes": 163337940
+      },
+      {
+        "Path": "libSkiaSharp.dll",
+        "Bytes": 11391008
+      },
+      {
+        "Path": "onnxruntime_providers_shared.dll",
+        "Bytes": 21856
+      },
+      {
+        "Path": "onnxruntime_providers_shared.lib",
+        "Bytes": 2314
+      },
+      {
+        "Path": "onnxruntime.dll",
+        "Bytes": 16149344
+      },
+      {
+        "Path": "onnxruntime.lib",
+        "Bytes": 2124
+      },
+      {
+        "Path": "PenImc_cor3.dll",
+        "Bytes": 157992
+      },
+      {
+        "Path": "PresentationNative_cor3.dll",
+        "Bytes": 1235720
+      },
+      {
+        "Path": "vcruntime140_cor3.dll",
+        "Bytes": 124544
+      },
+      {
+        "Path": "wpfgfx_cor3.dll",
+        "Bytes": 1951536
+      },
+      {
+        "Path": "Assets\\app.ico",
+        "Bytes": 33362
+      },
+      {
+        "Path": "Assets\\licenses\\Markdig.txt",
+        "Bytes": 1435
+      },
+      {
+        "Path": "Assets\\licenses\\PaddleOCR.txt",
+        "Bytes": 11376
+      },
+      {
+        "Path": "Assets\\licenses\\PdfPig.txt",
+        "Bytes": 14222
+      },
+      {
+        "Path": "Assets\\licenses\\PDFsharp.txt",
+        "Bytes": 1146
+      },
+      {
+        "Path": "Assets\\tools\\img2webp.exe",
+        "Bytes": 775680
+      },
+      {
+        "Path": "Assets\\tools\\libwebp-COPYING.txt",
+        "Bytes": 1496
+      },
+      {
+        "Path": "models\\v6\\ch_PP-LCNet_x0_25_textline_ori_cls_mobile.onnx",
+        "Bytes": 1018508
+      },
+      {
+        "Path": "models\\v6\\PP-OCRv6_det_tiny.onnx",
+        "Bytes": 1829618
+      },
+      {
+        "Path": "models\\v6\\PP-OCRv6_rec_small.onnx",
+        "Bytes": 21234383
+      },
+      {
+        "Path": "models\\v6\\ppocrv6_small_dict.txt",
+        "Bytes": 74947
+      },
+      {
+        "Path": "models\\v6\\README.txt",
+        "Bytes": 2393
+      }
+    ]
+  },
+  {
+    "Name": "baseline-small",
+    "Version": "1.9.10.0",
+    "Bytes": 88641726,
+    "ExeBytes": 190464,
+    "ZipBytes": 43102788,
+    "FileCount": 47,
+    "ReadyMs": 964.5,
+    "IdleMs": 1013,
+    "WorkingSetMiB": 86,
+    "Runs": [
+      {
+        "ReadyMs": 959,
+        "IdleMs": 1018,
+        "WorkingSetMiB": 84
+      },
+      {
+        "ReadyMs": 1200,
+        "IdleMs": 1245,
+        "WorkingSetMiB": 81
+      },
+      {
+        "ReadyMs": 942,
+        "IdleMs": 999,
+        "WorkingSetMiB": 86
+      },
+      {
+        "ReadyMs": 925,
+        "IdleMs": 971,
+        "WorkingSetMiB": 81
+      },
+      {
+        "ReadyMs": 957,
+        "IdleMs": 999,
+        "WorkingSetMiB": 81
+      },
+      {
+        "ReadyMs": 972,
+        "IdleMs": 1027,
+        "WorkingSetMiB": 87
+      },
+      {
+        "ReadyMs": 1041,
+        "IdleMs": 1094,
+        "WorkingSetMiB": 86
+      },
+      {
+        "ReadyMs": 919,
+        "IdleMs": 973,
+        "WorkingSetMiB": 86
+      },
+      {
+        "ReadyMs": 1030,
+        "IdleMs": 1079,
+        "WorkingSetMiB": 86
+      }
+    ],
+    "Models": [
+      {
+        "Name": "ch_PP-LCNet_x0_25_textline_ori_cls_mobile.onnx",
+        "SHA256": "54379AE5174D026780215FC748A7F31910DEE36818E63D49E17DC598ECC82DF7"
+      },
+      {
+        "Name": "PP-OCRv6_det_tiny.onnx",
+        "SHA256": "F42C0FBD294D95EAC1A550E131B277DAC97462C8025FA4B6C3CEC1B7894BD3D5"
+      },
+      {
+        "Name": "PP-OCRv6_rec_small.onnx",
+        "SHA256": "6F327246B50388F3C176AE304BD95767EA6DC0C9AE92153EF8CBE210B3C14884"
+      },
+      {
+        "Name": "ppocrv6_small_dict.txt",
+        "SHA256": "B5F2BFE2BDD9448429E3E82B51C789775D9B42F2403D082B00662EB77E401C5D"
+      },
+      {
+        "Name": "README.txt",
+        "SHA256": "B95E8B8A44513A7C01F3025B7B73B42F295C7E5BD3BE5B053995576004ADFA67"
+      }
+    ],
+    "Files": [
+      {
+        "Path": "Clipper2Lib.dll",
+        "Bytes": 103936
+      },
+      {
+        "Path": "FlashTrans.deps.json",
+        "Bytes": 12584
+      },
+      {
+        "Path": "FlashTrans.dll",
+        "Bytes": 1233408
+      },
+      {
+        "Path": "FlashTrans.exe",
+        "Bytes": 190464
+      },
+      {
+        "Path": "FlashTrans.runtimeconfig.json",
+        "Bytes": 930
+      },
+      {
+        "Path": "libSkiaSharp.dll",
+        "Bytes": 11391008
+      },
+      {
+        "Path": "Markdig.dll",
+        "Bytes": 477184
+      },
+      {
+        "Path": "Microsoft.Extensions.DependencyInjection.Abstractions.dll",
+        "Bytes": 63768
+      },
+      {
+        "Path": "Microsoft.Extensions.Logging.Abstractions.dll",
+        "Bytes": 65288
+      },
+      {
+        "Path": "Microsoft.ML.OnnxRuntime.dll",
+        "Bytes": 240440
+      },
+      {
+        "Path": "Microsoft.Windows.SDK.NET.dll",
+        "Bytes": 24877600
+      },
+      {
+        "Path": "onnxruntime_providers_shared.dll",
+        "Bytes": 21856
+      },
+      {
+        "Path": "onnxruntime_providers_shared.lib",
+        "Bytes": 2314
+      },
+      {
+        "Path": "onnxruntime.dll",
+        "Bytes": 16149344
+      },
+      {
+        "Path": "onnxruntime.lib",
+        "Bytes": 2124
+      },
+      {
+        "Path": "PdfSharp-wpf.dll",
+        "Bytes": 785408
+      },
+      {
+        "Path": "PdfSharp.BarCodes-wpf.dll",
+        "Bytes": 35840
+      },
+      {
+        "Path": "PdfSharp.Charting-wpf.dll",
+        "Bytes": 88064
+      },
+      {
+        "Path": "PdfSharp.Cryptography.dll",
+        "Bytes": 15360
+      },
+      {
+        "Path": "PdfSharp.Quality-wpf.dll",
+        "Bytes": 39424
+      },
+      {
+        "Path": "PdfSharp.Shared.dll",
+        "Bytes": 23040
+      },
+      {
+        "Path": "PdfSharp.Snippets-wpf.dll",
+        "Bytes": 161792
+      },
+      {
+        "Path": "PdfSharp.System.dll",
+        "Bytes": 8192
+      },
+      {
+        "Path": "PdfSharp.WPFonts.dll",
+        "Bytes": 421376
+      },
+      {
+        "Path": "RapidOcrNet.dll",
+        "Bytes": 80896
+      },
+      {
+        "Path": "SkiaSharp.dll",
+        "Bytes": 490040
+      },
+      {
+        "Path": "System.Numerics.Tensors.dll",
+        "Bytes": 410936
+      },
+      {
+        "Path": "UglyToad.PdfPig.Core.dll",
+        "Bytes": 50176
+      },
+      {
+        "Path": "UglyToad.PdfPig.dll",
+        "Bytes": 4251648
+      },
+      {
+        "Path": "UglyToad.PdfPig.DocumentLayoutAnalysis.dll",
+        "Bytes": 248320
+      },
+      {
+        "Path": "UglyToad.PdfPig.Fonts.dll",
+        "Bytes": 1095680
+      },
+      {
+        "Path": "UglyToad.PdfPig.Package.dll",
+        "Bytes": 4608
+      },
+      {
+        "Path": "UglyToad.PdfPig.Tokenization.dll",
+        "Bytes": 23040
+      },
+      {
+        "Path": "UglyToad.PdfPig.Tokens.dll",
+        "Bytes": 48128
+      },
+      {
+        "Path": "WinRT.Runtime.dll",
+        "Bytes": 528944
+      },
+      {
+        "Path": "Assets\\app.ico",
+        "Bytes": 33362
+      },
+      {
+        "Path": "Assets\\licenses\\Markdig.txt",
+        "Bytes": 1435
+      },
+      {
+        "Path": "Assets\\licenses\\PaddleOCR.txt",
+        "Bytes": 11376
+      },
+      {
+        "Path": "Assets\\licenses\\PdfPig.txt",
+        "Bytes": 14222
+      },
+      {
+        "Path": "Assets\\licenses\\PDFsharp.txt",
+        "Bytes": 1146
+      },
+      {
+        "Path": "Assets\\tools\\img2webp.exe",
+        "Bytes": 775680
+      },
+      {
+        "Path": "Assets\\tools\\libwebp-COPYING.txt",
+        "Bytes": 1496
+      },
+      {
+        "Path": "models\\v6\\ch_PP-LCNet_x0_25_textline_ori_cls_mobile.onnx",
+        "Bytes": 1018508
+      },
+      {
+        "Path": "models\\v6\\PP-OCRv6_det_tiny.onnx",
+        "Bytes": 1829618
+      },
+      {
+        "Path": "models\\v6\\PP-OCRv6_rec_small.onnx",
+        "Bytes": 21234383
+      },
+      {
+        "Path": "models\\v6\\ppocrv6_small_dict.txt",
+        "Bytes": 74947
+      },
+      {
+        "Path": "models\\v6\\README.txt",
+        "Bytes": 2393
+      }
+    ]
+  },
+  {
+    "Name": "fast-r2r",
+    "Version": "1.9.10.0",
+    "Bytes": 110110123,
+    "ExeBytes": 60206814,
+    "ZipBytes": 86320128,
+    "FileCount": 24,
+    "ReadyMs": 1318.5,
+    "IdleMs": 1371,
+    "WorkingSetMiB": 184,
+    "Runs": [
+      {
+        "ReadyMs": 1348,
+        "IdleMs": 1403,
+        "WorkingSetMiB": 178
+      },
+      {
+        "ReadyMs": 1579,
+        "IdleMs": 1627,
+        "WorkingSetMiB": 185
+      },
+      {
+        "ReadyMs": 1233,
+        "IdleMs": 1270,
+        "WorkingSetMiB": 184
+      },
+      {
+        "ReadyMs": 1229,
+        "IdleMs": 1273,
+        "WorkingSetMiB": 184
+      },
+      {
+        "ReadyMs": 1361,
+        "IdleMs": 1408,
+        "WorkingSetMiB": 184
+      },
+      {
+        "ReadyMs": 1389,
+        "IdleMs": 1442,
+        "WorkingSetMiB": 184
+      },
+      {
+        "ReadyMs": 1430,
+        "IdleMs": 1487,
+        "WorkingSetMiB": 185
+      },
+      {
+        "ReadyMs": 1276,
+        "IdleMs": 1334,
+        "WorkingSetMiB": 184
+      },
+      {
+        "ReadyMs": 1247,
+        "IdleMs": 1312,
+        "WorkingSetMiB": 184
+      }
+    ],
+    "Models": [
+      {
+        "Name": "ch_PP-LCNet_x0_25_textline_ori_cls_mobile.onnx",
+        "SHA256": "54379AE5174D026780215FC748A7F31910DEE36818E63D49E17DC598ECC82DF7"
+      },
+      {
+        "Name": "PP-OCRv6_det_tiny.onnx",
+        "SHA256": "F42C0FBD294D95EAC1A550E131B277DAC97462C8025FA4B6C3CEC1B7894BD3D5"
+      },
+      {
+        "Name": "PP-OCRv6_rec_small.onnx",
+        "SHA256": "6F327246B50388F3C176AE304BD95767EA6DC0C9AE92153EF8CBE210B3C14884"
+      },
+      {
+        "Name": "ppocrv6_small_dict.txt",
+        "SHA256": "B5F2BFE2BDD9448429E3E82B51C789775D9B42F2403D082B00662EB77E401C5D"
+      },
+      {
+        "Name": "README.txt",
+        "SHA256": "B95E8B8A44513A7C01F3025B7B73B42F295C7E5BD3BE5B053995576004ADFA67"
+      }
+    ],
+    "Files": [
+      {
+        "Path": "D3DCompiler_47_cor3.dll",
+        "Bytes": 4916840
+      },
+      {
+        "Path": "FlashTrans.exe",
+        "Bytes": 60206814
+      },
+      {
+        "Path": "onnxruntime_providers_shared.dll",
+        "Bytes": 21856
+      },
+      {
+        "Path": "onnxruntime.dll",
+        "Bytes": 16149344
+      },
+      {
+        "Path": "PenImc_cor3.dll",
+        "Bytes": 157992
+      },
+      {
+        "Path": "PresentationNative_cor3.dll",
+        "Bytes": 1235720
+      },
+      {
+        "Path": "vcruntime140_cor3.dll",
+        "Bytes": 124544
+      },
+      {
+        "Path": "wpfgfx_cor3.dll",
+        "Bytes": 1951536
+      },
+      {
+        "Path": "Assets\\app.ico",
+        "Bytes": 33362
+      },
+      {
+        "Path": "Assets\\licenses\\Clipper2.txt",
+        "Bytes": 1359
+      },
+      {
+        "Path": "Assets\\licenses\\Markdig.txt",
+        "Bytes": 1435
+      },
+      {
+        "Path": "Assets\\licenses\\OnnxRuntime-ThirdPartyNotices.txt",
+        "Bytes": 343249
+      },
+      {
+        "Path": "Assets\\licenses\\OnnxRuntime.txt",
+        "Bytes": 1094
+      },
+      {
+        "Path": "Assets\\licenses\\PaddleOCR.txt",
+        "Bytes": 11376
+      },
+      {
+        "Path": "Assets\\licenses\\PdfPig.txt",
+        "Bytes": 14222
+      },
+      {
+        "Path": "Assets\\licenses\\PDFsharp.txt",
+        "Bytes": 1146
+      },
+      {
+        "Path": "Assets\\licenses\\RapidOcrNet.txt",
+        "Bytes": 1209
+      },
+      {
+        "Path": "Assets\\tools\\img2webp.exe",
+        "Bytes": 775680
+      },
+      {
+        "Path": "Assets\\tools\\libwebp-COPYING.txt",
+        "Bytes": 1496
+      },
+      {
+        "Path": "models\\v6\\ch_PP-LCNet_x0_25_textline_ori_cls_mobile.onnx",
+        "Bytes": 1018508
+      },
+      {
+        "Path": "models\\v6\\PP-OCRv6_det_tiny.onnx",
+        "Bytes": 1829618
+      },
+      {
+        "Path": "models\\v6\\PP-OCRv6_rec_small.onnx",
+        "Bytes": 21234383
+      },
+      {
+        "Path": "models\\v6\\ppocrv6_small_dict.txt",
+        "Bytes": 74947
+      },
+      {
+        "Path": "models\\v6\\README.txt",
+        "Bytes": 2393
+      }
+    ]
+  },
+  {
+    "Name": "fast-il",
+    "Version": "1.9.10.0",
+    "Bytes": 109094371,
+    "ExeBytes": 59191062,
+    "ZipBytes": 85314624,
+    "FileCount": 24,
+    "ReadyMs": 1398.5,
+    "IdleMs": 1448.5,
+    "WorkingSetMiB": 190,
+    "Runs": [
+      {
+        "ReadyMs": 1527,
+        "IdleMs": 1563,
+        "WorkingSetMiB": 184
+      },
+      {
+        "ReadyMs": 1679,
+        "IdleMs": 1739,
+        "WorkingSetMiB": 191
+      },
+      {
+        "ReadyMs": 1328,
+        "IdleMs": 1365,
+        "WorkingSetMiB": 190
+      },
+      {
+        "ReadyMs": 1356,
+        "IdleMs": 1405,
+        "WorkingSetMiB": 190
+      },
+      {
+        "ReadyMs": 1425,
+        "IdleMs": 1474,
+        "WorkingSetMiB": 190
+      },
+      {
+        "ReadyMs": 1395,
+        "IdleMs": 1446,
+        "WorkingSetMiB": 189
+      },
+      {
+        "ReadyMs": 1454,
+        "IdleMs": 1493,
+        "WorkingSetMiB": 190
+      },
+      {
+        "ReadyMs": 1350,
+        "IdleMs": 1404,
+        "WorkingSetMiB": 190
+      },
+      {
+        "ReadyMs": 1402,
+        "IdleMs": 1451,
+        "WorkingSetMiB": 189
+      }
+    ],
+    "Models": [
+      {
+        "Name": "ch_PP-LCNet_x0_25_textline_ori_cls_mobile.onnx",
+        "SHA256": "54379AE5174D026780215FC748A7F31910DEE36818E63D49E17DC598ECC82DF7"
+      },
+      {
+        "Name": "PP-OCRv6_det_tiny.onnx",
+        "SHA256": "F42C0FBD294D95EAC1A550E131B277DAC97462C8025FA4B6C3CEC1B7894BD3D5"
+      },
+      {
+        "Name": "PP-OCRv6_rec_small.onnx",
+        "SHA256": "6F327246B50388F3C176AE304BD95767EA6DC0C9AE92153EF8CBE210B3C14884"
+      },
+      {
+        "Name": "ppocrv6_small_dict.txt",
+        "SHA256": "B5F2BFE2BDD9448429E3E82B51C789775D9B42F2403D082B00662EB77E401C5D"
+      },
+      {
+        "Name": "README.txt",
+        "SHA256": "B95E8B8A44513A7C01F3025B7B73B42F295C7E5BD3BE5B053995576004ADFA67"
+      }
+    ],
+    "Files": [
+      {
+        "Path": "D3DCompiler_47_cor3.dll",
+        "Bytes": 4916840
+      },
+      {
+        "Path": "FlashTrans.exe",
+        "Bytes": 59191062
+      },
+      {
+        "Path": "onnxruntime_providers_shared.dll",
+        "Bytes": 21856
+      },
+      {
+        "Path": "onnxruntime.dll",
+        "Bytes": 16149344
+      },
+      {
+        "Path": "PenImc_cor3.dll",
+        "Bytes": 157992
+      },
+      {
+        "Path": "PresentationNative_cor3.dll",
+        "Bytes": 1235720
+      },
+      {
+        "Path": "vcruntime140_cor3.dll",
+        "Bytes": 124544
+      },
+      {
+        "Path": "wpfgfx_cor3.dll",
+        "Bytes": 1951536
+      },
+      {
+        "Path": "Assets\\app.ico",
+        "Bytes": 33362
+      },
+      {
+        "Path": "Assets\\licenses\\Clipper2.txt",
+        "Bytes": 1359
+      },
+      {
+        "Path": "Assets\\licenses\\Markdig.txt",
+        "Bytes": 1435
+      },
+      {
+        "Path": "Assets\\licenses\\OnnxRuntime-ThirdPartyNotices.txt",
+        "Bytes": 343249
+      },
+      {
+        "Path": "Assets\\licenses\\OnnxRuntime.txt",
+        "Bytes": 1094
+      },
+      {
+        "Path": "Assets\\licenses\\PaddleOCR.txt",
+        "Bytes": 11376
+      },
+      {
+        "Path": "Assets\\licenses\\PdfPig.txt",
+        "Bytes": 14222
+      },
+      {
+        "Path": "Assets\\licenses\\PDFsharp.txt",
+        "Bytes": 1146
+      },
+      {
+        "Path": "Assets\\licenses\\RapidOcrNet.txt",
+        "Bytes": 1209
+      },
+      {
+        "Path": "Assets\\tools\\img2webp.exe",
+        "Bytes": 775680
+      },
+      {
+        "Path": "Assets\\tools\\libwebp-COPYING.txt",
+        "Bytes": 1496
+      },
+      {
+        "Path": "models\\v6\\ch_PP-LCNet_x0_25_textline_ori_cls_mobile.onnx",
+        "Bytes": 1018508
+      },
+      {
+        "Path": "models\\v6\\PP-OCRv6_det_tiny.onnx",
+        "Bytes": 1829618
+      },
+      {
+        "Path": "models\\v6\\PP-OCRv6_rec_small.onnx",
+        "Bytes": 21234383
+      },
+      {
+        "Path": "models\\v6\\ppocrv6_small_dict.txt",
+        "Bytes": 74947
+      },
+      {
+        "Path": "models\\v6\\README.txt",
+        "Bytes": 2393
+      }
+    ]
+  },
+  {
+    "Name": "small",
+    "Version": "1.9.10.0",
+    "Bytes": 51652147,
+    "ExeBytes": 190464,
+    "ZipBytes": 31488641,
+    "FileCount": 44,
+    "ReadyMs": 927,
+    "IdleMs": 973,
+    "WorkingSetMiB": 86,
+    "Runs": [
+      {
+        "ReadyMs": 1027,
+        "IdleMs": 1085,
+        "WorkingSetMiB": 80
+      },
+      {
+        "ReadyMs": 1215,
+        "IdleMs": 1269,
+        "WorkingSetMiB": 87
+      },
+      {
+        "ReadyMs": 886,
+        "IdleMs": 914,
+        "WorkingSetMiB": 80
+      },
+      {
+        "ReadyMs": 894,
+        "IdleMs": 931,
+        "WorkingSetMiB": 86
+      },
+      {
+        "ReadyMs": 1052,
+        "IdleMs": 1111,
+        "WorkingSetMiB": 80
+      },
+      {
+        "ReadyMs": 917,
+        "IdleMs": 958,
+        "WorkingSetMiB": 86
+      },
+      {
+        "ReadyMs": 1027,
+        "IdleMs": 1076,
+        "WorkingSetMiB": 86
+      },
+      {
+        "ReadyMs": 905,
+        "IdleMs": 940,
+        "WorkingSetMiB": 74
+      },
+      {
+        "ReadyMs": 937,
+        "IdleMs": 988,
+        "WorkingSetMiB": 86
+      }
+    ],
+    "Models": [
+      {
+        "Name": "ch_PP-LCNet_x0_25_textline_ori_cls_mobile.onnx",
+        "SHA256": "54379AE5174D026780215FC748A7F31910DEE36818E63D49E17DC598ECC82DF7"
+      },
+      {
+        "Name": "PP-OCRv6_det_tiny.onnx",
+        "SHA256": "F42C0FBD294D95EAC1A550E131B277DAC97462C8025FA4B6C3CEC1B7894BD3D5"
+      },
+      {
+        "Name": "PP-OCRv6_rec_small.onnx",
+        "SHA256": "6F327246B50388F3C176AE304BD95767EA6DC0C9AE92153EF8CBE210B3C14884"
+      },
+      {
+        "Name": "ppocrv6_small_dict.txt",
+        "SHA256": "B5F2BFE2BDD9448429E3E82B51C789775D9B42F2403D082B00662EB77E401C5D"
+      },
+      {
+        "Name": "README.txt",
+        "SHA256": "B95E8B8A44513A7C01F3025B7B73B42F295C7E5BD3BE5B053995576004ADFA67"
+      }
+    ],
+    "Files": [
+      {
+        "Path": "Clipper2Lib.dll",
+        "Bytes": 103936
+      },
+      {
+        "Path": "FlashTrans.deps.json",
+        "Bytes": 9596
+      },
+      {
+        "Path": "FlashTrans.dll",
+        "Bytes": 1272832
+      },
+      {
+        "Path": "FlashTrans.exe",
+        "Bytes": 190464
+      },
+      {
+        "Path": "FlashTrans.runtimeconfig.json",
+        "Bytes": 930
+      },
+      {
+        "Path": "Markdig.dll",
+        "Bytes": 477184
+      },
+      {
+        "Path": "Microsoft.Extensions.DependencyInjection.Abstractions.dll",
+        "Bytes": 63768
+      },
+      {
+        "Path": "Microsoft.Extensions.Logging.Abstractions.dll",
+        "Bytes": 65288
+      },
+      {
+        "Path": "Microsoft.ML.OnnxRuntime.dll",
+        "Bytes": 240440
+      },
+      {
+        "Path": "onnxruntime_providers_shared.dll",
+        "Bytes": 21856
+      },
+      {
+        "Path": "onnxruntime.dll",
+        "Bytes": 16149344
+      },
+      {
+        "Path": "PdfSharp-wpf.dll",
+        "Bytes": 785408
+      },
+      {
+        "Path": "PdfSharp.BarCodes-wpf.dll",
+        "Bytes": 35840
+      },
+      {
+        "Path": "PdfSharp.Charting-wpf.dll",
+        "Bytes": 88064
+      },
+      {
+        "Path": "PdfSharp.Cryptography.dll",
+        "Bytes": 15360
+      },
+      {
+        "Path": "PdfSharp.Quality-wpf.dll",
+        "Bytes": 39424
+      },
+      {
+        "Path": "PdfSharp.Shared.dll",
+        "Bytes": 23040
+      },
+      {
+        "Path": "PdfSharp.Snippets-wpf.dll",
+        "Bytes": 161792
+      },
+      {
+        "Path": "PdfSharp.System.dll",
+        "Bytes": 8192
+      },
+      {
+        "Path": "PdfSharp.WPFonts.dll",
+        "Bytes": 421376
+      },
+      {
+        "Path": "System.Numerics.Tensors.dll",
+        "Bytes": 410936
+      },
+      {
+        "Path": "UglyToad.PdfPig.Core.dll",
+        "Bytes": 50176
+      },
+      {
+        "Path": "UglyToad.PdfPig.dll",
+        "Bytes": 4251648
+      },
+      {
+        "Path": "UglyToad.PdfPig.DocumentLayoutAnalysis.dll",
+        "Bytes": 248320
+      },
+      {
+        "Path": "UglyToad.PdfPig.Fonts.dll",
+        "Bytes": 1095680
+      },
+      {
+        "Path": "UglyToad.PdfPig.Package.dll",
+        "Bytes": 4608
+      },
+      {
+        "Path": "UglyToad.PdfPig.Tokenization.dll",
+        "Bytes": 23040
+      },
+      {
+        "Path": "UglyToad.PdfPig.Tokens.dll",
+        "Bytes": 48128
+      },
+      {
+        "Path": "Assets\\app.ico",
+        "Bytes": 33362
+      },
+      {
+        "Path": "Assets\\licenses\\Clipper2.txt",
+        "Bytes": 1359
+      },
+      {
+        "Path": "Assets\\licenses\\Markdig.txt",
+        "Bytes": 1435
+      },
+      {
+        "Path": "Assets\\licenses\\OnnxRuntime-ThirdPartyNotices.txt",
+        "Bytes": 343249
+      },
+      {
+        "Path": "Assets\\licenses\\OnnxRuntime.txt",
+        "Bytes": 1094
+      },
+      {
+        "Path": "Assets\\licenses\\PaddleOCR.txt",
+        "Bytes": 11376
+      },
+      {
+        "Path": "Assets\\licenses\\PdfPig.txt",
+        "Bytes": 14222
+      },
+      {
+        "Path": "Assets\\licenses\\PDFsharp.txt",
+        "Bytes": 1146
+      },
+      {
+        "Path": "Assets\\licenses\\RapidOcrNet.txt",
+        "Bytes": 1209
+      },
+      {
+        "Path": "Assets\\tools\\img2webp.exe",
+        "Bytes": 775680
+      },
+      {
+        "Path": "Assets\\tools\\libwebp-COPYING.txt",
+        "Bytes": 1496
+      },
+      {
+        "Path": "models\\v6\\ch_PP-LCNet_x0_25_textline_ori_cls_mobile.onnx",
+        "Bytes": 1018508
+      },
+      {
+        "Path": "models\\v6\\PP-OCRv6_det_tiny.onnx",
+        "Bytes": 1829618
+      },
+      {
+        "Path": "models\\v6\\PP-OCRv6_rec_small.onnx",
+        "Bytes": 21234383
+      },
+      {
+        "Path": "models\\v6\\ppocrv6_small_dict.txt",
+        "Bytes": 74947
+      },
+      {
+        "Path": "models\\v6\\README.txt",
+        "Bytes": 2393
+      }
+    ]
+  }
+]

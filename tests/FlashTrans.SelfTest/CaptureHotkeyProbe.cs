@@ -30,11 +30,12 @@ static class CaptureHotkeyProbe
         var settings = AppSettings.CreateDefault();
         var count = 0;
         manager.Triggered += action => { if (action == HotkeyAction.CaptureOcr) count++; };
-        var target = new Window { Content = new TextBox(), Width = 300, Height = 120, ShowInTaskbar = false };
+        var target = new Window { Content = new TextBox(), Width = 300, Height = 120, ShowInTaskbar = false, Topmost = true };
         var foreground = Win32.GetForegroundWindow();
+        Win32.GetCursorPos(out var originalCursor);
         try
         {
-            target.Show(); target.Activate(); Pump();
+            target.Show(); Pump(); FocusTarget(target);
             Check(manager.TryChange(settings, HotkeyAction.CaptureOcr, first.ToString(), out var error), error ?? "注册失败");
             Send(first, repeats: 4);
             Wait(() => count == 1, "按住截图键未触发或重复触发");
@@ -62,6 +63,7 @@ static class CaptureHotkeyProbe
         finally
         {
             target.Close();
+            Win32.SetCursorPos(originalCursor.X, originalCursor.Y);
             if (foreground != IntPtr.Zero) Win32.SetForegroundWindow(foreground);
         }
     }
@@ -81,8 +83,10 @@ static class CaptureHotkeyProbe
         Check(manager.TryChange(AppSettings.CreateDefault(), HotkeyAction.CaptureOcr, spec.ToString(), out var error),
             error ?? "菜单测试注册失败");
         var window = new Window { Title = "截图菜单回归", Width = 440, Height = 220, Left = 100, Top = 100,
-            WindowStartupLocation = WindowStartupLocation.Manual, ShowInTaskbar = false };
+            WindowStartupLocation = WindowStartupLocation.Manual, ShowInTaskbar = false, Topmost = true,
+            Background = System.Windows.Media.Brushes.White };
         var foreground = Win32.GetForegroundWindow();
+        Win32.GetCursorPos(out var originalCursor);
         var menu = CreatePopupMenu();
         var submenu = CreatePopupMenu();
         Check(menu != IntPtr.Zero && submenu != IntPtr.Zero, "无法创建原生菜单");
@@ -118,7 +122,8 @@ static class CaptureHotkeyProbe
                 else if (stage == 1)
                 {
                     Check(GetMenuItemRect(new WindowInteropHelper(window).Handle, submenu, 0, out rect)
-                        && rect.Right > rect.Left && rect.Bottom > rect.Top, "二级菜单未真正展开");
+                        && rect.Right > rect.Left && rect.Bottom > rect.Top,
+                        $"二级菜单未真正展开：目标={new WindowInteropHelper(window).Handle}，前台={Win32.GetForegroundWindow()}，菜单宽高={rect.Right - rect.Left}×{rect.Bottom - rect.Top}");
                     expected = ScreenCapture.Grab(rect) ?? throw new InvalidOperationException("无法抓取测试子菜单");
                     stage++;
                     Send(spec, repeats: 3);
@@ -151,6 +156,7 @@ static class CaptureHotkeyProbe
         try
         {
             window.Show(); window.Activate(); Pump();
+            FocusTarget(window);
             timer.Start();
             TrackPopupMenuEx(menu, 0x0100, 140, 150, new WindowInteropHelper(window).Handle, IntPtr.Zero);
             Wait(() => complete || failure is not null, "菜单退出后截图未显示");
@@ -166,6 +172,7 @@ static class CaptureHotkeyProbe
             foreach (var overlay in Application.Current.Windows.OfType<CaptureOverlay>().ToArray()) overlay.Close();
             DestroyMenu(menu);
             window.Close();
+            Win32.SetCursorPos(originalCursor.X, originalCursor.Y);
             if (foreground != IntPtr.Zero) Win32.SetForegroundWindow(foreground);
         }
     }
@@ -173,9 +180,11 @@ static class CaptureHotkeyProbe
     static HotkeySpec AvailableKey()
     {
         using var message = new MessageWindow("CaptureHotkey.Available");
+        var settings = AppSettings.CreateDefault();
         foreach (var key in Enumerable.Range(1, 24))
         {
             var spec = HotkeySpec.Parse("F" + key);
+            if (HotkeyManager.FindConflict(settings, HotkeyAction.CaptureOcr, spec.ToString()) is not null) continue;
             if (!Win32.RegisterHotKey(message.Handle, 0x7100, spec.Win32Modifiers, spec.VirtualKey)) continue;
             Win32.UnregisterHotKey(message.Handle, 0x7100);
             return spec;
@@ -209,6 +218,30 @@ static class CaptureHotkeyProbe
         var frame = new DispatcherFrame();
         Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() => frame.Continue = false));
         Dispatcher.PushFrame(frame);
+    }
+
+    static void FocusTarget(Window window)
+    {
+        // 先核对点击命中自己的测试窗口，再送按键，避免前台锁或其他置顶窗口干扰菜单验证。
+        var point = window.PointToScreen(new Point(window.ActualWidth / 2, window.ActualHeight / 2));
+        var position = new POINT { X = (int)point.X, Y = (int)point.Y };
+        var target = new WindowInteropHelper(window).Handle;
+        Wait(() => Win32.GetAncestor(Win32.WindowFromPoint(position), Win32.GA_ROOT) == target,
+            "截图热键测试窗口被其他窗口遮住");
+        Win32.SetCursorPos(position.X, position.Y);
+        INPUT[] click = [new INPUT { type = Win32.INPUT_MOUSE, u = new InputUnion { mi = new MOUSEINPUT { dwFlags = 0x0002 } } },
+            new INPUT { type = Win32.INPUT_MOUSE, u = new InputUnion { mi = new MOUSEINPUT { dwFlags = 0x0004 } } }];
+        var released = false;
+        MouseButtonEventHandler onReleased = (_, _) => released = true;
+        window.PreviewMouseLeftButtonUp += onReleased;
+        try
+        {
+            Check(Win32.SendInput(2, click, Marshal.SizeOf<INPUT>()) == 2, "不能激活截图热键测试窗口");
+            // 已是前台也要等这次点击完成，不能把还在排队的点击带进随后打开的原生菜单。
+            Wait(() => released, "截图热键测试的焦点点击尚未处理完成");
+        }
+        finally { window.PreviewMouseLeftButtonUp -= onReleased; }
+        Wait(() => Win32.GetForegroundWindow() == target, "截图热键测试窗口未取得焦点");
     }
 
     static void Wait(Func<bool> done, string message)

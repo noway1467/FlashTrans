@@ -23,6 +23,7 @@ public sealed class SettingsService
     public AppSettings Current { get; private set; } = new();
     public string ConfigDir { get; }
     public string ConfigPath => Path.Combine(ConfigDir, "settings.json");
+    public string? LastSaveError { get; private set; }
 
     public event Action<AppSettings>? Changed;
 
@@ -63,8 +64,9 @@ public sealed class SettingsService
         Save();
     }
 
-    public void Save()
+    public bool Save()
     {
+        LastSaveError = null;
         try
         {
             Directory.CreateDirectory(ConfigDir);
@@ -77,10 +79,13 @@ public sealed class SettingsService
             var tmp = ConfigPath + ".tmp";
             File.WriteAllText(tmp, JsonSerializer.Serialize(copy, SettingsJson.Default.AppSettings));
             File.Move(tmp, ConfigPath, overwrite: true);
+            return true;
         }
         catch (Exception ex)
         {
-            Log.Warn("设置保存失败：" + ex.Message);
+            LastSaveError = "设置保存失败：" + ex.Message;
+            Log.Warn(LastSaveError);
+            return false;
         }
     }
 
@@ -206,7 +211,12 @@ public sealed class SettingsService
         if (s.Version < 11)
         {
             // 新增的默认组合键遇到旧配置自定义键时，旧功能优先；用户仍可从托盘进入。
-            if (Interop.HotkeyManager.FindConflict(s, Interop.HotkeyAction.QuickLaunch, s.HkQuickLaunch) is not null)
+            // v18 的会话键还没迁移，不能反过来让旧快速启动键为它让位。
+            var longShotHotkey = s.LongShotToggleHotkey;
+            s.LongShotToggleHotkey = "";
+            var conflict = Interop.HotkeyManager.FindConflict(s, Interop.HotkeyAction.QuickLaunch, s.HkQuickLaunch);
+            s.LongShotToggleHotkey = longShotHotkey;
+            if (conflict is not null)
                 s.HkQuickLaunch = "";
             s.Version = 11;
             changed = true;
@@ -253,6 +263,15 @@ public sealed class SettingsService
         {
             // 缺失的管理员自启开关默认关闭，不因升级改变原来的运行权限。
             s.Version = 17;
+            changed = true;
+        }
+        if (s.Version < 18)
+        {
+            // 缺失字段由模型默认值补齐，保留已经保存过的滚动和预览选择。
+            s.LongShotToggleHotkey ??= LongShotService.DefaultToggleHotkey;
+            if (Interop.HotkeyManager.FindConflict(s, Interop.HotkeyAction.LongShotToggle, s.LongShotToggleHotkey) is not null)
+                s.LongShotToggleHotkey = "";
+            s.Version = 18;
             changed = true;
         }
         return changed;
@@ -316,6 +335,10 @@ public sealed class SettingsService
         s.OcrResultHeight = NormalizeOcrResultDimension(s.OcrResultHeight, 360, 220, 1800);
         s.LongShotPreviewWidth = double.IsFinite(s.LongShotPreviewWidth) ? Math.Clamp(s.LongShotPreviewWidth, 360, 3840) : 720;
         s.LongShotPreviewHeight = double.IsFinite(s.LongShotPreviewHeight) ? Math.Clamp(s.LongShotPreviewHeight, 320, 2160) : 660;
+        var longShotHotkey = Interop.HotkeySpec.Parse(s.LongShotToggleHotkey);
+        s.LongShotToggleHotkey = longShotHotkey.IsValidGlobal ? longShotHotkey.ToString() : "";
+        s.LongShotScrollIntervalMs = LongShotService.ClampScrollIntervalMs(s.LongShotScrollIntervalMs);
+        s.LongShotMaxHeight = LongShotService.ClampMaxHeight(s.LongShotMaxHeight);
         s.TypeDelayMs = Math.Clamp(s.TypeDelayMs, AppSettings.MinTypeDelayMs, AppSettings.MaxTypeDelayMs);
         s.CacheSize = Math.Clamp(s.CacheSize, 0, 20000);
         s.CacheTtlHours = Math.Clamp(s.CacheTtlHours, 1, 168);

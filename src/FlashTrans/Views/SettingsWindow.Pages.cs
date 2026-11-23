@@ -108,6 +108,35 @@ public sealed partial class SettingsWindow
             Check("点保存时先问存到哪儿", S.CaptureSaveAsk, on => S.CaptureSaveAsk = on),
             LeftRow(SmallButton("试一下", () => _ = TryCaptureAsync())));
 
+        var autoScroll = Combo<bool>([("手动滚动", false), ("自动滚动", true)],
+            S.LongShotAutoScroll, v => S.LongShotAutoScroll = v);
+        autoScroll.Name = nameof(AppSettings.LongShotAutoScroll);
+        var livePreview = Check("滚动时显示实时预览", S.LongShotLivePreview, on => S.LongShotLivePreview = on,
+            "选区外侧显示实时拼接效果；空间不足时自动隐藏。");
+        livePreview.Name = nameof(AppSettings.LongShotLivePreview);
+        var showPreview = Check("完成后打开预览窗口", S.LongShotShowPreview, on => S.LongShotShowPreview = on,
+            "关闭后按「按回车时」的默认动作直接处理。");
+        showPreview.Name = nameof(AppSettings.LongShotShowPreview);
+        var fitWidth = Combo<bool>([("适应窗口宽度", true), ("100% 原始大小", false)],
+            S.LongShotPreviewFitWidth, v => S.LongShotPreviewFitWidth = v);
+        fitWidth.Name = nameof(AppSettings.LongShotPreviewFitWidth);
+
+        Section(page, "长截图",
+            Hint("Esc 完成截图；滚动时可用快捷键开始或暂停自动滚动。"),
+            LongShotHotkeyField(),
+            Field("默认滚动方式", autoScroll),
+            Field("自动滚动间隔", SliderRow(S.LongShotScrollIntervalMs,
+                LongShotService.MinScrollIntervalMs, LongShotService.MaxScrollIntervalMs, 20,
+                v => S.LongShotScrollIntervalMs = LongShotService.ClampScrollIntervalMs((int)Math.Round(v)),
+                v => $"{v:F0} ms", nameof(AppSettings.LongShotScrollIntervalMs)), "页面加载慢时可适当调大。"),
+            Field("最大拼接高度", SliderRow(S.LongShotMaxHeight,
+                LongShotService.MinMaxHeight, LongShotService.MaxMaxHeight, 2000,
+                v => S.LongShotMaxHeight = LongShotService.ClampMaxHeight((int)Math.Round(v)),
+                v => $"{v:F0} px", nameof(AppSettings.LongShotMaxHeight))),
+            livePreview,
+            showPreview,
+            Field("预览默认视图", fitWidth));
+
         var unreadableKeywords = S.CaptureRedactionKeywordsLocked;
         var keywords = Input(unreadableKeywords ? "" : S.CaptureRedactionKeywords,
             v => { S.CaptureRedactionKeywords = v; S.CaptureRedactionKeywordsLocked = false; }, "多个关键词用分号分隔");
@@ -514,7 +543,8 @@ public sealed partial class SettingsWindow
             HotkeyField("截图", S.HkCaptureOcr, v => S.HkCaptureOcr = v, HotkeyAction.CaptureOcr),
             HotkeyField("收起 / 叫回翻译弹窗", S.HkTogglePopup, v => S.HkTogglePopup = v, HotkeyAction.TogglePopup),
             HotkeyField("呼出 / 隐藏快速启动", S.HkQuickLaunch, v => S.HkQuickLaunch = v, HotkeyAction.QuickLaunch),
-            Hint("快速启动默认关闭，需在「快速启动」分类中开启后才占用快捷键。"));
+            Hint("快速启动默认关闭，需在「快速启动」分类中开启后才占用快捷键。"),
+            Hint("长截图开始 / 暂停键在「截图 → 长截图」中设置，仅长截图期间生效。"));
 
         Section(page, "框选时的键",
             Hint("矩形、画笔、马赛克那些键在「截图」一栏里配。"),
@@ -594,6 +624,45 @@ public sealed partial class SettingsWindow
         box.GotFocus += (_, _) => box.SelectAll();
 
         return Field(label, box);
+    }
+
+    UIElement LongShotHotkeyField()
+    {
+        var box = new TextBox
+        {
+            Name = nameof(AppSettings.LongShotToggleHotkey), Text = HotkeySpec.Parse(S.LongShotToggleHotkey).ToString(),
+            FontSize = 12.5, Height = 28, Width = 200, IsReadOnly = true, Cursor = Cursors.Hand,
+            VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(7, 0, 7, 0),
+            ToolTip = "F1–F12 或组合键；Backspace / Delete 清空；Esc 完成截图。",
+        };
+
+        void Record(HotkeySpec spec)
+        {
+            if (!spec.IsEmpty && !spec.IsValidGlobal)
+            {
+                Toast(spec.Key == Key.Escape ? "Esc 用于完成截图，不能设为滚动快捷键"
+                    : "请用 F1–F12 或带修饰键的组合键");
+                return;
+            }
+            var text = spec.ToString();
+            var conflict = HotkeyManager.FindConflict(S, HotkeyAction.LongShotToggle, text);
+            if (conflict is not null) { Toast(conflict); return; }
+            box.Text = text;
+            S.LongShotToggleHotkey = text;
+            Save();
+        }
+        box.Tag = (Action<HotkeySpec>)Record;
+        box.PreviewKeyDown += (_, e) =>
+        {
+            e.Handled = true;
+            var key = e.Key == Key.System ? e.SystemKey : e.Key;
+            if (key is Key.Back or Key.Delete) { Record(HotkeySpec.None); return; }
+            if (key is Key.LeftCtrl or Key.RightCtrl or Key.LeftAlt or Key.RightAlt
+                or Key.LeftShift or Key.RightShift or Key.LWin or Key.RWin or Key.None or Key.ImeProcessed) return;
+            Record(new HotkeySpec(Keyboard.Modifiers, key));
+        };
+        box.GotFocus += (_, _) => box.SelectAll();
+        return Field("开始 / 暂停快捷键", box);
     }
 
     internal bool TryRecordHotkey(HotkeySpec spec)

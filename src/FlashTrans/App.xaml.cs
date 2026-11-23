@@ -77,13 +77,14 @@ public partial class App : Application
             proc.Refresh();
             Log.Warn($"[benchmark] 就绪 {ready:F0}ms · 空闲 {idle:F0}ms · " +
                      $"工作集 {proc.WorkingSet64 / 1024 / 1024}MB");
-            // 启动路径上不该加载的东西一旦被拖进来，就是这里先看出来。
-            // Windows SDK 投影有 24MB，只有截图识别用得到，按下热键前不该出现。
+            // SDK 投影和图像库已移除；OCR / PDF 仍是冷路径，诊断时检查是否提前加载。
             var loaded = AppDomain.CurrentDomain.GetAssemblies();
-            var heavy = loaded.Where(a => a.GetName().Name is "Microsoft.Windows.SDK.NET" or "WinRT.Runtime")
+            var heavy = loaded.Where(a => a.GetName().Name is "Microsoft.Windows.SDK.NET" or "WinRT.Runtime"
+                                  or "RapidOcrNet" or "SkiaSharp" or "Microsoft.ML.OnnxRuntime"
+                                  or "UglyToad.PdfPig" or "PdfSharp-wpf")
                               .Select(a => a.GetName().Name).ToArray();
             Log.Warn($"[benchmark] 已加载程序集 {loaded.Length} 个" +
-                     (heavy.Length == 0 ? "，未碰 WinRT 投影" : "，含 " + string.Join(" + ", heavy)));
+                     (heavy.Length == 0 ? "，未提前加载 OCR / PDF 库" : "，含 " + string.Join(" + ", heavy)));
             Shutdown();
         }, DispatcherPriority.ApplicationIdle);
     }

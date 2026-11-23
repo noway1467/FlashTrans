@@ -1,340 +1,276 @@
+using System.Buffers.Binary;
 using System.IO;
+using System.Text;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using FlashTrans.Core;
-using Windows.Media.Core;
-using Windows.Media.MediaProperties;
-using Windows.Media.Transcoding;
-using Windows.Storage;
-using Windows.Storage.Streams;
+using FlashTrans.Interop;
+using Mf = FlashTrans.Interop.MediaFoundation;
 
 namespace FlashTrans.Services;
 
-/// <summary>
-/// 把一串 PNG 帧编成 MP4（H.264）。
-///
-/// 为什么这条不用外挂程序，而 WebP 那条要：H.264 编码器是系统自带的
-/// （Media Foundation 里的 mfh264enc），WinRT 那层 Windows.Media.Transcoding
-/// 直接就能用上，随包体积增加 0 字节。WebP 恰好相反——系统只带解码器。
-///
-/// 走的是 MediaStreamSource 而不是 MediaComposition：后者要把每帧当成一个
-/// MediaClip，300 帧就是 300 个 clip，而且每帧的时长只能按「图片停留时间」给，
-/// 拿不到精确的时间戳。MediaStreamSource 这条是自己按帧喂样本，时间戳我们说了算。
-///
-/// 帧数据是 BGRA8 未压缩样本，转码器负责压成 H.264。一帧 1920×1080 是 8MB，
-/// 所以一次只解一帧、喂完就扔，不预先解全部。
-/// </summary>
+/// <summary>逐帧喂给系统 Media Foundation，以 H.264 编码；可在同一 MP4 中写入 AAC 音轨。</summary>
 public static class Mp4Encoder
 {
-    /// <summary>系统 H.264 编码器那个 DLL。用来在设置页里提前说一句「这台机器行不行」。</summary>
-    static readonly string EncoderDll = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.System), "mfh264enc.dll");
+    static readonly string EncoderDll = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "mfh264enc.dll");
 
-    /// <summary>
-    /// 这台机器有没有系统 H.264 编码器。
-    /// 只是给界面提示用的粗判断——真正算不算数还是看编那一下成不成，
-    /// 所以 SaveAsync 失败时照样有退回 WebP 那条路。
-    /// </summary>
-    public static bool Available
-    {
-        get { try { return File.Exists(EncoderDll); } catch { return false; } }
-    }
+    /// <summary>只用于界面提示，实际可用性仍由编码器初始化决定。</summary>
+    public static bool Available { get { try { return File.Exists(EncoderDll); } catch { return false; } } }
 
-    /// <summary>
-    /// 把边长吸到 4 的倍数。
-    ///
-    /// 4:2:0 色度采样只要求偶数，但系统这个 H.264 编码器实际要 4 的倍数：
-    /// 差 2 的时候 CanTranscode 仍然是 true，TranscodeAsync 才抛 COMException
-    /// 0x80004005「未指定的错误」，看起来就像「这台机器编不了 MP4」。
-    ///
-    /// 实测（`--mp4lab` 按边长扫的，宽高两边一样）：
-    /// 636 成、638 败、640 成、642 败、644 成；476 成、478 败、480 成、482 败。
-    /// 1366×768 正好撞上——所以用户全屏宽度录一段必错，而自测那些 48×32、
-    /// 640×480 的合成帧全是 4 的倍数，一路都是绿的。
-    ///
-    /// 吸下去最多切掉 3 行/列像素，比整段录制废掉划算。
-    /// </summary>
-    internal static int Align4(int v) => v - (v & 3);
-
-    /// <summary>
-    /// 每像素每帧给多少 bit。屏幕内容不像实拍视频：大片纯色加细小的文字边缘，
-    /// 给低了首先烂的是字。这个值是实测调出来的，见 Bitrate。
-    /// </summary>
+    /// <summary>沿用已验证的 4 像素对齐；系统 H.264 的边长只为偶数时也曾转码失败。</summary>
+    internal static int Align4(int value) => value - (value & 3);
     internal static double BitsPerPixel = 0.12;
-
-    /// <summary>只给量尺子的工具用：直接指定码率，跳过上面那套折算和夹取。</summary>
     internal static uint? ForceBitrate;
+    internal static uint Bitrate(int w, int h, int fps) =>
+        (uint)Math.Clamp((long)((double)w * h * fps * BitsPerPixel), 800_000, 40_000_000);
 
-    /// <summary>
-    /// 码率。按像素数乘帧率折算，再夹到一个合理区间。
-    /// </summary>
-    internal static uint Bitrate(int w, int h, int fps)
-        => (uint)Math.Clamp((long)(w * h * fps * BitsPerPixel), 800_000, 40_000_000);
-
-    /// <summary>
-    /// 转码时先写的那个旁路文件，把「临时」放在文件名里而不是后缀上：
-    /// `闪译录制 ….part.mp4`。
-    ///
-    /// 保住 .mp4 后缀是防御性的：Media Foundation 给 StorageFile 挑写出器（sink）
-    /// 参考扩展名，`.part` 结尾理论上可能挑不到 MP4 sink。实测这台机器上
-    /// `x.mp4.part` 也能编（0x80004005 的真因是边长不是 4 的倍数，见 Align4），
-    /// 但后缀跟容器对得上总是更稳，也让半成品文件双击能放。
-    /// </summary>
+    /// <summary>保留容器后缀供系统选择 MP4 sink；编码成功前不改最终文件。</summary>
     internal static string SidecarPath(string finalPath)
     {
-        var dir = Path.GetDirectoryName(finalPath) ?? "";
-        var stem = Path.GetFileNameWithoutExtension(finalPath);
-        var ext = Path.GetExtension(finalPath);
-        if (string.IsNullOrEmpty(ext)) ext = ".mp4";
-        return Path.Combine(dir, stem + ".part" + ext);
+        var directory = Path.GetDirectoryName(finalPath) ?? "";
+        var extension = Path.GetExtension(finalPath);
+        if (string.IsNullOrEmpty(extension)) extension = ".mp4";
+        return Path.Combine(directory, Path.GetFileNameWithoutExtension(finalPath) + ".part" + extension);
     }
 
-    public static async Task<AnimResult> SaveAsync(
-        IReadOnlyList<string> frames, string outPath, int fps, string? audioPath = null,
-        CancellationToken ct = default)
+    public static Task<AnimResult> SaveAsync(IReadOnlyList<string> frames, string outPath, int fps,
+        string? audioPath = null, CancellationToken ct = default)
     {
         if (frames.Count == 0) throw new InvalidOperationException("没有帧可以编码。");
         ct.ThrowIfCancellationRequested();
-        fps = Math.Max(1, fps);
-        var finalPath = Path.GetFullPath(outPath);
-        var tempPath = SidecarPath(finalPath);
+        return Task.Run(() => Save(frames, outPath, Math.Max(1, fps), audioPath, ct), ct);
+    }
 
+    static AnimResult Save(IReadOnlyList<string> frames, string outPath, int fps, string? audioPath, CancellationToken ct)
+    {
+        using var apartment = new NativeWinRt.Apartment();
+        using var foundation = new Mf.Lifetime();
+        var finalPath = Path.GetFullPath(outPath);
+        var temporary = SidecarPath(finalPath);
         try
         {
-            // 拿第一帧定分辨率。录制中区域不变，所有帧一样大。
-            var first = AnimEncoder.LoadFrame(frames[0]);
-            var w = Align4(first.PixelWidth);
-            var h = Align4(first.PixelHeight);
-            if (w < 2 || h < 2)
-                throw new InvalidOperationException($"区域太小，编不了 MP4（{w}×{h}）。");
-
-            var descriptor = new VideoStreamDescriptor(
-                VideoEncodingProperties.CreateUncompressed(MediaEncodingSubtypes.Bgra8, (uint)w, (uint)h));
-
-            var source = new MediaStreamSource(descriptor)
-            {
-                // 帧是现成的，不是实时流。BufferTime 留着的话转码器会先等一段。
-                BufferTime = TimeSpan.Zero,
-                Duration = TimeSpan.FromSeconds((double)frames.Count / fps),
-            };
-
-            var frameDuration = TimeSpan.FromSeconds(1.0 / fps);
-            var next = 0;
-            Exception? failure = null;
-
-            source.SampleRequested += (_, args) =>
-            {
-                var req = args.Request;
-                // 取消了就当流结束：不给样本，转码器立刻收。这条比 AsTask(ct) 更快
-                // 见效——WinRT 那边的 Cancel 要等当前这一下转码走完才响应。
-                // 半成品文件由下面的 catch 删掉。
-                if (next >= frames.Count || ct.IsCancellationRequested)
-                {
-                    // 不给样本就是流结束了。必须显式走这一步，不然转码器一直等。
-                    req.Sample = null;
-                    return;
-                }
-                try
-                {
-                    var i = next++;
-                    req.Sample = MediaStreamSample.CreateFromBuffer(
-                        ToBuffer(frames[i], w, h), frameDuration * i);
-                    req.Sample.Duration = frameDuration;
-                    // 每帧都当关键帧候选：屏幕录制常要来回拖进度条。
-                    req.Sample.KeyFrame = i == 0;
-                }
-                catch (Exception ex)
-                {
-                    // 这个回调是转码器在自己的线程上调的，抛出去就没人接了，
-                    // 表现是转码莫名其妙地成功但文件是残的。记下来，等外面统一报。
-                    failure ??= ex;
-                    req.Sample = null;
-                }
-            };
-
-            var bitrate = ForceBitrate ?? Bitrate(w, h, fps);
-
-            // 视频属性自己建，不走 CreateMp4(quality) 那套预设：预设会按它自己的档位
-            // 填好宽高帧率码率，事后改 profile.Video 的字段不一定被采纳。
-            var profile = new MediaEncodingProfile { Container = new ContainerEncodingProperties() };
-            profile.Container.Subtype = MediaEncodingSubtypes.Mpeg4;
-            profile.Audio = null;   // 只录画面，不录声音（音频单独录制到 .wav）
-
-            var video = VideoEncodingProperties.CreateH264();
-            video.Width = (uint)w;
-            video.Height = (uint)h;
-            video.Bitrate = bitrate;
-            video.FrameRate.Numerator = (uint)fps;
-            video.FrameRate.Denominator = 1;
-            video.PixelAspectRatio.Numerator = 1;
-            video.PixelAspectRatio.Denominator = 1;
-            profile.Video = video;
-
-            // 先写旁路临时文件。转码半路失败时，用户目录里不能出现 0 字节的假 MP4。
-            var dir = Path.GetDirectoryName(finalPath)
-                ?? throw new InvalidOperationException("输出路径没有目录部分。");
-            Directory.CreateDirectory(dir);
-            var folder = await StorageFolder.GetFolderFromPathAsync(dir);
-            var file = await folder.CreateFileAsync(
-                Path.GetFileName(tempPath), CreationCollisionOption.ReplaceExisting);
-
-            using (var stream = await file.OpenAsync(FileAccessMode.ReadWrite))
-            {
-                var transcoder = new MediaTranscoder { HardwareAccelerationEnabled = true };
-                var prepared = await transcoder.PrepareMediaStreamSourceTranscodeAsync(
-                    source, stream, profile);
-                if (!prepared.CanTranscode)
-                    throw new InvalidOperationException(
-                        $"系统拒绝转码（{prepared.FailureReason}）。这台机器可能没装 H.264 编码器。");
-
-                await prepared.TranscodeAsync().AsTask(ct);
-            }
-
-            // 上面那个「取消就不给样本」的口子会让转码正常结束、留下一个短文件。
-            // 所以转码回来必须再查一次，否则取消会变成「存了半截视频」。
             ct.ThrowIfCancellationRequested();
-
-            if (failure is not null)
-                throw new InvalidOperationException("喂帧的时候出错了：" + failure.Message, failure);
-
-            var info = new FileInfo(tempPath);
-            if (!info.Exists || info.Length == 0)
-                throw new InvalidOperationException("转码跑完了但文件是空的。");
-
-            // 如果有音频文件，需要合成音视频
+            var first = AnimEncoder.LoadFrame(frames[0]);
+            var width = Align4(first.PixelWidth);
+            var height = Align4(first.PixelHeight);
+            if (width < 4 || height < 4) throw new InvalidOperationException($"区域太小，编不了 MP4（{width}×{height}）。");
+            Directory.CreateDirectory(Path.GetDirectoryName(finalPath)!);
             if (!string.IsNullOrEmpty(audioPath) && File.Exists(audioPath))
             {
-                var muxedPath = tempPath + ".muxed.mp4";
                 try
                 {
-                    await MuxAudioVideoAsync(tempPath, audioPath, muxedPath, ct);
-                    File.Delete(tempPath);  // 删除只有视频的临时文件
-                    File.Move(muxedPath, finalPath, overwrite: true);
-                    var muxedInfo = new FileInfo(finalPath);
-                    return new AnimResult(finalPath, RecordFormat.Mp4, muxedInfo.Length);
+                    using var audio = new PcmWave(audioPath);
+                    Encode(frames, temporary, width, height, fps, audio, ct);
                 }
-                catch (OperationCanceledException)
-                {
-                    // 取消不能走下面那条「退回纯视频」——那是给合成出错兜底的，
-                    // 在这儿会变成「用户按了取消，反而存下一个没声音的片子」。
-                    if (File.Exists(muxedPath)) File.Delete(muxedPath);
-                    throw;
-                }
+                catch (OperationCanceledException) { throw; }
                 catch (Exception ex)
                 {
+                    ct.ThrowIfCancellationRequested();
                     Log.Warn("音视频合成失败，保存纯视频文件：" + ex.Message);
-                    // 合成失败，退回到纯视频
-                    if (File.Exists(muxedPath)) File.Delete(muxedPath);
-                    File.Move(tempPath, finalPath, overwrite: true);
-                    return new AnimResult(finalPath, RecordFormat.Mp4, info.Length);
+                    File.Delete(temporary);
+                    Encode(frames, temporary, width, height, fps, null, ct);
                 }
             }
-
-            File.Move(tempPath, finalPath, overwrite: true);
-            return new AnimResult(finalPath, RecordFormat.Mp4, info.Length);
+            else Encode(frames, temporary, width, height, fps, null, ct);
+            ct.ThrowIfCancellationRequested();
+            var bytes = new FileInfo(temporary).Length;
+            if (bytes == 0) throw new InvalidOperationException("转码跑完了但文件是空的。");
+            File.Move(temporary, finalPath, overwrite: true);
+            return new AnimResult(finalPath, RecordFormat.Mp4, bytes);
         }
         catch
         {
-            try
-            {
-                if (File.Exists(tempPath)) File.Delete(tempPath);
-            }
-            catch (Exception cleanupEx)
-            {
-                Log.Warn("清理 MP4 临时文件失败：" + cleanupEx.Message);
-            }
+            try { File.Delete(temporary); }
+            catch (Exception ex) { Log.Warn("清理 MP4 临时文件失败：" + ex.Message); }
             throw;
         }
     }
 
-    /// <summary>
-    /// 读一帧 PNG，转成紧排的 BGRA8 塞进 IBuffer，行序是从下往上的。
-    ///
-    /// 为什么要倒着写：Media Foundation 里未压缩的 RGB 格式默认是「自底向上」
-    /// （bottom-up，跟 GDI 的 DIB 一个传统），而 PNG 和我们的 CapturedImage 都是
-    /// 自顶向下。直接喂进去，编出来的视频整个上下颠倒——帧数、时长、盒子结构
-    /// 全是对的，只有行序反了，所以光验容器结构查不出来。`--fliplab` 的实测：
-    /// 源帧四个角亮度 240/160/80/0，不翻的话解回来是 80/0/240/160——上下换了，
-    /// 左右没换，正是纯行序倒置。
-    ///
-    /// 另一条路是把 VideoEncodingProperties 的 stride 设成负数来声明自顶向下，
-    /// 但 WinRT 那层投影没有暴露这个字段（MF_MT_DEFAULT_STRIDE 只能在原生
-    /// IMFMediaType 上设），所以只能在这儿把行倒过来。一次多拷一行的内存。
-    ///
-    /// 走 DataWriter 而不是 LockBuffer + IMemoryBufferByteAccess：后者在 .NET 5+
-    /// 上会抛 InvalidCastException，CsWinRT 的对象不是真 COM RCW，转不过去。
-    /// 跟 OcrService.ToSoftwareBitmap 一个道理。
-    /// </summary>
-    static IBuffer ToBuffer(string path, int w, int h)
+    static void Encode(IReadOnlyList<string> frames, string path, int width, int height, int fps,
+        PcmWave? audio, CancellationToken ct)
     {
-        var src = AnimEncoder.LoadFrame(path);
-        // 抓屏出来本来就是 BGRA32，但 PNG 存回来可能被写成别的（比如没有 alpha 的 24 位）。
-        BitmapSource bgra = src.Format == PixelFormats.Bgra32
-            ? src
-            : new FormatConvertedBitmap(src, PixelFormats.Bgra32, null, 0);
-
-        var stride = w * 4;
-        var bytes = new byte[stride * h];
-        // 只取左上 w×h：吸到 4 的倍数可能比原图各少几个像素。
-        bgra.CopyPixels(new System.Windows.Int32Rect(0, 0, w, h), bytes, stride, 0);
-        FlipRows(bytes, stride, h);
-
-        using var writer = new DataWriter();
-        writer.WriteBytes(bytes);
-        return writer.DetachBuffer();
+        ct.ThrowIfCancellationRequested();
+        using var writer = Mf.SinkWriter(path);
+        using var videoOutput = VideoType(Mf.H264, width, height, fps);
+        Mf.Set(videoOutput, Mf.AverageBitrate, ForceBitrate ?? Bitrate(width, height, fps));
+        var videoStream = Mf.AddStream(writer, videoOutput);
+        using var videoInput = VideoType(Mf.Rgb32, width, height, fps);
+        Mf.Set(videoInput, Mf.DefaultStride, (uint)(width * 4));
+        Mf.SetInput(writer, videoStream, videoInput);
+        uint audioStream = 0;
+        if (audio is not null)
+        {
+            using var audioOutput = Mf.MediaType();
+            Mf.Set(audioOutput, Mf.MajorType, Mf.Audio);
+            Mf.Set(audioOutput, Mf.Subtype, Mf.Aac);
+            // Windows AAC 支持 32/44.1/48kHz；其他 PCM 采样率由 sink 的转换器重采样。
+            var outputRate = audio.SampleRate is 32000 or 44100 or 48000 ? audio.SampleRate : 48000u;
+            Mf.Set(audioOutput, Mf.SampleRate, outputRate);
+            Mf.Set(audioOutput, Mf.Channels, Math.Min(audio.Channels, 2u));
+            Mf.Set(audioOutput, Mf.BitsPerSample, 16u);
+            Mf.Set(audioOutput, Mf.AudioBytesPerSecond, 20_000u);
+            Mf.Set(audioOutput, new Guid("bfbabe79-7434-4d1c-94f0-72a3b9e17188"), 0u);
+            Mf.Set(audioOutput, new Guid("7632f0e6-9538-4d61-acda-ea29c8c14456"), 0x29u);
+            audioStream = Mf.AddStream(writer, audioOutput);
+            using var audioInput = Mf.MediaType();
+            Mf.Set(audioInput, Mf.MajorType, Mf.Audio);
+            Mf.Set(audioInput, Mf.Subtype, Mf.Pcm);
+            Mf.Set(audioInput, Mf.SampleRate, audio.SampleRate);
+            Mf.Set(audioInput, Mf.Channels, audio.Channels);
+            Mf.Set(audioInput, Mf.BitsPerSample, 16u);
+            Mf.Set(audioInput, Mf.BlockAlignment, audio.Channels * 2);
+            Mf.Set(audioInput, Mf.AudioBytesPerSecond, checked(audio.SampleRate * audio.Channels * 2));
+            Mf.SetInput(writer, audioStream, audioInput);
+        }
+        Mf.Begin(writer);
+        var totalTime = frames.Count * 10_000_000L / fps;
+        long audioFrames = 0;
+        for (var frame = 0; frame < frames.Count; frame++)
+        {
+            ct.ThrowIfCancellationRequested();
+            var time = frame * 10_000_000L / fps;
+            var nextTime = (frame + 1L) * 10_000_000L / fps;
+            var pixels = FramePixels(frames[frame], width, height);
+            ct.ThrowIfCancellationRequested();
+            Mf.Write(writer, videoStream, pixels, pixels.Length, time, nextTime - time);
+            if (audio is null) continue;
+            var maximumFrames = Math.Min(audio.TotalFrames, totalTime * audio.SampleRate / 10_000_000);
+            while (audioFrames < maximumFrames && audioFrames * 10_000_000L / audio.SampleRate < nextTime)
+            {
+                ct.ThrowIfCancellationRequested();
+                var count = (int)Math.Min(1024, maximumFrames - audioFrames);
+                var bytes = audio.ReadFrames(count);
+                var audioTime = audioFrames * 10_000_000L / audio.SampleRate;
+                audioFrames += count;
+                var duration = audioFrames * 10_000_000L / audio.SampleRate - audioTime;
+                Mf.Write(writer, audioStream, bytes, bytes.Length, audioTime, duration);
+            }
+        }
+        ct.ThrowIfCancellationRequested();
+        Mf.Finish(writer);
+        ct.ThrowIfCancellationRequested();
     }
 
-    /// <summary>把 h 行像素首尾对调，原地翻转上下。</summary>
+    static NativeCom VideoType(Guid subtype, int width, int height, int fps)
+    {
+        var type = Mf.MediaType();
+        try
+        {
+            Mf.Set(type, Mf.MajorType, Mf.Video);
+            Mf.Set(type, Mf.Subtype, subtype);
+            Mf.Set(type, Mf.FrameSize, Mf.Pair((uint)width, (uint)height));
+            Mf.Set(type, Mf.FrameRate, Mf.Pair((uint)fps, 1));
+            Mf.Set(type, Mf.PixelAspectRatio, Mf.Pair(1, 1));
+            Mf.Set(type, Mf.InterlaceMode, 2u);
+            return type;
+        }
+        catch { type.Dispose(); throw; }
+    }
+
+    static byte[] FramePixels(string path, int width, int height)
+    {
+        var source = AnimEncoder.LoadFrame(path);
+        BitmapSource bgra = source.Format == PixelFormats.Bgra32 ? source : new FormatConvertedBitmap(source, PixelFormats.Bgra32, null, 0);
+        var stride = checked(width * 4);
+        var bytes = new byte[checked(stride * height)];
+        bgra.CopyPixels(new System.Windows.Int32Rect(0, 0, width, height), bytes, stride, 0);
+        // RGB32 输入仍使用 DIB 的 bottom-up 布局，保留原来已经实测过的翻行行为。
+        FlipRows(bytes, stride, height);
+        return bytes;
+    }
+
     internal static void FlipRows(byte[] bytes, int stride, int h)
     {
         var row = new byte[stride];
-        // BlockCopy 前面要写 System.：这个文件 using 了 Windows.Storage.Streams，
-        // 那里面也有个 Buffer 类，不限定的话是二义引用。
         for (var y = 0; y < h / 2; y++)
         {
             var top = y * stride;
             var bottom = (h - 1 - y) * stride;
-            System.Buffer.BlockCopy(bytes, top, row, 0, stride);
-            System.Buffer.BlockCopy(bytes, bottom, bytes, top, stride);
-            System.Buffer.BlockCopy(row, 0, bytes, bottom, stride);
+            Buffer.BlockCopy(bytes, top, row, 0, stride);
+            Buffer.BlockCopy(bytes, bottom, bytes, top, stride);
+            Buffer.BlockCopy(row, 0, bytes, bottom, stride);
         }
     }
 
-    /// <summary>
-    /// 合成音频和视频到一个 MP4 文件。
-    ///
-    /// videoPath: 纯视频的 MP4 文件（从 MediaStreamSource 转码出来的）
-    /// audioPath: 系统声音文件（.wav，PCM）
-    /// outPath: 合成后的输出文件
-    ///
-    /// 使用 MediaComposition 来合并音视频轨。这是 WinRT 提供的高层 API，
-    /// 比直接操作 MediaFoundation 的 IMFSourceReader/IMFSinkWriter 简单很多。
-    /// </summary>
-    static async Task MuxAudioVideoAsync(
-        string videoPath, string audioPath, string outPath, CancellationToken ct = default)
+    /// <summary>流式读取 RIFF PCM，避免整段录音常驻；8/24/32 位整数 PCM 转为 AAC 接受的 16 位。</summary>
+    sealed class PcmWave : IDisposable
     {
-        ct.ThrowIfCancellationRequested();
-        var composition = new Windows.Media.Editing.MediaComposition();
+        readonly FileStream _stream;
+        readonly int _bits;
+        readonly int _alignment;
+        public uint Channels { get; }
+        public uint SampleRate { get; }
+        public long TotalFrames { get; }
 
-        // 加载视频文件
-        var videoFile = await StorageFile.GetFileFromPathAsync(videoPath);
-        var videoClip = await Windows.Media.Editing.MediaClip.CreateFromFileAsync(videoFile);
-        composition.Clips.Add(videoClip);
+        public PcmWave(string path)
+        {
+            _stream = File.OpenRead(path);
+            try
+            {
+                using var reader = new BinaryReader(_stream, Encoding.ASCII, leaveOpen: true);
+                if (Encoding.ASCII.GetString(reader.ReadBytes(4)) != "RIFF") throw new InvalidDataException("音频不是 RIFF WAV。");
+                var riffEnd = Math.Min(_stream.Length, reader.ReadUInt32() + 8L);
+                if (Encoding.ASCII.GetString(reader.ReadBytes(4)) != "WAVE") throw new InvalidDataException("音频不是 WAV。");
+                byte[]? format = null;
+                long dataOffset = 0;
+                long dataLength = 0;
+                while (_stream.Position + 8 <= riffEnd)
+                {
+                    var id = Encoding.ASCII.GetString(reader.ReadBytes(4));
+                    var length = reader.ReadUInt32();
+                    var start = _stream.Position;
+                    if (length > riffEnd - start) throw new InvalidDataException("WAV 数据块超过文件范围。");
+                    if (id == "fmt ")
+                    {
+                        if (length < 16 || length > 4096) throw new InvalidDataException("WAV 格式块无效。");
+                        format = reader.ReadBytes((int)length);
+                    }
+                    else if (id == "data" && dataOffset == 0) { dataOffset = start; dataLength = length; }
+                    _stream.Position = start + length + (length & 1);
+                }
+                if (format is null || dataOffset == 0) throw new InvalidDataException("WAV 缺少格式或音频数据。");
+                var tag = BinaryPrimitives.ReadUInt16LittleEndian(format);
+                if (tag == 0xfffe && format.Length >= 40)
+                {
+                    if (new Guid(format.AsSpan(24, 16)) != Mf.Pcm) throw new InvalidDataException("WAV 扩展格式不是整数 PCM。");
+                    tag = 1;
+                }
+                if (tag != 1) throw new InvalidDataException("音频需要整数 PCM WAV。");
+                Channels = BinaryPrimitives.ReadUInt16LittleEndian(format.AsSpan(2));
+                SampleRate = BinaryPrimitives.ReadUInt32LittleEndian(format.AsSpan(4));
+                _alignment = BinaryPrimitives.ReadUInt16LittleEndian(format.AsSpan(12));
+                _bits = BinaryPrimitives.ReadUInt16LittleEndian(format.AsSpan(14));
+                if (Channels is 0 or > 8 || SampleRate is 0 or > 384000 || _bits is not (8 or 16 or 24 or 32)
+                    || _alignment != Channels * (_bits / 8) || dataLength % _alignment != 0)
+                    throw new InvalidDataException("PCM 音频参数或数据长度无效。");
+                TotalFrames = dataLength / _alignment;
+                if (TotalFrames == 0) throw new InvalidDataException("WAV 没有音频样本。");
+                _stream.Position = dataOffset;
+            }
+            catch { _stream.Dispose(); throw; }
+        }
 
-        // 加载音频文件
-        var audioFile = await StorageFile.GetFileFromPathAsync(audioPath);
-        var audioClip = await Windows.Media.Editing.BackgroundAudioTrack.CreateFromFileAsync(audioFile);
-        composition.BackgroundAudioTracks.Add(audioClip);
+        public byte[] ReadFrames(int frames)
+        {
+            var input = new byte[checked(frames * _alignment)];
+            _stream.ReadExactly(input);
+            if (_bits == 16) return input;
+            var output = new byte[checked(frames * (int)Channels * 2)];
+            var sampleBytes = _bits / 8;
+            for (var source = 0; source < input.Length; source += sampleBytes)
+            {
+                var destination = source / sampleBytes * 2;
+                short sample = _bits switch
+                {
+                    8 => (short)((input[source] - 128) << 8),
+                    24 => BinaryPrimitives.ReadInt16LittleEndian(input.AsSpan(source + 1)),
+                    _ => (short)(BinaryPrimitives.ReadInt32LittleEndian(input.AsSpan(source)) >> 16),
+                };
+                BinaryPrimitives.WriteInt16LittleEndian(output.AsSpan(destination), sample);
+            }
+            return output;
+        }
 
-        // 渲染到输出文件
-        var dir = Path.GetDirectoryName(outPath)
-            ?? throw new InvalidOperationException("输出路径没有目录部分。");
-        Directory.CreateDirectory(dir);
-        var folder = await StorageFolder.GetFolderFromPathAsync(dir);
-        var file = await folder.CreateFileAsync(
-            Path.GetFileName(outPath), CreationCollisionOption.ReplaceExisting);
-
-        await composition.RenderToFileAsync(file, Windows.Media.Editing.MediaTrimmingPreference.Fast)
-                         .AsTask(ct);
+        public void Dispose() => _stream.Dispose();
     }
 }

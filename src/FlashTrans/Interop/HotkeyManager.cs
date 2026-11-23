@@ -9,7 +9,9 @@ namespace FlashTrans.Interop;
 public enum HotkeyAction
 {
     TranslateSelection, ToggleWindow, TranslateClipboard, ToggleSelection, NextProvider, CaptureOcr,
-    TogglePopup, QuickLaunch
+    TogglePopup, QuickLaunch,
+    /// <summary>只由长截图浮条注册；用于与全局和录制热键双向检查冲突。</summary>
+    LongShotToggle
 }
 
 /// <summary>全局热键注册。新键注册成功才释放旧键，避免冲突后连原入口也丢失。</summary>
@@ -48,6 +50,9 @@ public sealed class HotkeyManager(IntPtr hwnd) : IDisposable
                 return $"与「{binding.Label}」的快捷键 {spec} 重复";
         if (spec == HotkeySpec.Parse(RecordHud.PauseHotkey) || spec == HotkeySpec.Parse(RecordHud.CancelHotkey))
             return $"{spec} 已用于录制暂停或取消";
+        if (action != HotkeyAction.LongShotToggle && !string.IsNullOrWhiteSpace(s.LongShotToggleHotkey)
+            && spec == HotkeySpec.Parse(s.LongShotToggleHotkey))
+            return $"{spec} 已用于长截图开始/暂停";
 
         // 启动面板不能抢掉截图工具和翻译窗口的操作键。
         if (action == HotkeyAction.QuickLaunch)

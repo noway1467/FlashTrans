@@ -1,9 +1,12 @@
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using FlashTrans.Core;
 using FlashTrans.Interop;
 using FlashTrans.Services;
 using FlashTrans.Views;
@@ -42,12 +45,22 @@ static class LongShotProbe
         step("长截图：手动回滚和过快滚动可恢复，不重复拼接或跳过内容", ManualRecoveryProbe);
         step("长截图：手动连续小幅滚动不提前触发自动次数上限", ManualSmallStepsProbe);
         step("长截图：自动等待期间切回手动，再开启自动不丢帧", ModeSwitchProbe);
+        step("长截图：暂停期间零滚轮、零抓帧，手动和自动均逐像素续接", PauseResumeProbe);
+        step("长截图：稳定采样中暂停立即退出，恢复不重复发送滚轮", PauseDuringSamplingProbe);
+        step("长截图：首帧前暂停可取消，不抓屏不报失败", CancelBeforeFirstFrameProbe);
+        step("长截图：自定义最大高度与滚动间隔实际生效", OptionsProbe);
+        step("长截图：预览回调异常不影响主拼接", PreviewCallbackFaultProbe);
         step("长截图：自动中断保留现场，手动继续后再完成", AutomaticPauseProbe);
         step("长截图：短暂失配不提示回滚，持续失配提示可恢复", AlignmentFeedbackProbe);
         step("长截图：手动/自动浮条、完成按钮及深浅主题布局", HudProbe);
+        step("长截图：开始/暂停键边沿、自动启动、手动接管和预览开关", HudStateProbe);
+        RunFocus(step);
+        step("长截图：实时预览左右定位与无空间安全隐藏", LivePreviewPlacementProbe);
+        step("长截图：缩略增量精确裁尾、分片合并与视口重置", ThumbnailPatchProbe);
         step("长截图：100% 预览在不同 DPI 下保持物理像素一比一", PreviewDpiProbe);
         step("长截图：超长图分片虚拟化，缩放和滚到底后仍保留原像素", PreviewTilesProbe);
         step("长截图：默认适应宽度，记住窗口尺寸且最大化不覆盖普通尺寸", PreviewWindowSizeProbe);
+        step("长截图：完成预览遵循默认视图设置，显式参数可覆盖", PreviewFitSettingProbe);
         step("长截图：无损 PNG 往返不缩图、不改细线像素", LosslessExportProbe);
         step("长截图：真实 WPF 滚动、GDI 抓屏和拼接保持原像素", () => RealScrollPixelsProbe());
         step("长截图：真实 WPF 半透明底部浮层不进入拼接结果", () => RealScrollPixelsProbe(footerHeight: 32));
@@ -67,6 +80,13 @@ static class LongShotProbe
         if (index >= 0 && index + 1 < args.Length)
             step("动态长截图：真实浏览器播放视频的抓帧重放，正文与视频完整性验证",
                 () => BrowserVideoProbe(args[index + 1]));
+    }
+
+    public static void RunFocus(Action<string, Action> step)
+    {
+        step("长截图：真实热键不漏入页面，关闭释放注册，冲突降级可用", HudHotkeyProbe);
+        step("长截图：实时预览深浅渲染、虚拟化、开关与不抢焦点", LivePreviewWindowProbe);
+        step("长截图：宿主按设置打开预览或直接处理，None 动作仍弹预览", CompletionActionProbe);
     }
 
     static void BrowserVideoProbe(string directory)
@@ -206,6 +226,7 @@ static class LongShotProbe
             var offset = 0;
             var tick = 0;
             var samples = 0;
+            var preview = new PreviewCollector();
             var result = Task.Run(() => LongShotService.RunForTestAsync(new RECT { Right = W, Bottom = H },
                 _ =>
                 {
@@ -213,7 +234,9 @@ static class LongShotProbe
                     return VideoFrame(page, offset, ++tick, fullWidth);
                 }, _ => offset = Math.Min(600, offset + 60),
                 onProgress: (_, _) => ready = true, cancelled: () => samples >= 40 || tick >= 300,
-                delay: _ => Task.CompletedTask, automatic: () => automatic)).GetAwaiter().GetResult();
+                delay: _ => Task.CompletedTask, automatic: () => automatic, onPreview: preview.Accept)).GetAwaiter().GetResult();
+            preview.Verify(result);
+            Check(preview.TrimmedRows > 0, "动态视频接缝没有通过增量预览同步尾部替换");
             Check(result.Image is not null && result.Image.Width == W && result.Image.Height == H + 600,
                 $"{(automatic ? "自动" : "手动")}遇到播放中的视频就停住：{result.Stopped}，{result.Image?.Height} 行");
             var image = result.Image!;
@@ -477,6 +500,7 @@ static class LongShotProbe
         var ready = false;
         var samples = 0;
         var captures = 0;
+        var preview = new PreviewCollector();
         var result = Task.Run(() => LongShotService.RunForTestAsync(
             new RECT { Right = W, Bottom = H },
             _ =>
@@ -491,7 +515,9 @@ static class LongShotProbe
             }, _ => throw new InvalidOperationException("手动模式发送了滚轮"),
             onProgress: (_, _) => ready = true,
             cancelled: () => captures >= 60,
-            delay: _ => Task.CompletedTask, automatic: () => false)).GetAwaiter().GetResult();
+            delay: _ => Task.CompletedTask, automatic: () => false, onPreview: preview.Accept)).GetAwaiter().GetResult();
+        preview.Verify(result);
+        Check(preview.Refreshes > 0, "懒加载刷新没有发送替换尾部的预览增量");
         Check(result.Image is not null && result.Image.Height == H + 270
             && result.Image.Pixels.AsSpan().SequenceEqual(LongShotService.Crop(page, 0, H + 270)!.Pixels),
             "手动拼接保留了刷新中的透明横条或缺少正文");
@@ -548,13 +574,16 @@ static class LongShotProbe
         foreach (var appearsAt in new[] { 0, 2 })
         {
             var scrolls = 0;
+            var preview = new PreviewCollector();
             var result = Task.Run(() => LongShotService.RunForTestAsync(
                 new RECT { Right = W, Bottom = H },
                 _ =>
                 {
                     var frame = Frame(page, Math.Min(270, scrolls * 90));
                     return scrolls >= appearsAt ? WithTranslucentFooter(frame, footer) : frame;
-                }, _ => scrolls++, delay: _ => Task.CompletedTask)).GetAwaiter().GetResult();
+                }, _ => scrolls++, delay: _ => Task.CompletedTask, onPreview: preview.Accept)).GetAwaiter().GetResult();
+            preview.Verify(result);
+            Check(preview.TrimmedRows > 0, "裁除固定底栏没有同步预览");
             var expected = LongShotService.Crop(page, 0, H + 270 - footer)!;
             Check(result.Stopped == LongShotStop.Bottom && result.Image is not null
                 && result.Image.Pixels.AsSpan().SequenceEqual(expected.Pixels),
@@ -619,6 +648,7 @@ static class LongShotProbe
             var ready = false;
             var samples = 0;
             var offset = 0;
+            var preview = new PreviewCollector();
             var result = Task.Run(() => LongShotService.RunForTestAsync(
                 new RECT { Right = width, Bottom = height },
                 _ =>
@@ -627,7 +657,9 @@ static class LongShotProbe
                     return Nested(offset);
                 }, _ => offset = Math.Min(240, offset + 60),
                 onProgress: (_, _) => ready = true, cancelled: () => !automatic && samples >= 70,
-                delay: _ => Task.CompletedTask, automatic: () => automatic)).GetAwaiter().GetResult();
+                delay: _ => Task.CompletedTask, automatic: () => automatic, onPreview: preview.Accept)).GetAwaiter().GetResult();
+            preview.Verify(result);
+            Check(preview.Resets == 2, "锁定内层视口没有重置实时预览宽度与首帧");
             Check(result.Image is not null && result.Image.Width == W && result.Image.Height == H + 240,
                 $"嵌套区域边界错误：{result.Image?.Width}×{result.Image?.Height}，{result.Stopped}");
             Check(result.Image!.Pixels.AsSpan().SequenceEqual(LongShotService.Crop(page, 0, H + 240)!.Pixels),
@@ -776,6 +808,560 @@ static class LongShotProbe
             "手动连续小幅滚动被自动次数上限提前截断");
     }
 
+    static void PauseResumeProbe()
+    {
+        foreach (var automatic in new[] { false, true })
+        {
+            var page = Page(1200);
+            var offset = 0;
+            var captures = 0;
+            var wheels = 0;
+            var reports = 0;
+            var lostReports = 0;
+            var paused = false;
+            var pauseTicks = 0;
+            var ready = false;
+            var finished = false;
+            (int Captures, int Wheels, int Reports, int Lost) beforePause = default;
+            var result = Task.Run(() => LongShotService.RunForTestAsync(new RECT { Right = W, Bottom = H },
+                _ =>
+                {
+                    Check(!paused, "暂停期间抓了新帧");
+                    captures++;
+                    if (!automatic && ready) offset = Math.Min(270, offset + 90);
+                    return Frame(page, offset);
+                }, _ =>
+                {
+                    Check(automatic && !paused, "手动或暂停期间发送了滚轮");
+                    wheels++;
+                    offset = Math.Min(270, offset + 90);
+                }, onProgress: (_, frames) =>
+                {
+                    ready = true;
+                    reports++;
+                    if (frames == 2)
+                    {
+                        paused = true;
+                        beforePause = (captures, wheels, reports, lostReports);
+                    }
+                    if (frames == 4) finished = true;
+                }, cancelled: () => finished,
+                delay: milliseconds =>
+                {
+                    if (paused)
+                    {
+                        Check(milliseconds <= 60, "暂停轮询没有使用短周期");
+                        Check(beforePause == (captures, wheels, reports, lostReports), "暂停累计了帧、滚轮或失配反馈");
+                        if (++pauseTicks == 4) paused = false;
+                    }
+                    return Task.CompletedTask;
+                }, automatic: () => automatic, paused: () => paused,
+                onAlignmentLost: _ => lostReports++,
+                onAutomaticPaused: _ => throw new InvalidOperationException("暂停被误报为自动滚动失败"))).GetAwaiter().GetResult();
+            Check(pauseTicks == 4 && result.Stopped == LongShotStop.Cancelled && result.Frames == 4,
+                "暂停后没有继续完成拼接");
+            Check(result.Image!.Pixels.AsSpan().SequenceEqual(LongShotService.Crop(page, 0, H + 270)!.Pixels),
+                "暂停恢复后有缺行、重复或像素变化");
+        }
+    }
+
+    static void PauseDuringSamplingProbe()
+    {
+        var page = Page(1200);
+        var wheels = 0;
+        var captures = 0;
+        var paused = false;
+        var pauseTicks = 0;
+        var interrupted = false;
+        var finished = false;
+        var result = Task.Run(() => LongShotService.RunForTestAsync(new RECT { Right = W, Bottom = H },
+            _ => { Check(!paused, "稳定采样暂停后仍抓帧"); captures++; return Frame(page, wheels * 90); },
+            _ => { Check(!paused, "暂停后仍发送滚轮"); wheels++; },
+            onProgress: (_, frames) => { if (frames == 3) finished = true; }, cancelled: () => finished,
+            delay: milliseconds =>
+            {
+                if (paused)
+                {
+                    Check(captures == 1 && wheels == 1 && milliseconds <= 60, "暂停没有中断滚动等待");
+                    if (++pauseTicks == 4) paused = false;
+                }
+                else if (wheels == 1 && !interrupted) { interrupted = true; paused = true; }
+                return Task.CompletedTask;
+            }, automatic: () => true, paused: () => paused,
+            options: new LongShotOptions(ScrollIntervalMs: 600),
+            onAutomaticPaused: _ => throw new InvalidOperationException("采样暂停被误报失配"))).GetAwaiter().GetResult();
+        Check(interrupted && pauseTicks == 4 && wheels == 2 && result.Frames == 3 && result.Stopped == LongShotStop.Cancelled,
+            "恢复后重复滚了一步或提前结束");
+        Check(result.Image!.Pixels.AsSpan().SequenceEqual(LongShotService.Crop(page, 0, H + 180)!.Pixels),
+            "稳定采样暂停恢复丢失了拼接基准");
+    }
+
+    static void CancelBeforeFirstFrameProbe()
+    {
+        var ticks = 0;
+        var result = Task.Run(() => LongShotService.RunForTestAsync(new RECT { Right = W, Bottom = H },
+            _ => throw new InvalidOperationException("首帧前暂停仍抓屏"),
+            _ => throw new InvalidOperationException("首帧前暂停仍滚动"),
+            cancelled: () => ticks >= 4, paused: () => true,
+            delay: _ => { ticks++; return Task.CompletedTask; })).GetAwaiter().GetResult();
+        Check(result.Image is null && result.Frames == 0 && result.Stopped == LongShotStop.Cancelled,
+            "首帧前暂停取消被报为抓屏失败");
+    }
+
+    static void OptionsProbe()
+    {
+        var page = Page(6000);
+        var offset = 0;
+        var preview = new PreviewCollector();
+        var result = Task.Run(() => LongShotService.RunForTestAsync(new RECT { Right = W, Bottom = H },
+            _ => Frame(page, offset), _ => offset += 200, delay: _ => Task.CompletedTask,
+            options: new LongShotOptions(MaxHeight: 4000), onPreview: preview.Accept)).GetAwaiter().GetResult();
+        preview.Verify(result);
+        Check(result.Stopped == LongShotStop.Limit && result.Image?.Height == 4000
+            && result.Image.Pixels.AsSpan().SequenceEqual(LongShotService.Crop(page, 0, 4000)!.Pixels),
+            "自定义高度上限未触发 Limit 或末片裁剪不正确");
+
+        var firstOnly = Task.Run(() => LongShotService.RunForTestAsync(new RECT { Right = W, Bottom = 5000 },
+            _ => LongShotService.Crop(page, 0, 5000), _ => throw new InvalidOperationException("首屏超限仍发送滚轮"),
+            delay: _ => Task.CompletedTask, options: new LongShotOptions(MaxHeight: 3999))).GetAwaiter().GetResult();
+        Check(firstOnly.Stopped == LongShotStop.Limit && firstOnly.Frames == 1 && firstOnly.Image?.Height == 4000,
+            "首屏没有遵循夹取后的高度上限");
+
+        foreach (var requested in new[] { 1, 100, 380, 1000 })
+        {
+            var clock = 0;
+            var kickedAt = 0;
+            var firstSampleDelay = -1;
+            var scrolled = false;
+            var finished = false;
+            var timed = Task.Run(() => LongShotService.RunForTestAsync(new RECT { Right = W, Bottom = H },
+                _ =>
+                {
+                    if (scrolled && firstSampleDelay < 0) firstSampleDelay = clock - kickedAt;
+                    return Frame(page, scrolled ? 90 : 0);
+                }, _ => { scrolled = true; kickedAt = clock; },
+                onProgress: (_, frames) => finished = frames == 2, cancelled: () => finished,
+                delay: milliseconds => { clock += milliseconds; return Task.CompletedTask; },
+                options: new LongShotOptions(ScrollIntervalMs: requested))).GetAwaiter().GetResult();
+            Check(timed.Frames == 2 && firstSampleDelay == LongShotService.ClampScrollIntervalMs(requested),
+                $"自定义间隔 {requested}ms 未传入实际采样等待：{firstSampleDelay}ms");
+        }
+    }
+
+    static void PreviewCallbackFaultProbe()
+    {
+        var page = Page(1200);
+        var offset = 0;
+        var callbacks = 0;
+        var result = Task.Run(() => LongShotService.RunForTestAsync(new RECT { Right = W, Bottom = H },
+            _ => Frame(page, offset), _ => offset = Math.Min(270, offset + 90), delay: _ => Task.CompletedTask,
+            onPreview: _ => { callbacks++; throw new InvalidOperationException("预览回调故障注入"); })).GetAwaiter().GetResult();
+        Check(callbacks > 1 && result.Stopped == LongShotStop.Bottom && result.Frames == 4
+            && result.Image!.Pixels.AsSpan().SequenceEqual(LongShotService.Crop(page, 0, H + 270)!.Pixels),
+            "预览回调异常中断了原图拼接");
+    }
+
+    static void HudStateProbe()
+    {
+        var notices = new List<bool>();
+        var region = new RECT { Left = 80, Top = 80, Right = 400, Bottom = 420 };
+        var hud = new LongShotHud(region, "F2", livePreviewOn: true, onLivePreviewToggled: notices.Add);
+        try
+        {
+            hud.WatchEsc(true);
+            hud.WatchToggleChord(true);
+            hud.ToggleScroll();
+            Check(!hud.Cancelled && !hud.Automatic && !hud.Paused, "首帧前按住键误开始或误完成");
+            hud.Report(H, 1);
+            hud.WatchToggleChord(true);
+            Check(!hud.Automatic, "初始按住的快捷键未等待松开");
+            hud.WatchToggleChord(false); hud.WatchToggleChord(true); hud.WatchToggleChord(true);
+            Check(hud.Automatic && !hud.Paused, "首次按下未开始或按住键反复切换");
+            hud.WatchToggleChord(false); hud.WatchToggleChord(true); hud.WatchToggleChord(true);
+            Check(!hud.Automatic && hud.Paused, "第二次按下没有暂停");
+            hud.Report(H + 90, 2);
+            Check(hud.Paused, "在途进度报告解除了用户暂停");
+            hud.WatchToggleChord(false); hud.WatchToggleChord(true);
+            Check(hud.Automatic && !hud.Paused, "暂停后没有继续自动滚动");
+            hud.UseManualScroll();
+            Check(!hud.Automatic && !hud.Paused, "切回手动仍冻结抓帧");
+            hud.ToggleScroll();
+            Check(hud.Automatic, "手动接管后不能再开始自动滚动");
+            hud.ToggleLivePreview(); hud.ToggleLivePreview();
+            Check(hud.LivePreviewVisible && notices.SequenceEqual(new[] { false, true }), "实时预览开关没有通知宿主");
+            hud.ReportLivePreview(false, "选区两侧空间不足，实时预览已隐藏");
+            Check(!hud.LivePreviewVisible && Descendants<TextBlock>((Border)hud.Content).Any(t => t.Text.Contains("空间不足")),
+                "预览放不下时没有安全回告和提示");
+            Check(Descendants<Button>((Border)hud.Content).Single(b => b.Name == "LongShotMode").Content.ToString()!.Contains("F2"),
+                "开始/暂停按钮没有显示当前快捷键");
+            hud.WatchEsc(false); hud.WatchEsc(true);
+            Check(hud.Cancelled, "Esc 松开再按下没有完成截图");
+        }
+        finally { hud.Close(); }
+
+        var auto = new LongShotHud(region, "", autoStart: true);
+        try
+        {
+            auto.ToggleScroll();
+            Check(!auto.Automatic, "默认自动在首帧前发送滚轮");
+            auto.Report(H, 1);
+            Check(auto.Automatic && !auto.Paused, "首帧就绪没有按设置自动开始");
+            auto.ToggleScroll(); auto.Report(H + 90, 2);
+            Check(auto.Paused && !auto.Automatic, "后续进度再次触发了默认自动开始");
+            Check(!Descendants<Button>((Border)auto.Content).Single(b => b.Name == "LongShotMode").Content.ToString()!.Contains('('),
+                "关闭快捷键时按钮仍有空括号");
+            Check(Descendants<Button>((Border)auto.Content).Single(b => b.Name == "LongShotPreview").Visibility == Visibility.Collapsed,
+                "没有预览回调仍显示预览按钮");
+        }
+        finally { auto.Close(); }
+    }
+
+    static void HudHotkeyProbe()
+    {
+        var spec = AvailableToggleHotkey();
+        var foreground = Win32.GetForegroundWindow();
+        Win32.GetCursorPos(out var cursor);
+        var target = new Window { Content = new TextBox(), Width = 300, Height = 140, ShowInTaskbar = false, Topmost = true };
+        LongShotHud? hud = null;
+        RECT region = default;
+        var mouseToggleClicks = 0;
+        var leaked = 0;
+        var hotkeyMessages = 0;
+        var released = 0;
+        var hudHandle = IntPtr.Zero;
+        ThreadMessageEventHandler trace = (ref System.Windows.Interop.MSG message, ref bool handled) =>
+        {
+            if (message.hwnd == hudHandle && message.message == Win32.WM_HOTKEY) hotkeyMessages++;
+            if (message.message is Win32.WM_KEYUP or Win32.WM_SYSKEYUP && message.wParam.ToInt32() == spec.VirtualKey) released++;
+        };
+        ComponentDispatcher.ThreadFilterMessage += trace;
+        target.PreviewKeyDown += (_, e) => { if (e.Key == spec.Key || e.SystemKey == spec.Key) leaked++; };
+        try
+        {
+            target.Show(); Layout(target); FocusTarget(target); ((TextBox)target.Content).Focus();
+            var targetHandle = new WindowInteropHelper(target).Handle;
+            Check(Win32.GetWindowRect(targetHandle, out region), "无法取得热键测试窗口的真实区域");
+            hud = new LongShotHud(region, spec.ToString());
+            Descendants<Button>((Border)hud.Content).Single(b => b.Name == "LongShotMode").Click += (_, _) => mouseToggleClicks++;
+            hud.Show(); hud.Report(H, 1); Layout(hud);
+            hudHandle = new WindowInteropHelper(hud).Handle;
+            Check((bool)typeof(LongShotHud).GetField("_hotkeyOk", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(hud)!,
+                "空闲测试键没有注册在 HUD 上，不能当作原生热键验证");
+            Check(!hud.Automatic && !hud.Paused && mouseToggleClicks == 0, "准备焦点的点击误落到浮条上，尚未按热键就切换了状态");
+            InjectHotkey(spec, target, repeats: 4);
+            WaitFor(() => hud.Automatic, target, "真实长截图快捷键没有开始自动滚动");
+            Check(!hud.Paused && leaked == 0 && Win32.GetForegroundWindow() == targetHandle,
+                $"注册热键或焦点不正确：键={spec}，暂停={hud.Paused}，漏键={leaked}，目标={targetHandle}，前台={Win32.GetForegroundWindow()}");
+            InjectHotkey(spec, target, repeats: 3);
+            try { WaitFor(() => hud.Paused, target, "真实快捷键没有暂停滚动"); }
+            catch
+            {
+                Console.WriteLine($"       热键诊断：{spec}，WM_HOTKEY={hotkeyMessages}，松开消息={released}，漏键={leaked}，自动={hud.Automatic}，暂停={hud.Paused}，完成={hud.Cancelled}");
+                throw;
+            }
+            Check(!hud.Automatic && leaked == 0, "按住热键来回翻转或泄漏进页面");
+            InjectHotkey(new HotkeySpec(spec.Modifiers | ModifierKeys.Shift, spec.Key), target); Layout(target);
+            Check(hud.Paused, "额外修饰键仍触发长截图切换");
+            InjectHotkey(spec, target);
+            WaitFor(() => hud.Automatic && !hud.Paused, target, "真实快捷键没有继续滚动");
+            Check(hotkeyMessages == 3, $"按住按键触发了多余热键消息：{hotkeyMessages}");
+            Check(mouseToggleClicks == 0, "焦点准备的鼠标输入混入了热键状态验证");
+            Console.WriteLine($"       {spec}：开始、暂停、继续各 1 条 WM_HOTKEY，按住不连发，前两次按键未漏入页面");
+        }
+        catch
+        {
+            Console.WriteLine($"       热键现场：{spec}，WM_HOTKEY={hotkeyMessages}，鼠标切换={mouseToggleClicks}，漏键={leaked}，自动={hud?.Automatic}，暂停={hud?.Paused}，完成={hud?.Cancelled}，前台={Win32.GetForegroundWindow()}");
+            throw;
+        }
+        finally
+        {
+            ComponentDispatcher.ThreadFilterMessage -= trace;
+            hud?.Close(); target.Close(); Win32.SetCursorPos(cursor.X, cursor.Y);
+            if (foreground != IntPtr.Zero) Win32.SetForegroundWindow(foreground);
+        }
+
+        using var blocker = new MessageWindow("LongShot.Toggle.Blocker");
+        Check(Win32.RegisterHotKey(blocker.Handle, 0x7161, spec.Win32Modifiers, spec.VirtualKey), "HUD 关闭后没有释放快捷键");
+        var fallback = new LongShotHud(region, spec.ToString());
+        try
+        {
+            fallback.Show(); fallback.Report(H, 1); Layout(fallback);
+            fallback.WatchToggleChord(false); fallback.WatchToggleChord(true); fallback.WatchToggleChord(true);
+            Check(fallback.Automatic && !fallback.Paused, "注册失败后边沿轮询不可用");
+            fallback.WatchToggleChord(false); fallback.WatchToggleChord(true); fallback.WatchToggleChord(true);
+            Check(!fallback.Automatic && fallback.Paused, "注册失败后暂停轮询重复翻转");
+        }
+        finally { fallback.Close(); Win32.UnregisterHotKey(blocker.Handle, 0x7161); }
+    }
+
+    static void LivePreviewPlacementProbe()
+    {
+        var monitor = new Rect(0, 0, 1280, 720);
+        var right = Verify(new Rect(100, 80, 680, 500), monitor);
+        Check(right.Left >= 790, "有空间时未优先右置预览");
+        var left = Verify(new Rect(420, 80, 800, 500), monitor);
+        Check(left.Right <= 410, "右侧不足时未改为左置");
+        var narrow = Verify(new Rect(40, 80, 1000, 500), monitor);
+        Check(narrow.Width is >= 176 and < 240, "侧边有限空间没有缩窄预览");
+        var exactRight = Verify(new Rect(40, 80, 1054, 500), monitor);
+        var exactLeft = Verify(new Rect(186, 80, 1050, 500), monitor);
+        Check(exactRight.Width == 176 && exactLeft.Width == 176, "恰好最小宽度的侧边空间没有使用");
+        Verify(new Rect(-1100, -30, 600, 1000), new Rect(-1280, 0, 1280, 720));
+        Verify(new Rect(20, 20, 120, 180), new Rect(0, 0, 360, 300));
+        foreach (var selection in new[] { monitor, new Rect(10, 20, 1260, 640), new Rect(150, 20, 1000, 650) })
+            Check(LongShotLivePreviewWindow.TryPlaceOutside(selection, monitor) is null, "左右不足仍将预览压入选区");
+
+        static Rect Verify(Rect selection, Rect monitor)
+        {
+            var placed = LongShotLivePreviewWindow.TryPlaceOutside(selection, monitor)
+                ?? throw new InvalidOperationException("有足够侧边空间却没有放置预览");
+            Check(!placed.IntersectsWith(selection) && monitor.Contains(placed) && placed.Width >= 176,
+                "实时预览与选区相交或越过显示器边界");
+            return placed;
+        }
+    }
+
+    static void ThumbnailPatchProbe()
+    {
+        var page = DetailedPage(440, 5000);
+        var replacement = DetailedPage(440, 1001);
+        var buffer = new LongShotLivePreviewWindow.ThumbnailBuffer();
+        var stripes = new List<BitmapSource>();
+        Apply(new LongShotPreviewPatch(0, LongShotService.Crop(page, 0, 1401), 440, 1401, 1, Reset: true));
+        var firstStripe = stripes[0];
+        Apply(new LongShotPreviewPatch(0, LongShotService.Crop(page, 1401, 1300), 440, 2701, 2));
+        Check(ReferenceEquals(firstStripe, stripes[0]), "追加重建了未变化的预览条带");
+        Apply(new LongShotPreviewPatch(701, LongShotService.Crop(page, 2000, 1001), 440, 3001, 3));
+        Apply(new LongShotPreviewPatch(1001, replacement, 440, 3001, 3));
+        var expected = LongShotService.Stack([LongShotService.Crop(page, 0, 2000)!, replacement], 440)!;
+        var reference = new LongShotLivePreviewWindow.ThumbnailBuffer().Apply(
+            new LongShotPreviewPatch(0, expected, 440, expected.Height, 3, Reset: true));
+        var actual = ReadThumbnails(stripes);
+        var want = ReadThumbnails(reference.Sources);
+        Check(actual.Height == 1501 && actual.Width == 220 && actual.Pixels.AsSpan().SequenceEqual(want.Pixels),
+            "奇数裁尾或刷新造成缩略图累计偏移、缺行或旧像素残留");
+        Check(stripes.All(s => s.IsFrozen && s.PixelHeight <= 512), "预览条带没有冻结或超过安全纹理高度");
+        var reset = DetailedPage(173, 1303);
+        Apply(new LongShotPreviewPatch(0, reset, reset.Width, reset.Height, 1, Reset: true));
+        Check(ReadThumbnails(stripes).Pixels.AsSpan().SequenceEqual(reset.Pixels), "视口重置保留了旧宽度或旧条带");
+        Apply(new LongShotPreviewPatch(reset.Height, null, reset.Width, 0, 1));
+        Check(stripes.Count == 0, "裁空尾部后仍留有条带");
+
+        void Apply(LongShotPreviewPatch patch)
+        {
+            var update = buffer.Apply(patch);
+            while (stripes.Count > update.FirstChangedStripe) stripes.RemoveAt(stripes.Count - 1);
+            stripes.AddRange(update.Sources);
+        }
+    }
+
+    static void LivePreviewWindowProbe()
+    {
+        var settings = SettingsService.Instance.Current;
+        var foreground = Win32.GetForegroundWindow();
+        Win32.GetCursorPos(out var cursor);
+        var work = ScreenHelper.WorkAreaAt(ScreenHelper.CursorPos());
+        var target = new Window
+        {
+            Content = new Border { Background = Brushes.White }, WindowStyle = WindowStyle.None,
+            ResizeMode = ResizeMode.NoResize, ShowInTaskbar = false, Topmost = true,
+            WindowStartupLocation = WindowStartupLocation.Manual,
+            Left = work.Left + 40, Top = work.Top + 40, Width = 280, Height = 320,
+        };
+        try
+        {
+            target.Show(); Layout(target); FocusTarget(target);
+            var dpi = VisualTreeHelper.GetDpi(target);
+            var origin = target.PointToScreen(new Point());
+            var region = new RECT { Left = (int)origin.X, Top = (int)origin.Y,
+                Right = (int)(origin.X + target.ActualWidth * dpi.DpiScaleX),
+                Bottom = (int)(origin.Y + target.ActualHeight * dpi.DpiScaleY) };
+            var targetHandle = new WindowInteropHelper(target).Handle;
+            foreach (var theme in new[] { AppTheme.Dark, AppTheme.Light })
+            {
+                ThemeService.ApplyTheme(theme);
+                var preview = new LongShotLivePreviewWindow(region);
+                try
+                {
+                    Check(preview.TryShowOutside(), "测试窗口侧边有空间却无法显示实时预览");
+                    Layout(preview);
+                    var tl = ScreenHelper.ToDip(new POINT { X = region.Left, Y = region.Top }, preview);
+                    var br = ScreenHelper.ToDip(new POINT { X = region.Right, Y = region.Bottom }, preview);
+                    Check(!new Rect(preview.Left, preview.Top, preview.ActualWidth, preview.ActualHeight).IntersectsWith(new Rect(tl, br)),
+                        "实际预览窗口压入被抓选区");
+                    var ex = Win32.GetWindowLong(new WindowInteropHelper(preview).Handle, Win32.GWL_EXSTYLE);
+                    Check((ex & Win32.WS_EX_NOACTIVATE) != 0 && (ex & Win32.WS_EX_TOOLWINDOW) != 0
+                        && !preview.ShowActivated && !preview.Focusable && Win32.GetForegroundWindow() == targetHandle,
+                        "预览没有设置不激活样式或显示时抢了焦点");
+                    var page = DetailedPage(440, 5000);
+                    preview.Enqueue(new LongShotPreviewPatch(0, LongShotService.Crop(page, 0, 1401), 440, 1401, 1, Reset: true));
+                    preview.Enqueue(new LongShotPreviewPatch(0, LongShotService.Crop(page, 1401, 1300), 440, 2701, 2));
+                    preview.Enqueue(new LongShotPreviewPatch(701, LongShotService.Crop(page, 2000, 1001), 440, 3001, 3));
+                    WaitFor(() => Descendants<TextBlock>(preview).Any(t => t.Text.Contains("440×3001")), target, "实时预览后台队列没有完成增量");
+                    Layout(preview);
+                    var list = Descendants<ListBox>(preview).Single(l => l.Name == "LongShotLiveTiles");
+                    var sources = list.Items.Cast<LongShotLivePreviewWindow.PreviewStripe>().Select(s => s.Source).ToArray();
+                    var reference = new LongShotLivePreviewWindow.ThumbnailBuffer().Apply(new LongShotPreviewPatch(0,
+                        LongShotService.Crop(page, 0, 3001), 440, 3001, 3, Reset: true));
+                    Check(ReadThumbnails(sources).Pixels.AsSpan().SequenceEqual(ReadThumbnails(reference.Sources).Pixels),
+                        "WPF 收到的增量条带与拼接内容不同");
+                    Check(Descendants<Image>(list).Count() > 0 && Descendants<Image>(list).Count() < list.Items.Count,
+                        "实时预览没有虚拟化可见条带");
+                    var scroll = Descendants<ScrollViewer>(list).First();
+                    Check(scroll.VerticalOffset > 0 && scroll.ExtentHeight - scroll.ViewportHeight - scroll.VerticalOffset < 2,
+                        "预览更新后没有滚到最新尾部");
+                    SaveHud(preview, $"longshot-live-{theme}.png");
+                    var point = preview.PointToScreen(new Point(20, 20));
+                    Win32.SetCursorPos((int)point.X, (int)point.Y);
+                    INPUT[] click = [MouseInput(0x0002), MouseInput(0x0004)];
+                    Check(Win32.SendInput(2, click, Marshal.SizeOf<INPUT>()) == 2, "不能向预览发送真实点击");
+                    Layout(target);
+                    Check(Win32.GetForegroundWindow() == targetHandle, "点击实时预览抢走目标窗口焦点");
+                    preview.Hide();
+                    var reset = DetailedPage(240, 90);
+                    preview.Enqueue(new LongShotPreviewPatch(0, reset, 240, 90, 1, Reset: true));
+                    WaitFor(() => Descendants<TextBlock>(preview).Any(t => t.Text.Contains("240×90")), target, "隐藏期间未接收预览重置");
+                    Check(preview.TryShowOutside(), "隐藏后无法重新显示预览"); Layout(preview);
+                    Check(list.Items.Count == 1 && Win32.GetForegroundWindow() == targetHandle, "重新显示残留旧条带或抢了焦点");
+                }
+                finally
+                {
+                    preview.Close();
+                    WaitFor(() => preview.Completion.IsCompleted, target, "预览关闭后后台队列未退出");
+                }
+            }
+
+            var monitor = Win32.MonitorFromWindow(targetHandle, Win32.MONITOR_DEFAULTTONEAREST);
+            var info = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+            Check(Win32.GetMonitorInfo(monitor, ref info), "无法取得全屏预览测试区域");
+            var full = new LongShotLivePreviewWindow(info.rcMonitor);
+            try { Check(!full.TryShowOutside() && !full.IsVisible, "全屏选区仍显示了污染截图的实时预览"); }
+            finally { full.Close(); WaitFor(() => full.Completion.IsCompleted, target, "隐藏预览的后台队列未退出"); }
+
+            var failed = new LongShotLivePreviewWindow(region);
+            try
+            {
+                failed.Enqueue(new LongShotPreviewPatch(0, null, 0, 0, 0, Reset: true));
+                WaitFor(() => failed.Completion.IsCompleted, target, "坏预览增量没有结束后台处理");
+                Check(!failed.Completion.IsFaulted, "后台预览异常没有被记录和隔离");
+                var queue = (System.Threading.Channels.Channel<LongShotPreviewPatch>)typeof(LongShotLivePreviewWindow)
+                    .GetField("_queue", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(failed)!;
+                Check(queue.Reader.Completion.IsCompleted, "后台失败后仍接收预览，可能无限积压原图");
+                var image = DetailedPage(240, 90);
+                failed.Enqueue(new LongShotPreviewPatch(0, image, 240, 90, 1, Reset: true));
+                Check(!queue.Writer.TryWrite(new LongShotPreviewPatch(0, image, 240, 90, 1, Reset: true)),
+                    "预览失败后队列仍接收新分片");
+            }
+            finally { failed.Close(); }
+        }
+        finally
+        {
+            target.Close(); ThemeService.Apply(settings);
+            Win32.SetCursorPos(cursor.X, cursor.Y);
+            if (foreground != IntPtr.Zero) Win32.SetForegroundWindow(foreground);
+        }
+    }
+
+    static void PreviewFitSettingProbe()
+    {
+        var original = SettingsService.Instance.Current;
+        try
+        {
+            var settings = AppSettings.CreateDefault();
+            settings.LongShotPreviewWidth = 480;
+            settings.LongShotPreviewHeight = 420;
+            foreach (var theme in new[] { AppTheme.Dark, AppTheme.Light })
+            foreach (var fit in new[] { false, true })
+            {
+                settings.LongShotPreviewFitWidth = fit;
+                SettingsService.Instance.Apply(settings);
+                ThemeService.ApplyTheme(theme);
+                foreach (var explicitOverride in new[] { false, true })
+                {
+                    var expectedFit = explicitOverride ? !fit : fit;
+                    var window = new LongShotWindow(DetailedPage(1200, 2400), "默认视图设置",
+                        explicitOverride ? !fit : null) { ShowActivated = false, ShowInTaskbar = false };
+                    try
+                    {
+                        window.Show(); Layout(window);
+                        var scroll = Descendants<ScrollViewer>(window).First();
+                        Check(expectedFit ? scroll.ExtentWidth <= scroll.ViewportWidth + 2 : scroll.ExtentWidth > scroll.ViewportWidth,
+                            "完成预览未遵循设置或可选参数的适应宽度选择");
+                        if (!expectedFit)
+                        {
+                            var dpi = VisualTreeHelper.GetDpi(window);
+                            var tile = Descendants<Image>(window).First();
+                            Check(Math.Abs(tile.ActualWidth * dpi.DpiScaleX - 1200) <= 1, "默认原始大小不是真正 100% 物理像素");
+                        }
+                        if (!explicitOverride) SaveHud(window, $"longshot-view-{theme}-{(fit ? "fit" : "original")}.png");
+                    }
+                    finally { window.Close(); }
+                }
+            }
+        }
+        finally { SettingsService.Instance.Apply(original); ThemeService.Apply(original); }
+    }
+
+    static void CompletionActionProbe()
+    {
+        var original = SettingsService.Instance.Current;
+        var foreground = Win32.GetForegroundWindow();
+        Win32.GetCursorPos(out var cursor);
+        var work = ScreenHelper.WorkAreaAt(ScreenHelper.CursorPos());
+        var target = new Window { Content = new Border { Background = Brushes.White },
+            WindowStyle = WindowStyle.None, ResizeMode = ResizeMode.NoResize, ShowInTaskbar = false, Topmost = true,
+            WindowStartupLocation = WindowStartupLocation.Manual, Left = work.Left + 40, Top = work.Top + 80,
+            Width = 280, Height = 340 };
+        try
+        {
+            target.Show(); Layout(target); FocusTarget(target);
+            var origin = target.PointToScreen(new Point(10, 10));
+            var region = new RECT { Left = (int)origin.X, Top = (int)origin.Y,
+                Right = (int)origin.X + W, Bottom = (int)origin.Y + H };
+            foreach (var (showPreview, action, wantsPreview) in new[]
+                { (true, CaptureAction.Pin, true), (false, CaptureAction.Pin, false), (false, CaptureAction.None, true) })
+            {
+                var settings = AppSettings.CreateDefault();
+                settings.LongShotShowPreview = showPreview;
+                settings.LongShotLivePreview = false;
+                settings.CaptureEnterAction = action;
+                SettingsService.Instance.Apply(settings);
+                var before = Application.Current.Windows.Cast<Window>().ToHashSet();
+                var method = typeof(AppHost).GetMethod("LongShotAsync", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+                var task = (Task)method.Invoke(new AppHost(), [region])!;
+                try
+                {
+                    WaitFor(() => Application.Current.Windows.OfType<LongShotHud>().Any(h =>
+                        !before.Contains(h) && Descendants<Button>(h).Single(b => b.Name == "LongShotMode").IsEnabled),
+                        target, "宿主长截图首帧未就绪");
+                    var hud = Application.Current.Windows.OfType<LongShotHud>().Single(h => !before.Contains(h));
+                    Descendants<Button>(hud).Single(b => b.Name == "LongShotFinish").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    WaitFor(() => task.IsCompleted, target, "宿主长截图没有完成收尾");
+                    task.GetAwaiter().GetResult();
+                    var created = Application.Current.Windows.Cast<Window>().Where(w => !before.Contains(w)).ToArray();
+                    Check(created.OfType<LongShotWindow>().Count() == (wantsPreview ? 1 : 0)
+                        && created.OfType<PinnedShotWindow>().Count() == (wantsPreview ? 0 : 1),
+                        "完成预览开关或 None 动作的兜底路径不正确");
+                    Check(!created.OfType<LongShotHud>().Any() && !created.OfType<LongShotLivePreviewWindow>().Any(),
+                        "宿主完成后仍留有浮条或后台预览窗");
+                }
+                finally
+                {
+                    foreach (var hud in Application.Current.Windows.OfType<LongShotHud>().Where(h => !before.Contains(h)).ToArray())
+                        Descendants<Button>(hud).Single(b => b.Name == "LongShotFinish").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    if (!task.IsCompleted) WaitFor(() => task.IsCompleted, target, "宿主长截图测试清理超时");
+                    foreach (var window in Application.Current.Windows.Cast<Window>().Where(w => !before.Contains(w)).ToArray()) window.Close();
+                }
+            }
+        }
+        finally
+        {
+            target.Close(); SettingsService.Instance.Apply(original); ThemeService.Apply(original);
+            Win32.SetCursorPos(cursor.X, cursor.Y);
+            if (foreground != IntPtr.Zero) Win32.SetForegroundWindow(foreground);
+        }
+    }
+
     static void HudProbe()
     {
         try
@@ -783,7 +1369,9 @@ static class LongShotProbe
             foreach (var theme in new[] { FlashTrans.Core.AppTheme.Dark, FlashTrans.Core.AppTheme.Light })
             {
                 ThemeService.ApplyTheme(theme);
-                var hud = new LongShotHud(new RECT { Left = 80, Top = 80, Right = 700, Bottom = 500 });
+                var previewToggles = new List<bool>();
+                var region = new RECT { Left = 80, Top = 80, Right = 700, Bottom = 500 };
+                var hud = new LongShotHud(region, "F2", livePreviewOn: true, onLivePreviewToggled: previewToggles.Add);
                 try
                 {
                     hud.Show(); Layout(hud);
@@ -793,27 +1381,33 @@ static class LongShotProbe
                     Check(mode.IsEnabled, "首帧完成后未启用切换");
                     SaveHud(hud, $"longshot-hud-{theme}-manual.png");
                     mode.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Layout(hud);
-                    Check(hud.Automatic && !hud.Cancelled && mode.Content is "手动滚动", "切换自动时误结束或文案不正确");
+                    Check(hud.Automatic && !hud.Paused && !hud.Cancelled && mode.Content is string playing
+                        && playing.StartsWith("暂停滚动"), "切换自动时误结束或文案不正确");
                     SaveHud(hud, $"longshot-hud-{theme}-auto.png");
                     mode.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    Check(hud.Paused && !hud.Automatic, "自动按钮没有进入真正的暂停状态");
+                    hud.UseManualScroll();
                     hud.ReportAlignmentLost(true); Layout(hud);
                     Check(!hud.Automatic && Descendants<TextBlock>(hud).Any(t => t.Text.Contains("重叠区域"))
                         && !Descendants<TextBlock>(hud).Any(t => t.Text.Contains("回滚")), "手动失配提示仍武断地要求回滚");
                     SaveHud(hud, $"longshot-hud-{theme}-recover.png");
                     hud.PauseAutomatic(LongShotStop.Diverged); Layout(hud);
-                    Check(!hud.Automatic && !hud.Cancelled && mode.Content is "自动滚动"
+                    Check(!hud.Automatic && !hud.Paused && !hud.Cancelled && mode.Content is string stopped && stopped.StartsWith("自动滚动")
                         && Descendants<TextBlock>(hud).Any(t => t.Text.Contains("已切到手动")), "自动暂停未保留手动继续入口");
                     SaveHud(hud, $"longshot-hud-{theme}-paused.png");
+                    Descendants<Button>(hud).Single(b => b.Name == "LongShotPreview").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    Check(!hud.LivePreviewVisible && previewToggles.SequenceEqual(new[] { false }), "浮条预览按钮未切换状态");
                     foreach (var width in new[] { 360d, 768d, 1280d })
                     {
                         hud.SizeToContent = SizeToContent.Height;
                         hud.Width = width;
-                        Layout(hud);
-                        foreach (var button in Descendants<Button>(hud))
+                        hud.UseManualScroll();
+                        for (var state = 0; state < 3; state++)
                         {
-                            var bounds = button.TransformToAncestor(hud).TransformBounds(new Rect(button.RenderSize));
-                            Check(bounds.Right <= hud.ActualWidth && bounds.Bottom <= hud.ActualHeight,
-                                $"浮条 {width} 宽时按钮溢出");
+                            if (state > 0) hud.ToggleScroll();
+                            Layout(hud);
+                            VerifyBounds(hud, width);
+                            SaveHud(hud, $"longshot-hud-{theme}-{width}-{state}.png");
                         }
                     }
                     Descendants<Button>(hud).Single(b => b.Name == "LongShotFinish")
@@ -821,9 +1415,32 @@ static class LongShotProbe
                     Check(hud.Cancelled, "完成按钮未结束截图");
                 }
                 finally { hud.Close(); }
+                var longKey = new LongShotHud(region, "Ctrl+Alt+Shift+Win+F12", livePreviewOn: true,
+                    onLivePreviewToggled: _ => { });
+                try
+                {
+                    longKey.Show(); longKey.Report(60000, 200);
+                    foreach (var width in new[] { 360d, 768d, 1280d })
+                    {
+                        longKey.SizeToContent = SizeToContent.Height; longKey.Width = width;
+                        longKey.ToggleScroll(); Layout(longKey); VerifyBounds(longKey, width);
+                        SaveHud(longKey, $"longshot-hud-{theme}-{width}-longkey.png");
+                    }
+                }
+                finally { longKey.Close(); }
             }
         }
         finally { ThemeService.ApplyTheme(FlashTrans.Core.AppTheme.Dark); }
+
+        static void VerifyBounds(LongShotHud hud, double width)
+        {
+            foreach (var button in Descendants<Button>(hud).Where(b => b.Visibility == Visibility.Visible))
+            {
+                var bounds = button.TransformToAncestor(hud).TransformBounds(new Rect(button.RenderSize));
+                Check(bounds.Left >= 0 && bounds.Right <= hud.ActualWidth + 0.1 && bounds.Bottom <= hud.ActualHeight + 0.1,
+                    $"浮条 {width} 宽时按钮溢出：{button.Name}");
+            }
+        }
     }
 
     static void SaveHud(Window window, string name)
@@ -941,7 +1558,7 @@ static class LongShotProbe
         var originalWidth = settings.LongShotPreviewWidth;
         var originalHeight = settings.LongShotPreviewHeight;
         var page = DetailedPage(513, 40017);
-        var window = new LongShotWindow(page, "原始像素测试")
+        var window = new LongShotWindow(page, "原始像素测试", fitWidth: true)
         {
             WindowStartupLocation = WindowStartupLocation.Manual,
             Left = -4000, Top = -4000, Width = 420, Height = 480,
@@ -1025,7 +1642,7 @@ static class LongShotProbe
             foreach (var theme in new[] { FlashTrans.Core.AppTheme.Light, FlashTrans.Core.AppTheme.Dark })
             {
                 ThemeService.ApplyTheme(theme);
-                var window = new LongShotWindow(image, "宽图预览 Wide image") { ShowActivated = false };
+                var window = new LongShotWindow(image, "宽图预览 Wide image", fitWidth: true) { ShowActivated = false };
                 try
                 {
                     window.Show(); Layout(window);
@@ -1149,8 +1766,31 @@ static class LongShotProbe
             region.Bottom = region.Top + H;
             using var capture = ScreenCaptureSession.Open(region.Left, region.Top, W, H)
                 ?? throw new InvalidOperationException("真实滚动自测无法创建抓屏会话");
+            var initial = Frame(page, 0);
+            // WPF 布局完成不代表 DWM 已合成；先确认真实首屏，避免把上一窗口的残影当成正文。
+            WaitFor(() =>
+            {
+                var visible = capture.Grab();
+                if (visible is null) return false;
+                if (!animated) return visible.Pixels.AsSpan(0, (H - footerHeight) * initial.Stride)
+                    .SequenceEqual(initial.Pixels.AsSpan(0, (H - footerHeight) * initial.Stride));
+                for (var y = 0; y < H - footerHeight; y++)
+                    for (var x = 0; x < W; x++)
+                    {
+                        if (y is >= 180 and < 350 && x is >= 24 and < W - 24) continue;
+                        var at = y * initial.Stride + x * 4;
+                        if (!visible.Pixels.AsSpan(at, 4).SequenceEqual(initial.Pixels.AsSpan(at, 4))) return false;
+                    }
+                return true;
+            }, window, "真实测试首屏尚未显示，不能开始像素拼接验证");
             var offset = 0;
-            var task = Task.Run(() => LongShotService.RunForTestAsync(region, _ => capture.Grab(),
+            CapturedImage? firstObserved = null;
+            var task = Task.Run(() => LongShotService.RunForTestAsync(region, _ =>
+                {
+                    var image = capture.Grab();
+                    firstObserved ??= image;
+                    return image;
+                },
                 _ => window.Dispatcher.Invoke(() => scroll.ScrollToVerticalOffset((offset = Math.Min(600, offset + 90)) / dpi.DpiScaleY)),
                 cancelled: () => stop.IsCancellationRequested,
                 delay: _ => Task.Delay(15)));
@@ -1159,7 +1799,18 @@ static class LongShotProbe
             Check(result.Stopped == LongShotStop.Bottom && result.Image is not null && result.Frames > 1,
                 $"真实滚动未完成：{result.Stopped}，{result.Frames} 屏");
             var expected = LongShotService.Crop(page, 0, page.Height - footerHeight)!;
-            Check(result.Image!.Width == page.Width && result.Image.Height == expected.Height, "真实滚动拼接丢失了原始尺寸");
+            Console.WriteLine($"       真实滚动输出 {result.Image!.Width}×{result.Image.Height}，预期 {expected.Width}×{expected.Height}，{result.Frames} 段，滚动位置 {offset}");
+            if (footerHeight == 0 && !animated)
+            {
+                var firstMatches = firstObserved is not null && firstObserved.Pixels.AsSpan().SequenceEqual(Frame(page, 0).Pixels);
+                Console.WriteLine($"       初屏与测试正文逐像素一致：{firstMatches}");
+                var args = Environment.GetCommandLineArgs();
+                var previewIndex = Array.IndexOf(args, "--preview-dir");
+                if (previewIndex >= 0 && previewIndex + 1 < args.Length)
+                    firstObserved?.SavePng(Path.Combine(args[previewIndex + 1], "longshot-real-first.png"));
+            }
+            Check(result.Image.Width == page.Width && result.Image.Height == expected.Height,
+                $"真实滚动拼接尺寸不正确：{result.Image.Width}×{result.Image.Height}，预期 {expected.Width}×{expected.Height}");
             if (animated)
             {
                 Check(animationTicks >= 10, "实际动画没有持续播放，测试无效");
@@ -1287,7 +1938,9 @@ static class LongShotProbe
             Click(mode);
             Check(hud.Automatic && !hud.Cancelled, "真实点击自动滚动没有切换模式");
             Click(mode);
-            Check(!hud.Automatic && !hud.Cancelled, "真实点击手动滚动没有切回模式");
+            Check(!hud.Automatic && hud.Paused && !hud.Cancelled, "真实点击暂停没有停住自动滚动");
+            Click(Descendants<Button>(hud).Single(b => b.Name == "LongShotManual"));
+            Check(!hud.Automatic && !hud.Paused && !hud.Cancelled, "真实点击手动滚动没有切回模式");
             Check(Win32.GetForegroundWindow() == targetHandle,
                 $"浮条按钮抢走了被截窗口的焦点：目标={targetHandle}，浮条={new System.Windows.Interop.WindowInteropHelper(hud).Handle}，实际={Win32.GetForegroundWindow()}");
             Win32.SetCursorPos((int)origin.X + W / 2, (int)origin.Y + H / 2);
@@ -1298,7 +1951,8 @@ static class LongShotProbe
                     Volatile.Write(ref stitched, frames);
                     window.Dispatcher.Invoke(() => hud.Report(value, frames));
                 },
-                cancelled: () => stop.IsCancellationRequested || hud.Cancelled, automatic: () => hud.Automatic));
+                cancelled: () => stop.IsCancellationRequested || hud.Cancelled, automatic: () => hud.Automatic,
+                paused: () => hud.Paused));
             Wait(() => Volatile.Read(ref height) == captureHeight, "手动截图首帧没有就绪");
             SendMouse(Win32.MOUSEEVENTF_WHEEL, unchecked((uint)-Win32.WHEEL_DELTA));
             Wait(() => Volatile.Read(ref stitched) > 1, "真实鼠标滚轮没有拼出新内容");
@@ -1367,6 +2021,149 @@ static class LongShotProbe
             Check(Win32.SendInput(1, inputs, System.Runtime.InteropServices.Marshal.SizeOf<INPUT>()) == 1,
                 "无法向测试窗口发送鼠标输入");
         }
+    }
+
+    sealed class PreviewCollector
+    {
+        CapturedImage? _image;
+        Exception? _failure;
+        public int Resets { get; private set; }
+        public int Refreshes { get; private set; }
+        public int TrimmedRows { get; private set; }
+
+        public void Accept(LongShotPreviewPatch patch)
+        {
+            try
+            {
+                if (patch.Reset) { _image = null; Resets++; }
+                var oldHeight = _image?.Height ?? 0;
+                Check(patch.TrimTailRows <= oldHeight, "预览增量裁掉了不存在的尾行");
+                var kept = oldHeight - patch.TrimTailRows;
+                var added = patch.AddedSlice?.Height ?? 0;
+                if (patch.TrimTailRows == added && patch.TrimTailRows > 0) Refreshes++;
+                TrimmedRows += patch.TrimTailRows;
+                Check(kept + added == patch.TotalHeight, "预览增量总高度错误");
+                var pixels = new byte[patch.TotalWidth * patch.TotalHeight * 4];
+                if (kept > 0) _image!.Pixels.AsSpan(0, kept * _image.Stride).CopyTo(pixels);
+                if (patch.AddedSlice is { } slice) slice.Pixels.CopyTo(pixels, kept * patch.TotalWidth * 4);
+                _image = new CapturedImage(patch.TotalWidth, patch.TotalHeight, pixels);
+            }
+            catch (Exception ex) { _failure ??= ex; }
+        }
+
+        public void Verify(LongShotResult result)
+        {
+            if (_failure is not null) throw new InvalidOperationException("预览增量回放失败", _failure);
+            Check(Resets > 0 && _image is not null && result.Image is not null
+                && _image.Width == result.Image.Width && _image.Height == result.Image.Height
+                && _image.Pixels.AsSpan().SequenceEqual(result.Image.Pixels), "预览增量与最终原图逐像素不一致");
+        }
+    }
+
+    static CapturedImage ReadThumbnails(IEnumerable<BitmapSource> source)
+    {
+        var bitmaps = source.ToArray();
+        Check(bitmaps.Length > 0, "缩略图没有条带");
+        var width = bitmaps[0].PixelWidth;
+        var height = bitmaps.Sum(b => b.PixelHeight);
+        var pixels = new byte[width * height * 4];
+        var offset = 0;
+        foreach (var bitmap in bitmaps)
+        {
+            Check(bitmap.IsFrozen && bitmap.PixelWidth == width && bitmap.PixelHeight <= LongShotLivePreviewWindow.StripeHeight,
+                "缩略条带尺寸、冻结或宽度不一致");
+            bitmap.CopyPixels(pixels, width * 4, offset);
+            offset += width * bitmap.PixelHeight * 4;
+        }
+        return new CapturedImage(width, height, pixels);
+    }
+
+    static HotkeySpec AvailableToggleHotkey()
+    {
+        using var message = new MessageWindow("LongShot.Toggle.Available");
+        foreach (var index in Enumerable.Range(1, 12))
+        {
+            // 单键截图的低级钩子也会收到带修饰键的合成输入，测试不选已经占用的那个主键。
+            var plain = HotkeySpec.Parse("F" + index);
+            if (!Win32.RegisterHotKey(message.Handle, 0x7162, plain.Win32Modifiers, plain.VirtualKey))
+            {
+                Console.WriteLine($"       跳过已占用的单键 {plain}");
+                continue;
+            }
+            Win32.UnregisterHotKey(message.Handle, 0x7162);
+            var spec = HotkeySpec.Parse("Ctrl+Alt+F" + index);
+            if (!Win32.RegisterHotKey(message.Handle, 0x7160, spec.Win32Modifiers, spec.VirtualKey)) continue;
+            Win32.UnregisterHotKey(message.Handle, 0x7160);
+            return spec;
+        }
+        throw new InvalidOperationException("没有可用于长截图真实热键测试的空闲组合键");
+    }
+
+    static void InjectHotkey(HotkeySpec spec, Window target, int repeats = 1)
+    {
+        var keys = new List<ushort>();
+        if (spec.Modifiers.HasFlag(ModifierKeys.Control)) keys.Add(Win32.VK_CONTROL);
+        if (spec.Modifiers.HasFlag(ModifierKeys.Alt)) keys.Add(Win32.VK_MENU);
+        if (spec.Modifiers.HasFlag(ModifierKeys.Shift)) keys.Add(Win32.VK_SHIFT);
+        if (spec.Modifiers.HasFlag(ModifierKeys.Windows)) keys.Add(Win32.VK_LWIN);
+        var inputs = keys.Select(k => KeyboardInput(k, false)).ToList();
+        inputs.AddRange(Enumerable.Repeat(KeyboardInput((ushort)spec.VirtualKey, false), repeats));
+        try
+        {
+            Check(Win32.SendInput((uint)inputs.Count, inputs.ToArray(), Marshal.SizeOf<INPUT>()) == inputs.Count,
+                "无法向测试目标发送完整热键");
+            // 按下和松开分别过消息循环，避免零时长合成输入与 MOD_NOREPEAT 的释放处理竞态。
+            Layout(target);
+        }
+        finally
+        {
+            var release = new List<INPUT> { KeyboardInput((ushort)spec.VirtualKey, true) };
+            release.AddRange(keys.AsEnumerable().Reverse().Select(k => KeyboardInput(k, true)));
+            Check(Win32.SendInput((uint)release.Count, release.ToArray(), Marshal.SizeOf<INPUT>()) == release.Count,
+                "测试热键未完整松开");
+            Layout(target);
+        }
+    }
+
+    static INPUT KeyboardInput(ushort key, bool up) => new()
+    {
+        type = Win32.INPUT_KEYBOARD,
+        u = new InputUnion { ki = new KEYBDINPUT { wVk = key, dwFlags = up ? Win32.KEYEVENTF_KEYUP : 0 } },
+    };
+
+    static INPUT MouseInput(uint flags) => new()
+    {
+        type = Win32.INPUT_MOUSE, u = new InputUnion { mi = new MOUSEINPUT { dwFlags = flags } },
+    };
+
+    static void FocusTarget(Window window)
+    {
+        // 后台自测仅调用 Activate 可能被系统前台锁拒绝；真实点击自己的测试窗口后再验证焦点。
+        var point = window.PointToScreen(new Point(window.ActualWidth / 2, window.ActualHeight / 2));
+        var target = new WindowInteropHelper(window).Handle;
+        var position = new POINT { X = (int)point.X, Y = (int)point.Y };
+        WaitFor(() => Win32.GetAncestor(Win32.WindowFromPoint(position), Win32.GA_ROOT) == target,
+            window, "测试目标被其他窗口遮住，不能向它发送焦点验证输入");
+        Win32.SetCursorPos((int)point.X, (int)point.Y);
+        INPUT[] click = [MouseInput(0x0002), MouseInput(0x0004)];
+        var released = false;
+        MouseButtonEventHandler onReleased = (_, _) => released = true;
+        window.PreviewMouseLeftButtonUp += onReleased;
+        try
+        {
+            Check(Win32.SendInput(2, click, Marshal.SizeOf<INPUT>()) == 2, "不能激活测试目标窗口");
+            WaitFor(() => released, window, "焦点点击尚未松开，不能显示浮条或预览");
+        }
+        finally { window.PreviewMouseLeftButtonUp -= onReleased; }
+        WaitFor(() => Win32.GetForegroundWindow() == target, window,
+            $"测试目标未取得焦点：目标={target}，实际前台={Win32.GetForegroundWindow()}");
+    }
+
+    static void WaitFor(Func<bool> done, Window window, string message)
+    {
+        var until = Environment.TickCount64 + 5000;
+        while (!done() && Environment.TickCount64 < until) { Layout(window); Thread.Sleep(5); }
+        Check(done(), message);
     }
 
     static void Check(bool condition, string message)

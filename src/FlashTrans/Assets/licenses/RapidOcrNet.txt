@@ -1,0 +1,25 @@
+RapidOcrEngine 的 PP-OCR 参数、预处理、DBNet 后处理、方向分类和 CTC 解码
+参考以下 Apache-2.0 项目，并改写为纯 C# BGRA32 图像处理：
+
+RapidOcrNet 4.1.0 — Copyright (c) BobLd, RapidOCR contributors
+https://github.com/BobLd/RapidOcrNet
+参考版本提交：e3f71c97ed106fec71aadb38a603a9382e444995
+
+RapidOCR — Copyright (c) RapidAI contributors
+https://github.com/RapidAI/RapidOCR
+
+修改：FlashTrans contributors，2026。
+移除 SkiaSharp 图像对象，保留本地 ONNX 模型与参数；新增纯 C# Mitchell
+采样、轮廓追踪、最小外接矩形、透视裁剪与取消处理。
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+    https://www.apache.org/licenses/LICENSE-2.0
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+完整 Apache-2.0 许可随程序附于 PaddleOCR.txt。

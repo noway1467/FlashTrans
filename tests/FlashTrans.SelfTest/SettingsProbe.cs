@@ -2,10 +2,12 @@ using System.Reflection;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using FlashTrans.Core;
+using FlashTrans.Interop;
 using FlashTrans.Services;
 using FlashTrans.Views;
 
@@ -22,6 +24,7 @@ static class SettingsProbe
     public static void RunUi(Action<string, Action> step, string? preview = null)
     {
         step("设置：深浅主题与最小窗口下说明最多两行", () => DescriptionLayout(preview));
+        step("设置：长截图录键、冲突拒绝、控件交互与保存", () => LongShotSettingsUi(preview));
         step("设置：OCR 控件切页、最小窗口与配置保存", UiProbe.OcrSettingsPageProbe);
         step("设置：系统 OCR 语言包状态、安装命令与系统设置入口", OcrLanguagePacks);
         step("主窗口：输入提示随内容显隐，空白时列出当前全局快捷键", () => MainWindowWelcome(preview));
@@ -116,6 +119,89 @@ static class SettingsProbe
                         if (preview is not null && tab is "capture" or "ocr" or "quicklaunch")
                             Snapshot(window, System.IO.Path.Combine(preview, $"settings-{tab}-{theme}-{width}.png"));
                     }
+                }
+                finally { window.Close(); }
+            }
+        }
+        finally { SettingsService.Instance.Apply(original); ThemeService.Apply(original); }
+    }
+
+    static void LongShotSettingsUi(string? preview)
+    {
+        var original = SettingsService.Instance.Current;
+        try
+        {
+            foreach (var theme in new[] { AppTheme.Dark, AppTheme.Light })
+            {
+                SettingsService.Instance.Apply(AppSettings.CreateDefault());
+                ThemeService.ApplyTheme(theme);
+                var window = new SettingsWindow(new AppHost()) { Width = 620, Height = 560, ShowInTaskbar = false };
+                try
+                {
+                    window.SelectTab("capture"); window.Show(); window.Activate(); Pump(); window.UpdateLayout();
+                    if (!Descendants<TextBlock>(window).Any(t => t.Text == "长截图"))
+                        throw new InvalidOperationException("截图页缺少独立长截图分组");
+                    var box = Descendants<TextBox>(window).Single(t => t.Name == nameof(AppSettings.LongShotToggleHotkey));
+                    var auto = Descendants<ComboBox>(window).Single(t => t.Name == nameof(AppSettings.LongShotAutoScroll));
+                    var interval = Descendants<Slider>(window).Single(t => t.Name == nameof(AppSettings.LongShotScrollIntervalMs));
+                    var maxHeight = Descendants<Slider>(window).Single(t => t.Name == nameof(AppSettings.LongShotMaxHeight));
+                    var live = Descendants<CheckBox>(window).Single(t => t.Name == nameof(AppSettings.LongShotLivePreview));
+                    var show = Descendants<CheckBox>(window).Single(t => t.Name == nameof(AppSettings.LongShotShowPreview));
+                    var fit = Descendants<ComboBox>(window).Single(t => t.Name == nameof(AppSettings.LongShotPreviewFitWidth));
+                    if (interval.Minimum != LongShotService.MinScrollIntervalMs || interval.Maximum != LongShotService.MaxScrollIntervalMs
+                        || interval.TickFrequency != 20 || maxHeight.Minimum != LongShotService.MinMaxHeight
+                        || maxHeight.Maximum != LongShotService.MaxMaxHeight || maxHeight.TickFrequency != 2000)
+                        throw new InvalidOperationException("长截图设置控件与引擎边界不一致");
+
+                    auto.SelectedIndex = 1;
+                    interval.Value = 240;
+                    maxHeight.Value = 18000;
+                    interval.RaiseEvent(new RoutedEventArgs(UIElement.LostFocusEvent));
+                    maxHeight.RaiseEvent(new RoutedEventArgs(UIElement.LostFocusEvent));
+                    live.IsChecked = false;
+                    show.IsChecked = false;
+                    fit.SelectedIndex = 1;
+                    box.BringIntoView(); Pump(); box.Focus(); Keyboard.Focus(box); Pump();
+                    if (!window.TryRecordHotkey(HotkeySpec.Parse("Ctrl+Shift+F8")) || box.Text != "Ctrl+Shift+F8")
+                        throw new InvalidOperationException("长截图录键框未接管已注册全局键的录制入口");
+                    foreach (var rejected in new[] { "F1", RecordHud.PauseHotkey, RecordHud.CancelHotkey, "A" })
+                    {
+                        if (!window.TryRecordHotkey(HotkeySpec.Parse(rejected)) || box.Text != "Ctrl+Shift+F8"
+                            || SettingsService.Instance.Current.LongShotToggleHotkey != "Ctrl+Shift+F8")
+                            throw new InvalidOperationException("冲突或非法键覆盖了原长截图快捷键：" + rejected);
+                    }
+                    Press(Key.Escape);
+                    if (!window.IsVisible || box.Text != "Ctrl+Shift+F8")
+                        throw new InvalidOperationException("录制 Esc 关闭了设置窗口或覆盖了快捷键");
+                    Press(Key.Back);
+                    if (box.Text != "" || SettingsService.Instance.Current.LongShotToggleHotkey != "")
+                        throw new InvalidOperationException("Backspace 没有关闭长截图快捷键");
+                    window.TryRecordHotkey(HotkeySpec.Parse("F8"));
+                    Press(Key.Delete);
+                    if (box.Text != "") throw new InvalidOperationException("Delete 没有清空长截图快捷键");
+                    window.TryRecordHotkey(HotkeySpec.Parse("F12"));
+
+                    foreach (var control in new FrameworkElement[] { box, auto, interval, maxHeight, live, show, fit })
+                    {
+                        control.BringIntoView(); Pump(); window.UpdateLayout();
+                        var bounds = control.TransformToAncestor(window).TransformBounds(new Rect(control.RenderSize));
+                        if (bounds.Right > window.ActualWidth - 8 || bounds.Left < 138 || control.ActualHeight <= 0)
+                            throw new InvalidOperationException("620px 长截图设置控件溢出：" + control.Name);
+                    }
+                    SettingsService.Instance.Load();
+                    var saved = SettingsService.Instance.Current;
+                    if (saved.LongShotToggleHotkey != "F12" || !saved.LongShotAutoScroll || saved.LongShotScrollIntervalMs != 240
+                        || saved.LongShotMaxHeight != 18000 || saved.LongShotLivePreview || saved.LongShotShowPreview || saved.LongShotPreviewFitWidth)
+                        throw new InvalidOperationException("长截图控件交互没有全部写入隔离配置");
+                    window.SelectTab("ocr"); window.SelectTab("capture"); Pump(); window.UpdateLayout();
+                    box = Descendants<TextBox>(window).Single(t => t.Name == nameof(AppSettings.LongShotToggleHotkey));
+                    if (box.Text != "F12" || Descendants<Slider>(window).Single(t => t.Name == nameof(AppSettings.LongShotScrollIntervalMs)).Value != 240)
+                        throw new InvalidOperationException("切页后长截图控件未恢复保存的值");
+                    box.BringIntoView(); Pump();
+                    if (preview is not null) Snapshot(window, System.IO.Path.Combine(preview, $"settings-longshot-{theme}-620.png"));
+
+                    void Press(Key key) => box.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice,
+                        PresentationSource.FromVisual(box)!, Environment.TickCount, key) { RoutedEvent = Keyboard.PreviewKeyDownEvent });
                 }
                 finally { window.Close(); }
             }
@@ -218,6 +304,9 @@ static class SettingsProbe
         step("设置：算出来的字段不落盘", NoComputedFields);
         step("设置：Normalize 不动设置页里能填到的边界值", BoundsMatchUi);
         step("设置：Normalize 反复跑结果不变", NormalizeIsStable);
+        step("设置：v17→v18 长截图默认值、旧热键让位与幂等迁移", LongShotMigration);
+        step("设置：长截图快捷键校验与规范化", LongShotHotkeyNormalization);
+        step("设置：长截图、全局与录制快捷键双向冲突检测", LongShotHotkeyConflicts);
         step("开机自启：从 Run 项的命令里取出 exe 路径", ParseCommand);
         step("开机自启：程序换了目录要认出来路径已经失效", DetectsMovedExe);
         step("开机自启：自测程序不许去改用户的 Run 项", RefusesFromForeignProcess);
@@ -318,6 +407,20 @@ static class SettingsProbe
             (s, v) => s.RecordFps = v, s => s.RecordFps);
         Check("录制时长", RecordService.MinSeconds, RecordService.MaxSeconds,
             (s, v) => s.RecordMaxSeconds = v, s => s.RecordMaxSeconds);
+        Check("自动滚动间隔", LongShotService.MinScrollIntervalMs, LongShotService.MaxScrollIntervalMs,
+            (s, v) => s.LongShotScrollIntervalMs = v, s => s.LongShotScrollIntervalMs);
+        Check("最大拼接高度", LongShotService.MinMaxHeight, LongShotService.MaxMaxHeight,
+            (s, v) => s.LongShotMaxHeight = v, s => s.LongShotMaxHeight);
+        foreach (var upper in new[] { false, true })
+        {
+            var broken = AppSettings.CreateDefault();
+            broken.LongShotScrollIntervalMs = upper ? int.MaxValue : int.MinValue;
+            broken.LongShotMaxHeight = upper ? int.MaxValue : int.MinValue;
+            SettingsService.Normalize(broken);
+            if (broken.LongShotScrollIntervalMs != (upper ? LongShotService.MaxScrollIntervalMs : LongShotService.MinScrollIntervalMs)
+                || broken.LongShotMaxHeight != (upper ? LongShotService.MaxMaxHeight : LongShotService.MinMaxHeight))
+                throw new InvalidOperationException("长截图越界值没有夹回 UI 范围");
+        }
 
         var brokenOcrSize = AppSettings.CreateDefault();
         brokenOcrSize.OcrResultWidth = double.NaN;
@@ -360,6 +463,95 @@ static class SettingsProbe
         SettingsService.Normalize(s);
         if (JsonSerializer.Serialize(s, SettingsJson.Default.AppSettings) != once)
             throw new InvalidOperationException("Normalize 跑第二遍又改了东西");
+    }
+
+    static void LongShotMigration()
+    {
+        var old = JsonSerializer.Deserialize("{\"version\":17}", SettingsJson.Default.AppSettings)!;
+        if (!SettingsService.Migrate(old) || old.Version != 18 || old.LongShotToggleHotkey != LongShotService.DefaultToggleHotkey
+            || old.LongShotAutoScroll || old.LongShotScrollIntervalMs != LongShotService.DefaultScrollIntervalMs
+            || old.LongShotMaxHeight != LongShotService.DefaultMaxHeight || !old.LongShotLivePreview
+            || !old.LongShotShowPreview || !old.LongShotPreviewFitWidth)
+            throw new InvalidOperationException("v17 缺失字段没有补齐长截图默认值");
+        var once = JsonSerializer.Serialize(old, SettingsJson.Default.AppSettings);
+        if (SettingsService.Migrate(old) || JsonSerializer.Serialize(old, SettingsJson.Default.AppSettings) != once)
+            throw new InvalidOperationException("v18 迁移不幂等");
+
+        foreach (var property in typeof(AppSettings).GetProperties().Where(p => p.Name.StartsWith("Hk") && p.PropertyType == typeof(string)))
+        {
+            var conflict = JsonSerializer.Deserialize("{\"version\":17}", SettingsJson.Default.AppSettings)!;
+            conflict.QuickLaunchEnabled = true;
+            property.SetValue(conflict, "F2");
+            SettingsService.Migrate(conflict);
+            if (conflict.LongShotToggleHotkey != "" || !Equals(property.GetValue(conflict), "F2"))
+                throw new InvalidOperationException("迁移抢占了旧全局键：" + property.Name);
+        }
+        foreach (var recordHotkey in new[] { RecordHud.PauseHotkey, RecordHud.CancelHotkey })
+        {
+            var conflict = new AppSettings { Version = 17, LongShotToggleHotkey = recordHotkey };
+            SettingsService.Migrate(conflict);
+            if (conflict.LongShotToggleHotkey != "") throw new InvalidOperationException("迁移抢占了录制快捷键");
+        }
+        var older = new AppSettings { Version = 10, HkQuickLaunch = "F2", QuickLaunchEnabled = true };
+        SettingsService.Migrate(older);
+        if (older.HkQuickLaunch != "F2" || older.LongShotToggleHotkey != "")
+            throw new InvalidOperationException("更早的快速启动迁移误给新增长截图键让位");
+
+        var custom = new AppSettings
+        {
+            Version = 17, LongShotToggleHotkey = "Ctrl+Shift+F8", LongShotAutoScroll = true,
+            LongShotScrollIntervalMs = 240, LongShotMaxHeight = 18000,
+            LongShotLivePreview = false, LongShotShowPreview = false, LongShotPreviewFitWidth = false,
+        };
+        SettingsService.Migrate(custom);
+        if (custom.LongShotToggleHotkey != "Ctrl+Shift+F8" || !custom.LongShotAutoScroll || custom.LongShotScrollIntervalMs != 240
+            || custom.LongShotMaxHeight != 18000 || custom.LongShotLivePreview || custom.LongShotShowPreview || custom.LongShotPreviewFitWidth)
+            throw new InvalidOperationException("迁移覆盖了已经保存的长截图自定义设置");
+    }
+
+    static void LongShotHotkeyNormalization()
+    {
+        foreach (var invalid in new string?[] { null, "", " ", "A", "Ctrl", "Escape", "Ctrl+Escape", "Ctrl+LeftCtrl", "Ctrl+9999", "ImeProcessed" })
+        {
+            var settings = AppSettings.CreateDefault();
+            settings.LongShotToggleHotkey = invalid!;
+            SettingsService.Normalize(settings);
+            if (settings.LongShotToggleHotkey != "") throw new InvalidOperationException("接受了非法长截图键：" + invalid);
+        }
+        foreach (var (text, expected) in new[] { ("f1", "F1"), (" F12 ", "F12"),
+            ("control + alt + f8", "Ctrl+Alt+F8"), ("shift + win + K", "Shift+Win+K") })
+        {
+            var settings = AppSettings.CreateDefault();
+            settings.LongShotToggleHotkey = text;
+            SettingsService.Normalize(settings);
+            if (settings.LongShotToggleHotkey != expected) throw new InvalidOperationException("长截图键未规范化：" + text);
+        }
+    }
+
+    static void LongShotHotkeyConflicts()
+    {
+        var settings = AppSettings.CreateDefault();
+        foreach (var binding in HotkeyManager.Definitions(settings))
+        {
+            if (HotkeyManager.FindConflict(settings, binding.Action, "F2")?.Contains("长截图开始/暂停") != true)
+                throw new InvalidOperationException("全局键没有检查长截图冲突：" + binding.Action);
+            if (binding.Text.Length > 0 && HotkeyManager.FindConflict(settings, HotkeyAction.LongShotToggle, binding.Text) is null)
+                throw new InvalidOperationException("长截图键没有检查全局冲突：" + binding.Action);
+        }
+        foreach (var text in new[] { RecordHud.PauseHotkey, RecordHud.CancelHotkey })
+            if (HotkeyManager.FindConflict(settings, HotkeyAction.LongShotToggle, text) is null)
+                throw new InvalidOperationException("长截图键没有检查录制冲突");
+        if (HotkeyManager.FindConflict(settings, HotkeyAction.LongShotToggle, "F2") is not null)
+            throw new InvalidOperationException("长截图快捷键与自身冲突");
+        settings.LongShotToggleHotkey = "";
+        if (HotkeyManager.FindConflict(settings, HotkeyAction.CaptureOcr, "F2") is not null)
+            throw new InvalidOperationException("关闭长截图快捷键后仍占用 F2");
+        settings.HkQuickLaunch = "Ctrl+Shift+F9";
+        if (HotkeyManager.FindConflict(settings, HotkeyAction.LongShotToggle, settings.HkQuickLaunch) is not null)
+            throw new InvalidOperationException("未启用的快速启动错误占用快捷键");
+        settings.QuickLaunchEnabled = true;
+        if (HotkeyManager.FindConflict(settings, HotkeyAction.LongShotToggle, settings.HkQuickLaunch) is null)
+            throw new InvalidOperationException("启用快速启动后没有检查长截图冲突");
     }
 
     // ---------------------------------------------------------------- 开机自启

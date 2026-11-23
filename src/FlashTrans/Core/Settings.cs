@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using FlashTrans.Services;
 
 namespace FlashTrans.Core;
 
@@ -67,7 +68,7 @@ public sealed class AppSettings
     public int Version { get; set; } = CurrentVersion;
 
     /// <summary>加新的默认源/字段时 +1，并在 Migrate 里补一段。</summary>
-    public const int CurrentVersion = 17;
+    public const int CurrentVersion = 18;
 
     // 只保存用户选择的路径，不扫描磁盘或自动收集已安装程序。
     public List<QuickLaunchEntry> QuickLaunchItems { get; set; } = [];
@@ -224,8 +225,16 @@ public sealed class AppSettings
     /// <summary>文字标注用斜体。</summary>
     public bool CaptureFontItalic { get; set; }
 
-    // ------- 长截图预览 -------
-    /// <summary>预览窗口上次的普通窗口尺寸；图片默认适应宽度。</summary>
+    // ------- 长截图 -------
+    /// <summary>空字符串关闭会话内的开始/暂停快捷键，不占用用户已有全局键。</summary>
+    public string LongShotToggleHotkey { get; set; } = LongShotService.DefaultToggleHotkey;
+    public bool LongShotAutoScroll { get; set; }
+    public int LongShotScrollIntervalMs { get; set; } = LongShotService.DefaultScrollIntervalMs;
+    public int LongShotMaxHeight { get; set; } = LongShotService.DefaultMaxHeight;
+    public bool LongShotLivePreview { get; set; } = true;
+    public bool LongShotShowPreview { get; set; } = true;
+    public bool LongShotPreviewFitWidth { get; set; } = true;
+    /// <summary>预览窗口上次的普通窗口尺寸，最大化不覆盖它。</summary>
     public double LongShotPreviewWidth { get; set; } = 720;
     public double LongShotPreviewHeight { get; set; } = 660;
 

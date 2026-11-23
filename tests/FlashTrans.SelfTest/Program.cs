@@ -68,6 +68,14 @@ static class Program
             return _fail == 0 ? 0 : 1;
         }
 
+        if (args.Contains("--only-media"))
+        {
+            UiProbe.RunSpeechProbes(Step);
+            Step("录制：MP4 包含系统声音音轨", AudioMp4Probe.Run);
+            app.Shutdown();
+            return _fail == 0 ? 0 : 1;
+        }
+
         if (args.Contains("--only-autostart"))
         {
             StartupProbe.RunAll(Step);
@@ -173,6 +181,13 @@ static class Program
         if (args.Contains("--only-capture-hotkeys"))
         {
             CaptureHotkeyProbe.RunAll(Step);
+            app.Shutdown();
+            return _fail == 0 ? 0 : 1;
+        }
+
+        if (args.Contains("--only-longshot-focus"))
+        {
+            LongShotProbe.RunFocus(Step);
             app.Shutdown();
             return _fail == 0 ? 0 : 1;
         }

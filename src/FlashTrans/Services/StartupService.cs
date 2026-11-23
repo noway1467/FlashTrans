@@ -21,6 +21,8 @@ public static partial class StartupService
 
     public static string? LastError { get; private set; }
     static bool _changing;
+    internal static bool IsChanging => _changing;
+    internal static event Action? ChangeCompleted;
     public static bool IsAdministrator
     {
         get
@@ -96,7 +98,7 @@ public static partial class StartupService
     public static bool Sync(bool want, bool administrator = false)
     {
         // 用户正在授权时，关闭设置窗口或修改外观也会触发保存；不能用旧值抢先覆盖新任务。
-        if (_changing) return true;
+        if (_changing) return false;
         LastError = null;
         if (!CanConfigure)
         {
@@ -115,11 +117,46 @@ public static partial class StartupService
     }
 
     /// <summary>用户主动改开关时允许一次系统授权；取消或失败不修改内存中的设置。</summary>
-    public static async Task<string?> ChangeAsync(bool want, bool administrator)
+    public static Task<string?> ChangeAsync(bool want, bool administrator)
     {
-        if (!CanConfigure) return "诊断或自测进程不能修改开机自启动。";
+        if (!CanConfigure) return Task.FromResult<string?>("诊断或自测进程不能修改开机自启动。");
+        return ChangeAndSaveAsync(want, administrator, ChangeRegistrationAsync);
+    }
+
+    // 把系统登记和配置保存视为一次变更；委托只隔离需要授权的系统 IO，回归可用假登记验证回滚。
+    internal static async Task<string?> ChangeAndSaveAsync(bool want, bool administrator,
+        Func<bool, bool, Task<string?>> changeRegistration)
+    {
         if (_changing) return "正在应用启动设置，请稍候。";
         _changing = true;
+        var settings = SettingsService.Instance;
+        var previous = (settings.Current.RunAtStartup, settings.Current.StartupAsAdmin);
+        try
+        {
+            var error = await changeRegistration(want, administrator);
+            if (error is not null) return LastError = error;
+            settings.Current.RunAtStartup = want;
+            settings.Current.StartupAsAdmin = administrator;
+            if (settings.Save()) return LastError = null;
+
+            var saveError = settings.LastSaveError;
+            settings.Current.RunAtStartup = previous.RunAtStartup;
+            settings.Current.StartupAsAdmin = previous.StartupAsAdmin;
+            var rollbackError = await changeRegistration(previous.RunAtStartup, previous.StartupAsAdmin);
+            return LastError = rollbackError is null
+                ? $"启动设置未保存，已恢复原启动方式。{saveError}"
+                : $"启动设置未保存，恢复原启动方式也失败，请重新应用。{saveError}；{rollbackError}";
+        }
+        finally
+        {
+            _changing = false;
+            // 即使授权被取消，也补做等待期间跳过的路径同步。
+            ChangeCompleted?.Invoke();
+        }
+    }
+
+    static async Task<string?> ChangeRegistrationAsync(bool want, bool administrator)
+    {
         try
         {
             try { await Task.Run(() => Configure(want, administrator)); }
@@ -150,7 +187,6 @@ public static partial class StartupService
             Log.Warn("更改启动方式失败：" + ex.Message);
             return LastError = "设置失败：" + ex.Message;
         }
-        finally { _changing = false; }
     }
 
     /// <summary>必须在单实例检查前执行；助手只改启动登记，不加载或保存用户配置。</summary>

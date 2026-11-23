@@ -104,8 +104,7 @@ static class UiProbe
 
         step("结果区：渲染批次（聚合 + 双语 + 词典）", ResultRender);
         RunResultLayoutProbes(step);
-        step("语音：语言标签匹配和中文别名", SpeechLanguageProbe);
-        step("语音：本机合成播放与连续替换", SpeechPlaybackProbe);
+        RunSpeechProbes(step);
         step("结果区：聚合边到边（占位 → 乱序填充 → 收尾）", ProgressiveRender);
 
         // 设置窗口的每个分类都单独展开一次
@@ -1047,6 +1046,12 @@ static class UiProbe
         }
     }
 
+    public static void RunSpeechProbes(Action<string, Action> step)
+    {
+        step("语音：语言标签匹配和中文别名", SpeechLanguageProbe);
+        step("语音：本机合成播放与连续替换", SpeechPlaybackProbe);
+    }
+
     static void SpeechLanguageProbe()
     {
         var voices = new[] { "en-US", "zh-CN", "ja-JP" };
@@ -1067,7 +1072,7 @@ static class UiProbe
 
     static void SpeechPlaybackProbe()
     {
-        var voices = Windows.Media.SpeechSynthesis.SpeechSynthesizer.AllVoices;
+        var voices = FlashTrans.Interop.NativeSpeech.AllVoices;
         Console.WriteLine("       已安装系统语音：" + string.Join(", ", voices.Select(v => v.Language)));
         if (voices.Count == 0)
         {

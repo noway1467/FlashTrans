@@ -57,6 +57,8 @@ static class RecordProbe
         step("录制：真编 MP4，容器和时长都对", Mp4RealProbe);
         step("录制：MP4 从 WPF 界面线程也能编", Mp4UiProbe);
         step("录制：MP4 失败不留下空文件或额外 WebP", Mp4FailureCleanupProbe);
+        step("录制：MP4 中途取消保留旧文件并清理旁路", Mp4CancellationProbe);
+        step("录制：无效音频退回纯视频且不残留混流文件", Mp4AudioFallbackProbe);
         step("录制：MP4 码率和边长对齐的算法", Mp4MathProbe);
         step("录制：1366×766 这种非 4 倍数尺寸也能编 MP4", Mp4OddSizeProbe);
         step("录制：MP4 旁路文件的后缀还是 .mp4", Mp4SidecarProbe);
@@ -1683,6 +1685,54 @@ static class RecordProbe
             Need(!File.Exists(Mp4Encoder.SidecarPath(outNoExt + ".mp4")),
                 "MP4 失败后留下了临时文件");
             Need(!File.Exists(outNoExt + ".webp"), "MP4 失败后偷偷生成了 WebP");
+        }
+        finally { Wipe(dir); }
+    }
+
+    static void Mp4CancellationProbe()
+    {
+        if (!Mp4Encoder.Available) return;
+        var (dir, paths) = WriteCornerFrames(1);
+        try
+        {
+            var final = Path.Combine(dir, "cancelled.mp4");
+            byte[] oldFile = [1, 2, 3, 4];
+            File.WriteAllBytes(final, oldFile);
+            using var cancel = new CancellationTokenSource();
+            var frames = Enumerable.Repeat(paths[0], 2000).ToArray();
+            var task = Mp4Encoder.SaveAsync(frames, final, 30, ct: cancel.Token);
+            var wait = System.Diagnostics.Stopwatch.StartNew();
+            while (!File.Exists(Mp4Encoder.SidecarPath(final)) && !task.IsCompleted && wait.Elapsed.TotalSeconds < 5)
+                Thread.Sleep(5);
+            Need(File.Exists(Mp4Encoder.SidecarPath(final)), "取消探针未等到编码实际创建旁路文件");
+            Need(!task.IsCompleted, "取消探针还没介入，编码就已经结束");
+            var elapsed = System.Diagnostics.Stopwatch.StartNew();
+            cancel.Cancel();
+            var cancelled = false;
+            try { task.GetAwaiter().GetResult(); } catch (OperationCanceledException) { cancelled = true; }
+            Need(cancelled, "MP4 取消没有传播 OperationCanceledException");
+            Need(elapsed.Elapsed.TotalSeconds < 3, "MP4 取消等待超过 3 秒");
+            Need(File.ReadAllBytes(final).SequenceEqual(oldFile), "取消破坏了原来的输出文件");
+            Need(!File.Exists(Mp4Encoder.SidecarPath(final)), "取消留下了 MP4 旁路文件");
+        }
+        finally { Wipe(dir); }
+    }
+
+    static void Mp4AudioFallbackProbe()
+    {
+        if (!Mp4Encoder.Available) return;
+        var (dir, paths) = WriteFrames(4);
+        try
+        {
+            var invalidAudio = Path.Combine(dir, "invalid.wav");
+            File.WriteAllBytes(invalidAudio, [1, 2, 3, 4]);
+            var final = Path.Combine(dir, "fallback.mp4");
+            var result = Mp4Encoder.SaveAsync(paths, final, 10, invalidAudio).GetAwaiter().GetResult();
+            var (boxes, seconds) = WalkMp4(File.ReadAllBytes(result.Path));
+            Need(result.Format == RecordFormat.Mp4 && boxes.Contains("moov") && boxes.Contains("mdat") && seconds > 0,
+                "无效音频未安全退回有效视频");
+            Need(!File.Exists(Mp4Encoder.SidecarPath(final)) && !Directory.GetFiles(dir, "*.muxed.mp4").Any(),
+                "音频失败留下了旁路文件");
         }
         finally { Wipe(dir); }
     }

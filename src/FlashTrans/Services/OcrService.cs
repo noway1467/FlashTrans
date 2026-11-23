@@ -4,9 +4,8 @@ using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Media;
 using FlashTrans.Interop;
-using Windows.Globalization;
-using Windows.Graphics.Imaging;
-using Windows.Media.Ocr;
+using OcrEngine = FlashTrans.Interop.NativeOcrEngine;
+using OcrResult = FlashTrans.Interop.NativeOcrResult;
 
 namespace FlashTrans.Services;
 
@@ -219,8 +218,7 @@ public static partial class OcrService
         foreach (var ocr in engines)
         {
             ct.ThrowIfCancellationRequested();
-            using var bitmap = ToSoftwareBitmap(scaled);
-            var result = await ocr!.RecognizeAsync(bitmap).AsTask(ct).ConfigureAwait(false);
+            var result = await ocr!.RecognizeAsync(scaled, ct).ConfigureAwait(false);
             foreach (var line in result.Lines)
             {
                 if (string.IsNullOrWhiteSpace(line.Text)) continue;
@@ -283,8 +281,7 @@ public static partial class OcrService
     static async Task<string> RecognizeBitmapAsync(OcrEngine engine, CapturedImage image,
                                                     string tag, CancellationToken ct)
     {
-        using var bitmap = ToSoftwareBitmap(image);
-        var result = await engine.RecognizeAsync(bitmap).AsTask(ct).ConfigureAwait(false);
+        var result = await engine.RecognizeAsync(image, ct).ConfigureAwait(false);
         return Compose(result, tag);
     }
 
@@ -485,22 +482,6 @@ public static partial class OcrService
 
     static bool IsAsciiLetter(char c) => c is >= 'A' and <= 'Z' or >= 'a' and <= 'z';
 
-    /// <summary>
-    /// 像素搬进 SoftwareBitmap。走 DataWriter → IBuffer 这条投影出来的路：
-    /// 常见的 LockBuffer + IMemoryBufferByteAccess 写法在 .NET 5+ 上会抛
-    /// InvalidCastException——CsWinRT 的对象不是真正的 COM RCW，ComImport 接口转不过去。
-    /// 多拷一遍内存，但截图这点大小无所谓。
-    /// </summary>
-    static SoftwareBitmap ToSoftwareBitmap(CapturedImage img)
-    {
-        using var writer = new Windows.Storage.Streams.DataWriter();
-        writer.WriteBytes(img.Pixels);
-        var buffer = writer.DetachBuffer();
-        return SoftwareBitmap.CreateCopyFromBuffer(buffer, BitmapPixelFormat.Bgra8,
-                                                   img.Width, img.Height,
-                                                   BitmapAlphaMode.Premultiplied);
-    }
-
     readonly record struct Token(string Text, double Left, double Top, double Width, double Height, int Order);
     readonly record struct OcrRow(List<Token> Tokens, double Top, double Bottom);
 
@@ -657,7 +638,7 @@ public static partial class OcrService
             try
             {
                 // 不能把用户首选语言的结果冒充为 tag，否则脚本探测会选错回退语言。
-                engine = OcrEngine.TryCreateFromLanguage(new Language(tag));
+                engine = OcrEngine.TryCreateFromLanguage(tag);
             }
             catch (Exception ex)
             {
@@ -677,7 +658,7 @@ public static partial class OcrService
     {
         try
         {
-            var name = new Language(tag).DisplayName;
+            var name = NativeLanguage.FromTag(tag).DisplayName;
             return string.IsNullOrWhiteSpace(name) ? tag : name;
         }
         catch { return tag; }

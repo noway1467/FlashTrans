@@ -67,6 +67,9 @@ public sealed partial class SettingsWindow : Window
 
         PreviewKeyDown += (_, e) =>
         {
+            // 录键框自行拒绝 Esc，不能在它收到事件前先把设置窗口关掉。
+            if (e.Key == Key.Escape && Keyboard.FocusedElement is TextBox
+                { Name: nameof(AppSettings.LongShotToggleHotkey) }) return;
             if (e.Key == Key.Escape) { e.Handled = true; Close(); }
         };
         Closed += (_, _) => SettingsService.Instance.Touch();

@@ -2,13 +2,12 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <!-- 10.0.19041 这个版本号是为了拿到 Windows.Media.Ocr 的投影（截图识别用）。
-         SupportedOSPlatformVersion 仍是 17763，实际能跑在更老的 Win10 上。 -->
-    <TargetFramework>net9.0-windows10.0.19041.0</TargetFramework>
-    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <!-- Windows OCR / 语音 / 录制直接使用系统 ABI，不携带完整 Windows SDK 投影。 -->
+    <TargetFramework>net9.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>FlashTrans</AssemblyName>
     <RootNamespace>FlashTrans</RootNamespace>
@@ -34,24 +33,23 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- 文件翻译与 OCR 不在启动路径；保留 IL，避免冷路径库的 R2R 原生代码膨胀单文件。 -->
+    <PublishReadyToRunExclude Include="UglyToad.PdfPig.dll;UglyToad.PdfPig.Core.dll;UglyToad.PdfPig.DocumentLayoutAnalysis.dll;UglyToad.PdfPig.Fonts.dll;UglyToad.PdfPig.Package.dll;UglyToad.PdfPig.Tokenization.dll;UglyToad.PdfPig.Tokens.dll" />
+    <PublishReadyToRunExclude Include="PdfSharp-wpf.dll;PdfSharp.WPFonts.dll;PdfSharp.Snippets-wpf.dll;PdfSharp.Charting-wpf.dll;PdfSharp.BarCodes-wpf.dll;PdfSharp.Quality-wpf.dll;PdfSharp.Shared.dll;PdfSharp.Cryptography.dll;PdfSharp.System.dll" />
+    <PublishReadyToRunExclude Include="Markdig.dll;Microsoft.ML.OnnxRuntime.dll;Clipper2Lib.dll;System.Numerics.Tensors.dll" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- 自测要摸几个 internal（裁图、蒙层截图），不为了测试把它们变成 public。 -->
     <InternalsVisibleTo Include="FlashTrans.SelfTest" />
-    <!-- 截图 OCR 的本地托管引擎（RapidOCR 移植）。包自带 PP-OCRv5 latin 模型，
-         中文/日语使用 PP-OCRv6 small 识别模型，见下方 models\v6 拷贝项。 -->
-    <PackageReference Include="RapidOcrNet" Version="4.1.0" />
+    <!-- 本地 PP-OCRv6 直接推理与检测框扩张，避免图像库带入跨平台原生资产。 -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.29.0" />
+    <PackageReference Include="Clipper2" Version="2.0.0" />
     <!-- 用语法树定位正文，避免改写 Markdown 代码、链接和元数据。 -->
     <PackageReference Include="Markdig" Version="0.41.3" />
     <!-- PDF 仅在本机解析；输出正文重排版，不上传文件，也不使用商业转换服务。 -->
     <PackageReference Include="PdfPig" Version="0.1.16" />
     <PackageReference Include="PDFsharp-WPF" Version="6.2.4" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <!-- 别给整个 Windows SDK 投影做 R2R 预编译。这个程序集 24MB，里面是整套
-         WinRT 投影，我们只用到 OCR 那几个类；R2R 会把它的原生代码也编进去，
-         单文件 exe 直接从 113MB 涨到 168MB。排掉后只剩 IL，用到的那几个类
-         JIT 一下就好，启动路径上根本不碰它（截图翻译是按热键才走的）。 -->
-    <PublishReadyToRunExclude Include="Microsoft.Windows.SDK.NET.dll" />
   </ItemGroup>
 
   <ItemGroup>
@@ -81,11 +79,11 @@
     <None Include="models\v6\*.txt" Exclude="models\v6\ppocrv6_tiny_dict.txt" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
-  <!-- RapidOcrNet 的包级 targets 会在 Build 和 Publish 后复制自带的 v5 模型。
-       本项目显式使用 v6 模型，因此在包复制目标执行前清空 Models，避免发布包重复携带 v5。 -->
-  <Target Name="ExcludeRapidOcrNetV5Models" BeforeTargets="CopyModelsBuild;CopyModelsPublish">
+  <!-- .lib 是给原生链接器使用的静态库，运行时只需要 onnxruntime.dll。 -->
+  <Target Name="ExcludeNativeStaticLibrariesFromPublish" AfterTargets="ComputeResolvedFilesToPublishList" BeforeTargets="_ComputeResolvedFilesToPublishTypes;GenerateSingleFileBundle">
     <ItemGroup>
-      <Models Remove="@(Models)" />
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" Condition="'%(ResolvedFileToPublish.Extension)' == '.lib'" />
     </ItemGroup>
   </Target>
+
 </Project>

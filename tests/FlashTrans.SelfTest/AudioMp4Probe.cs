@@ -14,7 +14,11 @@ static class AudioMp4Probe
 {
     public static void Run()
     {
-        if (!AudioCapture.IsAvailable || !Mp4Encoder.Available) return;
+        if (!AudioCapture.IsAvailable || !Mp4Encoder.Available)
+        {
+            Console.WriteLine("       系统回环声音或 H.264 编码器不可用：未验证真实音轨合成。");
+            return;
+        }
 
         var dir = Path.Combine(Path.GetTempPath(), "FlashTrans.audioprobe." + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);
@@ -48,6 +52,7 @@ static class AudioMp4Probe
             var mp4 = File.ReadAllBytes(result.Path);
             Need(Encoding.ASCII.GetString(mp4).Contains("soun", StringComparison.Ordinal),
                 "最终 MP4 没有音频轨道");
+            Console.WriteLine($"       真实回环 PCM {captured.Length - 44} 字节，MP4 音轨已验证");
         }
         finally
         {

@@ -1,9 +1,5 @@
 using System.IO;
-using System.Runtime.InteropServices;
 using FlashTrans.Interop;
-using RapidOcrNet;
-using SkiaSharp;
-using Windows.Globalization;
 
 namespace FlashTrans.Services;
 
@@ -24,7 +20,7 @@ public static partial class OcrService
     ];
 
     static readonly object RapidGate = new();
-    static RapidOcr? _rapid;
+    static RapidOcrEngine? _rapid;
     static bool _rapidTried;
 
     /// <summary>RapidOCR 模型文件是否齐全（只查文件，不触发加载）。</summary>
@@ -57,7 +53,7 @@ public static partial class OcrService
     }
 
     /// <summary>懒加载 RapidOCR。失败记日志返回 null，让调用方回退系统 OCR。</summary>
-    static RapidOcr? RapidEngine()
+    static RapidOcrEngine? RapidEngine()
     {
         lock (RapidGate)
         {
@@ -67,17 +63,7 @@ public static partial class OcrService
             if (dir is null) return null;
             try
             {
-                var ocr = new RapidOcr();
-                ocr.InitModels(new RapidOcrModelSet
-                {
-                    DetModelPath = Path.Combine(dir, "PP-OCRv6_det_tiny.onnx"),
-                    ClsModelPath = Path.Combine(dir, "ch_PP-LCNet_x0_25_textline_ori_cls_mobile.onnx"),
-                    RecModelPath = Path.Combine(dir, "PP-OCRv6_rec_small.onnx"),
-                    KeysPath = Path.Combine(dir, "ppocrv6_small_dict.txt"),
-                    DetMean = [127.5F, 127.5F, 127.5F],
-                    DetStd = [127.5F, 127.5F, 127.5F],
-                });
-                _rapid = ocr;
+                _rapid = new RapidOcrEngine(dir);
             }
             catch (Exception ex)
             {
@@ -109,7 +95,7 @@ public static partial class OcrService
 
         // Rapid 不认识的文字也可能被误读成非空中文，不能只在空结果时才探测。
         // 只试已安装且不在模型能力内的脚本，每种语言一遍，选中后才跑系统增强通道。
-        var maxDimension = (int)Windows.Media.Ocr.OcrEngine.MaxImageDimension;
+        var maxDimension = (int)NativeOcrEngine.MaxImageDimension;
         if (image.Width > maxDimension || image.Height > maxDimension) return (tokens, null);
         var scaled = image.ScaleUpForOcr(640, 8, maxDimension);
         var language = await ChooseSystemFallbackAsync(ComposeRapidText(tokens), fallbackLanguages,
@@ -159,7 +145,7 @@ public static partial class OcrService
         try
         {
             // 用系统语言元数据区分 sr-Cyrl / sr-Latn，不把整个语言前缀一刀切。
-            return new Language(tag!).Script switch
+            return NativeLanguage.FromTag(tag!).Script switch
             {
                 "Kore" or "Hang" => "Hang",
                 "Cyrl" => "Cyrl",
@@ -207,20 +193,19 @@ public static partial class OcrService
 
         ct.ThrowIfCancellationRequested();
         // Detect 是 CPU 密集的同步调用，挪到线程池免得卡住界面线程。
-        // 取消不会中断已进入的原生推理，真正结束后才释放共享引擎，避免下一次截图并发访问。
+        // 取消会终止本次 ONNX Run，退出后才释放共享引擎，避免下一次截图并发访问。
         await RapidRecognitionGate.WaitAsync(ct).ConfigureAwait(false);
-        RapidOcrNet.OcrResult result;
+        IReadOnlyList<RapidOcrEngine.TextBlock> result;
         try
         {
-            using var bmp = ToSkiaBitmap(image);
-            result = await Task.Run(() => engine.Detect(bmp, RapidOcrOptions.PPOCRv6), ct)
+            result = await Task.Run(() => engine.Detect(image, ct), ct)
                 .ConfigureAwait(false);
         }
         finally { RapidRecognitionGate.Release(); }
         ct.ThrowIfCancellationRequested();
 
         var tokens = new List<Token>();
-        foreach (var block in result.TextBlocks)
+        foreach (var block in result)
         {
             var text = block.Text?.Trim();
             if (string.IsNullOrEmpty(text)) continue;
@@ -235,20 +220,4 @@ public static partial class OcrService
         return tokens;
     }
 
-    /// <summary>把 BGRA32 像素搬进 SKBitmap（SkiaSharp 原生 BGRA 序，行宽一致直接拷）。</summary>
-    static SKBitmap ToSkiaBitmap(CapturedImage image)
-    {
-        var info = new SKImageInfo(image.Width, image.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
-        var bmp = new SKBitmap(info);
-        try
-        {
-            Marshal.Copy(image.Pixels, 0, bmp.GetPixels(), image.Pixels.Length);
-            return bmp;
-        }
-        catch
-        {
-            bmp.Dispose();
-            throw;
-        }
-    }
 }

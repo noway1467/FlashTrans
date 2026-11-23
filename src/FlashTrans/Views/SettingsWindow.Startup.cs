@@ -63,9 +63,6 @@ public sealed partial class SettingsWindow
                 _startupError = error;
                 if (error is null)
                 {
-                    S.RunAtStartup = want;
-                    S.StartupAsAdmin = asAdmin;
-                    Save();
                     Toast(want && asAdmin ? "管理员自启动已启用，下次登录自动生效。" : "启动设置已更新。");
                 }
             }

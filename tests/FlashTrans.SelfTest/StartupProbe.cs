@@ -20,6 +20,8 @@ static class StartupProbe
 
     public static void RunAll(Action<string, Action> step)
     {
+        step("自启动：授权等待不缓存同步，取消后通知补同步", PendingChange);
+        step("自启动：写盘失败恢复登记，回滚失败明确报告", SaveFailure);
         step("自启动：旧配置保留原权限，新开关往返保存", () =>
         {
             var old = JsonSerializer.Deserialize("{\"version\":16,\"runAtStartup\":true}", SettingsJson.Default.AppSettings)!;
@@ -77,6 +79,87 @@ static class StartupProbe
             Check(StartupService.HandleConfigurationCommand(["--tray"]) is null, "普通启动被助手接管");
             Check(StartupService.CurrentCommand() == before, "自测更改了用户的普通自启");
         });
+    }
+
+    static void PendingChange()
+    {
+        var settings = SettingsService.Instance;
+        var previous = (settings.Current.RunAtStartup, settings.Current.StartupAsAdmin);
+        var completion = new TaskCompletionSource<string?>();
+        var completed = 0;
+        void OnCompleted()
+        {
+            Check(!StartupService.IsChanging, "完成通知早于授权锁释放");
+            completed++;
+        }
+        StartupService.ChangeCompleted += OnCompleted;
+        Task<string?>? change = null;
+        try
+        {
+            change = StartupService.ChangeAndSaveAsync(!previous.RunAtStartup, true, (_, _) => completion.Task);
+            Check(StartupService.IsChanging && !change.IsCompleted, "没有保留等待状态");
+            Check(!StartupService.Sync(previous.RunAtStartup, previous.StartupAsAdmin), "忙碌跳过被误报为同步成功");
+            var host = new AppHost();
+            var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            typeof(AppHost).GetMethod("SyncStartup", flags)!.Invoke(host, null);
+            Check(typeof(AppHost).GetField("_startupChoice", flags)!.GetValue(host) is null,
+                "授权期间缓存了未实际同步的选择");
+            Check(StartupService.ChangeAndSaveAsync(true, true, (_, _) =>
+                throw new InvalidOperationException("重复请求访问了系统登记")).GetAwaiter().GetResult()!.Contains("稍候"),
+                "授权期间没有拒绝重复变更");
+            completion.SetResult("已取消管理员授权");
+            Check(change.GetAwaiter().GetResult()!.Contains("取消") && completed == 1, "取消后未通知补同步");
+            Check((settings.Current.RunAtStartup, settings.Current.StartupAsAdmin) == previous, "取消后改变了原设置");
+        }
+        finally
+        {
+            completion.TrySetResult("测试结束");
+            change?.GetAwaiter().GetResult();
+            StartupService.ChangeCompleted -= OnCompleted;
+        }
+    }
+
+    static void SaveFailure()
+    {
+        var settings = SettingsService.Instance;
+        var previous = (settings.Current.RunAtStartup, settings.Current.StartupAsAdmin);
+        Check(File.Exists(Path.Combine(AppContext.BaseDirectory, "portable.txt")), "测试必须使用便携隔离配置");
+        try
+        {
+            settings.Current.RunAtStartup = false;
+            settings.Current.StartupAsAdmin = false;
+            Check(settings.Save(), "隔离配置初始保存失败");
+            var original = File.ReadAllBytes(settings.ConfigPath);
+            // 保留真实旧文件，独占删除权限模拟配置被占用；不会更改目录 ACL 或用户系统设置。
+            using (var locked = File.Open(settings.ConfigPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                foreach (var failRollback in new[] { false, true })
+                {
+                    var calls = new List<(bool Enabled, bool Administrator)>();
+                    var result = StartupService.ChangeAndSaveAsync(true, true, (enabled, administrator) =>
+                    {
+                        calls.Add((enabled, administrator));
+                        return Task.FromResult<string?>(failRollback && calls.Count == 2 ? "测试：恢复登记被拒绝" : null);
+                    }).GetAwaiter().GetResult();
+                    Check(result is not null && result.Contains("未保存"), "写盘失败仍报告成功");
+                    Check(result!.Contains(failRollback ? "恢复原启动方式也失败" : "已恢复原启动方式"), "回滚结果未明确显示");
+                    Check(calls.SequenceEqual(new[] { (true, true), (false, false) }), "没有按原选择恢复系统登记");
+                    Check(!settings.Current.RunAtStartup && !settings.Current.StartupAsAdmin, "写盘失败未恢复内存设置");
+                    Check(File.ReadAllBytes(settings.ConfigPath).AsSpan().SequenceEqual(original), "写盘失败损坏了原配置");
+                }
+            }
+            var success = StartupService.ChangeAndSaveAsync(true, true, (_, _) => Task.FromResult<string?>(null))
+                .GetAwaiter().GetResult();
+            var saved = JsonSerializer.Deserialize(File.ReadAllText(settings.ConfigPath), SettingsJson.Default.AppSettings)!;
+            Check(success is null && saved.RunAtStartup && saved.StartupAsAdmin && settings.LastSaveError is null,
+                "登记成功后没有持久化启动选择，或仍残留保存错误");
+        }
+        finally
+        {
+            settings.Current.RunAtStartup = previous.RunAtStartup;
+            settings.Current.StartupAsAdmin = previous.StartupAsAdmin;
+            Check(settings.Save(), "恢复隔离配置失败");
+        }
     }
 
     public static void RunUi(Action<string, Action> step, string? preview)

@@ -36,9 +36,10 @@ public sealed class LongShotWindow : Window
     /// <summary>复制成功后才关闭窗口；失败时保留图片供重试或保存。</summary>
     public Func<Task>? CopyRequested { get; set; }
 
-    public LongShotWindow(CapturedImage image, string note)
+    public LongShotWindow(CapturedImage image, string note, bool? fitWidth = null)
     {
         _image = image;
+        _fitWidth = fitWidth ?? SettingsService.Instance.Current.LongShotPreviewFitWidth;
         Title = $"长截图 {image.Width}×{image.Height}";
         Width = SettingsService.Instance.Current.LongShotPreviewWidth;
         Height = SettingsService.Instance.Current.LongShotPreviewHeight;
@@ -131,7 +132,7 @@ public sealed class LongShotWindow : Window
         grid.Children.Add(_preview);
         grid.Children.Add(bar);
         Content = grid;
-        UpdatePreview(1, fitWidth: true);
+        UpdatePreview(1, _fitWidth);
         Loaded += (_, _) =>
         {
             var work = ScreenHelper.WorkAreaOf(this);

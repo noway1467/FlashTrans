@@ -292,28 +292,35 @@ public sealed partial class AppHost
     /// </summary>
     async Task LongShotAsync(RECT region)
     {
-        var hud = new LongShotHud(region);
-        hud.Show();
-
-        // 蒙层刚关，还没真从屏幕上下去。不等一下，第一屏拍到的是那层黑蒙层和工具条，
-        // 后面每一屏都是干净页面——拼出来就是「开头一段带着工具，下面才是正文」。
-        // 跟录制那条一样等一拍：先让 WPF 把关闭渲染完，再给 DWM 一点时间合成。
-        await Dispatcher.Yield(DispatcherPriority.Render);
-        await Task.Delay(250);
-
+        var options = new LongShotOptions(S.LongShotMaxHeight, S.LongShotScrollIntervalMs);
+        var livePreview = new LongShotLivePreviewWindow(region);
+        LongShotHud? hud = null;
         LongShotResult result;
         try
         {
+            hud = new LongShotHud(region, S.LongShotToggleHotkey, S.LongShotAutoScroll,
+                S.LongShotLivePreview, ToggleLivePreview);
+            if (S.LongShotLivePreview) ToggleLivePreview(true);
+            hud.Show();
+
+            // 蒙层关闭后先完成渲染和 DWM 合成，首屏才能和后续帧一样干净。
+            await Dispatcher.Yield(DispatcherPriority.Render);
+            await Task.Delay(250);
+
             result = await LongShotService.RunAsync(region,
                 onProgress: hud.Report,
                 cancelled: () => hud.Cancelled,
                 automatic: () => hud.Automatic,
                 onAlignmentLost: hud.ReportAlignmentLost,
-                onAutomaticPaused: hud.PauseAutomatic);
+                onAutomaticPaused: hud.PauseAutomatic,
+                paused: () => hud.Paused,
+                options: options,
+                onPreview: livePreview.Enqueue);
         }
         finally
         {
-            hud.Close();
+            livePreview.Close();
+            hud?.Close();
         }
 
         if (result.Image is null)
@@ -329,14 +336,23 @@ public sealed partial class AppHost
             LongShotStop.Failed => "抓取画面失败，已保留截到的内容。",
             _ => "",
         };
-        // 一帧都没接上（这块区域滚不动）也照样弹预览。以前这种情况直接按
-        // 「回车动作」处理掉了，默认那个是复制，结果就是「有时候不弹保存框」——
-        // 弹不弹取决于页面滚没滚动，用户根本没法预料。存图的按钮在预览里，
-        // 所以只要有图就得让预览出来。
         if (result.Frames <= 1)
             note = string.IsNullOrEmpty(note) ? "这块区域没滚动，就截到这一屏。" : note;
 
-        ShowLongShotPreview(result.Image, note);
+        if (S.LongShotShowPreview || S.CaptureEnterAction == CaptureAction.None)
+            ShowLongShotPreview(result.Image, note);
+        else await HandleAsync(S.CaptureEnterAction, result.Image);
+
+        void ToggleLivePreview(bool visible)
+        {
+            if (!visible)
+            {
+                livePreview.Hide();
+                hud?.ReportLivePreview(false);
+            }
+            else if (livePreview.TryShowOutside()) hud?.ReportLivePreview(true);
+            else hud?.ReportLivePreview(false, "选区两侧空间不足，实时预览已隐藏");
+        }
     }
 
     /// <summary>

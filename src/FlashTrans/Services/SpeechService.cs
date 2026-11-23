@@ -1,7 +1,6 @@
 using System.IO;
 using System.Media;
-using System.Runtime.InteropServices.WindowsRuntime;
-using Windows.Media.SpeechSynthesis;
+using FlashTrans.Interop;
 
 namespace FlashTrans.Services;
 
@@ -31,7 +30,7 @@ public static class SpeechService
         text = text.Trim();
         if (text.Length == 0) return null;
 
-        VoiceInformation? voice;
+        NativeVoice? voice;
         try { voice = FindVoice(language); }
         catch (Exception ex)
         {
@@ -54,13 +53,8 @@ public static class SpeechService
         MemoryStream? audio = null;
         try
         {
-            using var synth = new SpeechSynthesizer { Voice = voice };
-            using var stream = await synth.SynthesizeTextToStreamAsync(text)
-                .AsTask(cancel.Token).ConfigureAwait(false);
-            using var input = stream.AsStreamForRead();
-            audio = new MemoryStream();
-            await input.CopyToAsync(audio, cancel.Token).ConfigureAwait(false);
-            audio.Position = 0;
+            var wav = await NativeSpeech.SynthesizeAsync(text, voice, cancel.Token).ConfigureAwait(false);
+            audio = new MemoryStream(wav, writable: false);
 
             player = new SoundPlayer(audio);
             player.Load();
@@ -102,10 +96,10 @@ public static class SpeechService
         }
     }
 
-    static VoiceInformation? FindVoice(string? language)
+    static NativeVoice? FindVoice(string? language)
     {
-        if (string.IsNullOrWhiteSpace(language)) return SpeechSynthesizer.DefaultVoice;
-        var voices = SpeechSynthesizer.AllVoices;
+        if (string.IsNullOrWhiteSpace(language)) return NativeSpeech.DefaultVoice;
+        var voices = NativeSpeech.AllVoices;
         var index = SelectVoiceIndex(language, voices.Select(v => v.Language).ToArray());
         return index < 0 ? null : voices[index];
     }

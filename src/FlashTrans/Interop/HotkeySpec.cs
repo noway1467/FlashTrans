@@ -10,6 +10,10 @@ public sealed record HotkeySpec(ModifierKeys Modifiers, Key Key)
 
     public bool IsEmpty => Key == Key.None;
 
+    /// <summary>设置录键和会话注册共用规则，普通单键不能抢占输入，Esc 留给完成/取消。</summary>
+    public bool IsValidGlobal => Enum.IsDefined(Key) && Key != Key.Escape
+        && FromKeyEvent(Key, Modifiers) is not null && VirtualKey != 0;
+
     public uint Win32Modifiers
     {
         get

@@ -127,7 +127,7 @@ public sealed partial class SettingsWindow
     }
 
     static UIElement SliderRow(double value, double min, double max, double tick,
-                               Action<double> onChange, Func<double, string> format)
+                               Action<double> onChange, Func<double, string> format, string? name = null)
     {
         var label = UiKit.Text(format(value), 11.5, "TextDim");
         label.MinWidth = 52;
@@ -135,9 +135,10 @@ public sealed partial class SettingsWindow
 
         var slider = new Slider
         {
+            Name = name ?? "",
             Minimum = min, Maximum = max, Value = value,
             TickFrequency = tick, IsSnapToTickEnabled = true,
-            Width = 200, VerticalAlignment = VerticalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
         };
         slider.ValueChanged += (_, e) =>
         {
@@ -147,7 +148,14 @@ public sealed partial class SettingsWindow
         slider.PreviewMouseLeftButtonUp += (_, _) => Save();
         slider.LostFocus += (_, _) => Save();
 
-        var row = UiKit.Row(10, slider, label);
+        // 620px 设置窗口的控件列不足 270px，滑块要给数值标签让出空间。
+        var row = new Grid();
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MaxWidth = 200 });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        row.Children.Add(slider);
+        label.Margin = new Thickness(10, 0, 0, 0);
+        UiKit.SetGrid(label, col: 1);
+        row.Children.Add(label);
         row.HorizontalAlignment = HorizontalAlignment.Left;
         return row;
     }

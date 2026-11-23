@@ -37,6 +37,7 @@ public sealed partial class AppHost : IDisposable
     public void Start(bool startHidden, bool diagnostic = false)
     {
         _diagnosticMode = diagnostic;
+        if (!diagnostic) StartupService.ChangeCompleted += SyncStartup;
         _msg = new MessageWindow("FlashTrans.Messages");
         _msg.Message += OnMessage;
 
@@ -308,10 +309,12 @@ public sealed partial class AppHost : IDisposable
 
     void SyncStartup()
     {
+        if (_shuttingDown || StartupService.IsChanging) return;
         var choice = (S.RunAtStartup, S.StartupAsAdmin);
         if (_startupChoice == choice) return;
-        _startupChoice = choice;
-        if (!StartupService.Sync(choice.RunAtStartup, choice.StartupAsAdmin))
+        if (StartupService.Sync(choice.RunAtStartup, choice.StartupAsAdmin))
+            _startupChoice = choice;
+        else
             Toast(StartupService.LastError ?? "自启动设置未生效，请在设置 → 通用重新应用。", () => ShowSettings("general"));
     }
 
@@ -380,6 +383,7 @@ public sealed partial class AppHost : IDisposable
     public void Dispose()
     {
         _shuttingDown = true;
+        StartupService.ChangeCompleted -= SyncStartup;
         _preloadTimer?.Stop();
         _shelfShowOperation?.Abort();
         SettingsService.Instance.Changed -= OnSettingsChanged;
