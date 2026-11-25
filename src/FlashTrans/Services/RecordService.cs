@@ -42,7 +42,7 @@ public sealed record RecordFrames(
 }
 
 /// <summary>
-/// 录制动图：在一块固定区域上按节拍反复抓屏，每帧落成一个临时 PNG。
+/// 录制动图：在固定区域上按节拍抓屏；连续相同画面复用 PNG，每次采样仍保留时间记录。
 ///
 /// 为什么落盘而不攒在内存里：一帧 1920×1080 的 BGRA 是 8MB，10 fps 录 30 秒
 /// 就是 2.4GB。PNG 落盘之后每帧几十到几百 KB，而且 img2webp 本来就要文件当输入。
@@ -79,6 +79,7 @@ public static class RecordService
         readonly SemaphoreSlim _slots;
         readonly List<PendingWrite> _writes = [];
         Exception? _error;
+        CapturedImage? _previousImage;
 
         public FrameWriter(int concurrency)
         {
@@ -89,6 +90,15 @@ public static class RecordService
 
         public async Task<bool> QueueAsync(string path, double at, CapturedImage image)
         {
+            if (Failed) return false;
+            if (_previousImage is { } previous && previous.Width == image.Width && previous.Height == image.Height
+                && previous.Pixels.AsSpan().SequenceEqual(image.Pixels))
+            {
+                // 复用文件和在途写入结果，保留这一拍的时间；不能删掉采样，否则回放会变快。
+                var last = _writes[^1];
+                _writes.Add(new PendingWrite(last.Path, at, last.Completion));
+                return true;
+            }
             while (!await _slots.WaitAsync(50))
                 if (Failed) return false;
 
@@ -111,6 +121,7 @@ public static class RecordService
                 }
             });
             _writes.Add(new PendingWrite(path, at, completion));
+            _previousImage = image;
             return true;
         }
 
@@ -190,7 +201,8 @@ public static class RecordService
         using var writer = new FrameWriter(SaveConcurrency(region));
         using var grabber = capture is null ? ScreenCaptureSession.Open(
             region.Left, region.Top, region.Right - region.Left, region.Bottom - region.Top) : null;
-        CapturedImage? CaptureFrame() => capture is not null ? capture(region) : grabber?.Grab();
+        CapturedImage? previousFrame = null;
+        CapturedImage? CaptureFrame() => capture is not null ? capture(region) : grabber?.Grab(previousFrame);
 
         var interval = 1000.0 / fps;
         var maxFrames = Math.Max(1, fps * maxSeconds);
@@ -240,11 +252,6 @@ public static class RecordService
             if (discarded?.Invoke() == true) { stop = RecordStop.Cancelled; break; }
             if (cancelled?.Invoke() == true) { stop = RecordStop.Stopped; break; }
 
-            // 时长也要看，不能只数帧。跟不上目标帧率时（区域大、机器忙）帧数攒得慢，
-            // 光等 maxFrames 的话「最长 30 秒」会变成录满 300 帧、实际过了 75 秒。
-            // 用活动时钟，所以暂停掉的时间照样不算。
-            if (sw.Elapsed.TotalMilliseconds - pausedMs >= maxSeconds * 1000.0) break;
-
             var wantPause = paused?.Invoke() == true;
             if (wantPause)
             {
@@ -271,6 +278,10 @@ public static class RecordService
                 pauseAt = -1;
                 audioCapture?.SetPaused(false);
             }
+
+            // 先处理仍在进行的暂停，再检查活动时间；否则暂停长于预算时会提前结束。
+            // 同时保留按秒限时，慢机器不能只等 maxFrames 而无限延长录制。
+            if (sw.Elapsed.TotalMilliseconds - pausedMs >= maxSeconds * 1000.0) break;
 
             // 静音是每拍问一次的：用户录到一半点了那个按钮，这里才看得见。
             if (audioCapture is not null && muted is not null)
@@ -303,6 +314,7 @@ public static class RecordService
                 stop = RecordStop.Failed;
                 break;
             }
+            previousFrame = img;
 
             var index = capturedCount++;
             var path = Path.Combine(dir, $"f{index:D5}.png");

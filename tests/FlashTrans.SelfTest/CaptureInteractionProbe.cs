@@ -342,10 +342,14 @@ static class CaptureInteractionProbe
                 var panel = Open();
                 var preset = ((StackPanel)panel.Child).Children.OfType<System.Windows.Controls.Primitives.UniformGrid>()
                     .Single().Children.OfType<Button>().Single(b => b.ToolTip is "#34C759");
+                var clicks = 0;
+                preset.Click += (_, _) => clicks++;
                 Click(preset, new Point(preset.ActualWidth / 2, preset.ActualHeight / 2));
                 Check(settings.CapturePenColor == "#34C759"
                     && !Field<System.Windows.Controls.Primitives.Popup>(window, "_colorPalette").IsOpen,
-                    "预设颜色单击后没有直接选取并关闭色板");
+                    $"预设颜色单击后没有直接选取并关闭色板：点击={clicks}，颜色={settings.CapturePenColor}，"
+                    + $"色板={Field<System.Windows.Controls.Primitives.Popup>(window, "_colorPalette").IsOpen}，"
+                    + $"大小={preset.RenderSize}，鼠标={Mouse.GetPosition(preset)}，命中={Mouse.DirectlyOver?.GetType().Name}");
                 panel = Open();
                 var hex = Field<TextBox>(panel, "_hex");
                 var surface = Field<Grid>(panel, "_surface");

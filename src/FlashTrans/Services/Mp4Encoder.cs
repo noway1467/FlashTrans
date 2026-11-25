@@ -96,7 +96,15 @@ public static class Mp4Encoder
         var videoStream = Mf.AddStream(writer, videoOutput);
         using var videoInput = VideoType(Mf.Rgb32, width, height, fps);
         Mf.Set(videoInput, Mf.DefaultStride, (uint)(width * 4));
-        Mf.SetInput(writer, videoStream, videoInput);
+        using var encodingParameters = Mf.Attributes();
+        if (ForceBitrate is null)
+        {
+            // 质量 VBR 让静止/局部变化少占空间，也不给文字首帧设过低的码率预算。
+            // 属性通过 SetInputMediaType 交给系统编码器，必须在 BeginWriting 前设置。
+            Mf.Set(encodingParameters, new Guid("1c0608e9-370c-4710-8a58-cb6181c42423"), 3u); // AVEncCommonRateControlMode_Quality
+            Mf.Set(encodingParameters, new Guid("fcbf57a3-7ea5-4b0c-9644-69b40c39c391"), 90u); // AVEncCommonQuality
+        }
+        Mf.SetInput(writer, videoStream, videoInput, encodingParameters);
         uint audioStream = 0;
         if (audio is not null)
         {
@@ -125,12 +133,19 @@ public static class Mp4Encoder
         Mf.Begin(writer);
         var totalTime = frames.Count * 10_000_000L / fps;
         long audioFrames = 0;
+        string? previousPath = null;
+        byte[] pixels = [];
         for (var frame = 0; frame < frames.Count; frame++)
         {
             ct.ThrowIfCancellationRequested();
             var time = frame * 10_000_000L / fps;
             var nextTime = (frame + 1L) * 10_000_000L / fps;
-            var pixels = FramePixels(frames[frame], width, height);
+            // 采集端对静止画面复用路径；只缓存上一帧，避免反复解 PNG 和分配整屏像素。
+            if (frames[frame] != previousPath)
+            {
+                pixels = FramePixels(frames[frame], width, height);
+                previousPath = frames[frame];
+            }
             ct.ThrowIfCancellationRequested();
             Mf.Write(writer, videoStream, pixels, pixels.Length, time, nextTime - time);
             if (audio is null) continue;

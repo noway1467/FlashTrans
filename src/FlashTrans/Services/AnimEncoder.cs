@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
+using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using FlashTrans.Core;
@@ -149,18 +151,22 @@ public static class AnimEncoder
             RedirectStandardError = true,
             RedirectStandardOutput = true,
         };
+        // 让编码器比较有损/无损帧，并减少不必要的关键帧；文字界面尤其适合无损压缩。
+        psi.ArgumentList.Add("-min_size");
+        psi.ArgumentList.Add("-mixed");
         psi.ArgumentList.Add("-loop");
         psi.ArgumentList.Add("0");            // 0 = 一直循环
         psi.ArgumentList.Add("-lossy");
         psi.ArgumentList.Add("-q");
         psi.ArgumentList.Add("80");
-        // 保持画质参数、帧率和原始尺寸，只减少编码器为压缩体积所做的搜索。
         psi.ArgumentList.Add("-m");
-        psi.ArgumentList.Add("1");
+        psi.ArgumentList.Add("2");
         psi.ArgumentList.Add("-o");
         psi.ArgumentList.Add(temporary);
+        // 判重需要读文件，放到后台，编码准备期间浮条仍能响应取消和拖动。
+        var frameTimings = await Task.Run(() => WebpFrames(frames, fps, ct), ct);
         var duration = -1;
-        foreach (var frame in WebpFrames(frames, fps, ct))
+        foreach (var frame in frameTimings)
         {
             if (frame.DurationMs != duration)
             {
@@ -230,12 +236,22 @@ public static class AnimEncoder
         IReadOnlyList<string> frames, int fps, CancellationToken ct = default)
     {
         var result = new List<(string Path, int DurationMs)>();
-        var delay = DelayMillis(fps);
+        fps = Math.Max(1, fps);
+        var frameIndex = 0;
         long previousLength = -1;
         byte[]? previousBytes = null;
         foreach (var path in frames)
         {
             ct.ThrowIfCancellationRequested();
+            // 按累计时间取整，60 帧仍是一秒，合并静止画面也不会累积取整误差。
+            var delay = Math.Max(1, (int)(Math.Round((frameIndex + 1) * 1000.0 / fps)
+                - Math.Round(frameIndex * 1000.0 / fps)));
+            frameIndex++;
+            if (result.Count > 0 && path == result[^1].Path)
+            {
+                result[^1] = (path, checked(result[^1].DurationMs + delay));
+                continue;
+            }
             var length = new FileInfo(path).Length;
             byte[]? bytes = null;
             var same = false;
@@ -274,15 +290,19 @@ public static class AnimEncoder
         ct.ThrowIfCancellationRequested();
         var previousBytes = File.ReadAllBytes(frames[0]);
         var first = EncodeGifFrame(previousBytes, ct);
-        var parallelism = GifEncodingParallelism(first.Width, first.Height);
+        var parallelism = GifEncodingParallelism(first.Parts.Width, first.Parts.Height);
         using var workers = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        var pending = new Queue<Task<GifFrameParts>>();
+        var pending = new Queue<Task<EncodedGifFrame>>();
         var previousTask = Task.FromResult(first);
         var next = 1;
         var frameIndex = 1;
+        var previousPixels = first.Pixels;
+        var last = first.Parts;
+        var left = 0;
+        var top = 0;
+        var delay = GifDelayCentis(fps, 0);
         using var fs = File.Create(outPath);
-        WriteGifHeader(fs, first.Width, first.Height);
-        WriteGifFrame(fs, first, GifDelayCentis(fps, 0));
+        WriteGifHeader(fs, first.Parts.Width, first.Parts.Height);
 
         try
         {
@@ -291,20 +311,47 @@ public static class AnimEncoder
                 while (next < frames.Count && pending.Count < parallelism)
                 {
                     ct.ThrowIfCancellationRequested();
-                    var bytes = File.ReadAllBytes(frames[next++]);
-                    // 完全相同的 PNG 复用量化/LZW 结果，但照常写帧和延时，绝不快放或丢帧。
-                    if (!bytes.AsSpan().SequenceEqual(previousBytes))
-                        previousTask = Task.Run(() => EncodeGifFrame(bytes, workers.Token), workers.Token);
-                    previousBytes = bytes;
+                    // 同一临时帧不再重复读盘；不同路径仍逐字节比较，不能仅凭长度判重。
+                    if (frames[next] != frames[next - 1])
+                    {
+                        var bytes = File.ReadAllBytes(frames[next]);
+                        if (!bytes.AsSpan().SequenceEqual(previousBytes))
+                            previousTask = Task.Run(() => EncodeGifFrame(bytes, workers.Token), workers.Token);
+                        previousBytes = bytes;
+                    }
+                    next++;
                     pending.Enqueue(previousTask);
                 }
 
                 var one = pending.Dequeue().GetAwaiter().GetResult();
                 ct.ThrowIfCancellationRequested();
-                if (one.Width != first.Width || one.Height != first.Height)
+                if (one.Parts.Width != first.Parts.Width || one.Parts.Height != first.Parts.Height)
                     throw new InvalidOperationException("录制帧尺寸不一致，无法保存动图。");
-                WriteGifFrame(fs, one, GifDelayCentis(fps, frameIndex++));
+                var bounds = GifChangedBounds(previousPixels, one.Pixels, one.Parts.Width, one.Parts.Height, ct);
+                var nextDelay = GifDelayCentis(fps, frameIndex++);
+                if (bounds.IsEmpty)
+                {
+                    delay += nextDelay;
+                    // GIF 延时是 16 位，超长静止段拆开写，不能截断成快放。
+                    while (delay > ushort.MaxValue)
+                    {
+                        WriteGifFrame(fs, last, ushort.MaxValue, left, top);
+                        delay -= ushort.MaxValue;
+                    }
+                    continue;
+                }
+
+                WriteGifFrame(fs, last, delay, left, top);
+                left = bounds.X;
+                top = bounds.Y;
+                last = bounds.Width == one.Parts.Width && bounds.Height == one.Parts.Height
+                    ? one.Parts
+                    : SplitSingleGif(EncodeSingleGif(new CroppedBitmap(one.Indexed, bounds)))
+                        ?? throw new InvalidOperationException("录制变化区域未能编码为有效 GIF。");
+                previousPixels = one.Pixels;
+                delay = nextDelay;
             }
+            WriteGifFrame(fs, last, delay, left, top);
             fs.WriteByte(0x3B);
         }
         finally
@@ -324,13 +371,50 @@ public static class AnimEncoder
         return Math.Max(1, (int)Math.Min(cpu, 96L * 1024 * 1024 / perFrame));
     }
 
-    static GifFrameParts EncodeGifFrame(byte[] bytes, CancellationToken ct)
+    sealed record EncodedGifFrame(GifFrameParts Parts, BitmapSource Indexed, byte[] Pixels);
+
+    static EncodedGifFrame EncodeGifFrame(byte[] bytes, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
-        var frame = SplitSingleGif(EncodeSingleGif(bytes))
+        using var input = new MemoryStream(bytes, writable: false);
+        var bitmap = BitmapDecoder.Create(input, BitmapCreateOptions.None, BitmapCacheOption.OnLoad).Frames[0];
+        var encoded = EncodeSingleGif(bitmap);
+        var frame = SplitSingleGif(encoded)
             ?? throw new InvalidOperationException("录制帧未能编码为有效 GIF。");
+        using var gif = new MemoryStream(encoded, writable: false);
+        var indexed = new GifBitmapDecoder(gif, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad).Frames[0];
+        indexed.Freeze();
+        var pixels = new byte[checked(frame.Width * frame.Height * 4)];
+        new FormatConvertedBitmap(indexed, PixelFormats.Bgra32, null, 0).CopyPixels(pixels, frame.Width * 4, 0);
         ct.ThrowIfCancellationRequested();
-        return frame;
+        return new EncodedGifFrame(frame, indexed, pixels);
+    }
+
+    static Int32Rect GifChangedBounds(byte[] previous, byte[] current, int width, int height, CancellationToken ct)
+    {
+        if (ReferenceEquals(previous, current)) return Int32Rect.Empty;
+        // 比较量化后的实际颜色，裁切时保留原索引和调色板，避免颜色重新量化造成残影。
+        var before = MemoryMarshal.Cast<byte, uint>(previous);
+        var after = MemoryMarshal.Cast<byte, uint>(current);
+        var left = width;
+        var right = -1;
+        var top = height;
+        var bottom = -1;
+        for (var y = 0; y < height; y++)
+        {
+            ct.ThrowIfCancellationRequested();
+            var row = y * width;
+            if (before.Slice(row, width).SequenceEqual(after.Slice(row, width))) continue;
+            top = Math.Min(top, y);
+            bottom = y;
+            var x = 0;
+            while (before[row + x] == after[row + x]) x++;
+            left = Math.Min(left, x);
+            x = width - 1;
+            while (before[row + x] == after[row + x]) x--;
+            right = Math.Max(right, x);
+        }
+        return right < 0 ? Int32Rect.Empty : new Int32Rect(left, top, right - left + 1, bottom - top + 1);
     }
 
     /// <summary>从一张单帧 GIF 里抠出来的东西：调色板加 LZW 码流，能直接接到动图里去。</summary>
@@ -341,10 +425,8 @@ public static class AnimEncoder
     /// 把一张 PNG 编成单帧 GIF。量化和 LZW 都是 WIC 干的——
     /// 自己写 LZW 没有意义，而颜色量化写不好就是一脸色带。
     /// </summary>
-    static byte[] EncodeSingleGif(byte[] bytes)
+    static byte[] EncodeSingleGif(BitmapSource bitmap)
     {
-        using var input = new MemoryStream(bytes, writable: false);
-        var bitmap = BitmapDecoder.Create(input, BitmapCreateOptions.None, BitmapCacheOption.OnLoad).Frames[0];
         var enc = new GifBitmapEncoder();
         enc.Frames.Add(BitmapFrame.Create(bitmap));
         using var ms = new MemoryStream();
@@ -458,18 +540,17 @@ public static class AnimEncoder
         s.WriteByte(0x00);
     }
 
-    static void WriteGifFrame(Stream s, GifFrameParts f, int delayCentis)
+    static void WriteGifFrame(Stream s, GifFrameParts f, int delayCentis, int left, int top)
     {
-        // 图形控制扩展：延时在这儿。处置方式给 1（不处置）——每帧都是整块不透明的
-        // 画面，直接盖上去就行；给 2（恢复背景色）会在帧之间闪一下背景。
+        // 保留上一帧画布，仅覆盖变化矩形；恢复背景会抹掉未重写的静止区域。
         s.Write([0x21, 0xF9, 0x04, 0x04]);
         Le16(s, delayCentis);
         s.WriteByte(0x00);   // 透明色索引（上面没开透明标志，写什么都不生效）
         s.WriteByte(0x00);
 
         s.WriteByte(0x2C);
-        Le16(s, 0);          // 左
-        Le16(s, 0);          // 上
+        Le16(s, left);
+        Le16(s, top);
         Le16(s, f.Width);
         Le16(s, f.Height);
         s.WriteByte((byte)(0x80 | (f.Interlaced ? 0x40 : 0x00) | ((f.PaletteBits - 1) & 0x07)));

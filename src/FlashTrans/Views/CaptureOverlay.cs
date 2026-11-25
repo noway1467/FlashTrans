@@ -40,7 +40,12 @@ public sealed partial class CaptureOverlay : Window
     readonly List<RECT> _windows;
     TextBox? _textBox;
     CaptureOutcome _result = CaptureOutcome.Cancelled;
-    bool _everActive;
+    readonly DispatcherTimer _activationTimer;
+    long _activationStartedAt;
+    long _activeSince;
+    bool _activationSettled;
+    int _activationAttempts;
+    string? _activationError;
     bool _closing;
 
     /// <summary>
@@ -51,20 +56,24 @@ public sealed partial class CaptureOverlay : Window
     {
         var screen = ScreenCapture.VirtualScreen();
         var shot = ScreenCapture.Grab(screen);
-        if (shot is null) return CaptureOutcome.Cancelled;
+        if (shot is null) throw new InvalidOperationException("无法读取当前屏幕，请退出受保护的桌面或全屏模式后重试截图。");
 
         var win = new CaptureOverlay(shot, screen);
-        win.Show();
-        win.PlaceOverVirtualScreen();
-        win.Activate();
-        win.Focus();
-
         // 自己起一个消息帧当模态用。不走 ShowDialog：那会禁掉本线程所有窗口，
-        // 而这里只是暂时借用屏幕，主窗口没必要被冻住。
+        // 必须在 Show 前接上 Closed；首次激活就关闭时也能结束，释放宿主的截图忙标志。
         var frame = new DispatcherFrame();
         win.Closed += (_, _) => frame.Continue = false;
-        Dispatcher.PushFrame(frame);
-        return win._result;
+        try
+        {
+            win.Show();
+            if (!win._closing) win.PlaceOverVirtualScreen();
+            if (!win._closing) win.Activate();
+            if (!win._closing) win.Focus();
+            if (!win._closing) Dispatcher.PushFrame(frame);
+            if (win._activationError is { } error) throw new InvalidOperationException(error);
+            return win._result;
+        }
+        finally { win.CloseOnce(); }
     }
 
     internal CaptureOverlay(CapturedImage shot, RECT screen,
@@ -122,12 +131,49 @@ public sealed partial class CaptureOverlay : Window
         };
 
         PreviewKeyDown += OnKey;
-        // 焦点被别的程序抢走时直接收摊，免得留一层盖住整个屏幕的窗口下不去。
-        // 要等真的激活过一次再看：Show 到 Activate 之间也会过一次 Deactivated，
-        // 那时候就关等于刚弹出来就自己消失了。
-        Activated += (_, _) => _everActive = true;
-        Deactivated += (_, _) => { if (_everActive) CloseOnce(); };
-        Closing += (_, _) => { _closing = true; CancelRedaction(); };
+        // 原生菜单/置顶软件会在首次激活时恢复自己的焦点。给启动阶段短暂的恢复机会，
+        // 连续稳定 240ms 后再恢复「切走即关闭」，避免无限抢焦点。
+        _activationTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(80) };
+        _activationTimer.Tick += (_, _) => SettleActivation();
+        Loaded += (_, _) =>
+        {
+            if (_closing || !ShowActivated) return;
+            _activationStartedAt = Environment.TickCount64;
+            _activationTimer.Start();
+        };
+        Activated += (_, _) => _activeSince = Environment.TickCount64;
+        Deactivated += (_, _) =>
+        {
+            _activeSince = 0;
+            if (_activationSettled) CloseOnce();
+        };
+        Closing += (_, _) => { _closing = true; _activationTimer.Stop(); CancelRedaction(); };
+    }
+
+    void SettleActivation()
+    {
+        if (_closing) { _activationTimer.Stop(); return; }
+        var now = Environment.TickCount64;
+        if (IsActive)
+        {
+            if (now - _activeSince < 240) return;
+            _activationSettled = true;
+            _activationTimer.Stop();
+            return;
+        }
+        if (++_activationAttempts > 3 || now - _activationStartedAt >= 1000)
+        {
+            _activationError = "截图窗口未能获得焦点，请关闭目标软件的全屏/置顶模式后重试。"
+                + "若目标软件以管理员权限运行，请以管理员身份重新启动闪译。";
+            CloseOnce();
+            return;
+        }
+        var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
+        Win32.SetWindowPos(hwnd, Win32.HWND_TOPMOST, 0, 0, 0, 0,
+            Win32.SWP_NOSIZE | Win32.SWP_NOMOVE | Win32.SWP_NOACTIVATE);
+        Win32.SetForegroundWindow(hwnd);
+        if (!_closing) Activate();
+        if (!_closing) Focus();
     }
 
     /// <summary>

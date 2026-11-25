@@ -1,5 +1,6 @@
 ﻿using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
@@ -39,6 +40,7 @@ public sealed class RecordHud : Window
     readonly TextBlock _muteLabel;
     readonly Border _muteButton;
     readonly Border _pauseButton;
+    readonly Border _stopButton;
     readonly Ellipse _dot;
     readonly RECT _region;
     readonly int _maxSeconds;
@@ -55,8 +57,11 @@ public sealed class RecordHud : Window
     int _lastFrames;
     TimeSpan _lastElapsed;
     double _lastUiReportMs = -1;
+    bool _manuallyPlaced;
+    bool _placing;
+    IntPtr _hwnd;
 
-    /// <summary>用户按过 Esc 或者点了浮条。录制那边每帧问一次。</summary>
+    /// <summary>用户按过 Esc 或者点了停止按钮。录制那边每帧问一次。</summary>
     public bool Stopped { get; private set; }
 
     /// <summary>
@@ -109,7 +114,11 @@ public sealed class RecordHud : Window
 
         _text = new TextBlock
         {
+            Name = "RecordStatus",
             Text = $"录制中… 0.0s / {maxSeconds}s",
+            // 秒数、帧数和暂停文案变化时，操作按钮不能在鼠标下方来回移动。
+            Width = 240,
+            TextWrapping = TextWrapping.Wrap,
             FontSize = 12.5,
             Foreground = new SolidColorBrush(Color.FromRgb(0xE6, 0xE8, 0xEC)),
             VerticalAlignment = VerticalAlignment.Center,
@@ -129,6 +138,8 @@ public sealed class RecordHud : Window
         // 会带一层灰底，而且点它要抢焦点。
         _pauseButton = new Border
         {
+            Name = "RecordPause",
+            MinHeight = 28,
             Background = new SolidColorBrush(Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF)),
             CornerRadius = new CornerRadius(5),
             Padding = new Thickness(8, 2, 8, 3),
@@ -139,7 +150,6 @@ public sealed class RecordHud : Window
         };
         _pauseButton.MouseLeftButtonUp += (_, e) =>
         {
-            // 不让它冒到外面那层 Border 上——那层是「点一下就停」。
             e.Handled = true;
             TogglePause();
         };
@@ -155,6 +165,8 @@ public sealed class RecordHud : Window
 
         _muteButton = new Border
         {
+            Name = "RecordMute",
+            MinHeight = 28,
             Background = new SolidColorBrush(Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF)),
             CornerRadius = new CornerRadius(5),
             Padding = new Thickness(8, 2, 8, 3),
@@ -182,6 +194,8 @@ public sealed class RecordHud : Window
         };
         var cancel = new Border
         {
+            Name = "RecordCancel",
+            MinHeight = 28,
             Background = new SolidColorBrush(Color.FromArgb(0x33, 0xFF, 0x3B, 0x30)),
             BorderBrush = new SolidColorBrush(Color.FromArgb(0x66, 0xFF, 0x3B, 0x30)),
             BorderThickness = new Thickness(1),
@@ -194,13 +208,48 @@ public sealed class RecordHud : Window
         };
         cancel.MouseLeftButtonUp += (_, e) =>
         {
-            e.Handled = true;   // 别冒到外层那个「停止并保存」上
+            e.Handled = true;
             Cancel();
+        };
+
+        _stopButton = new Border
+        {
+            Name = "RecordStop",
+            MinHeight = 28,
+            Background = new SolidColorBrush(Color.FromArgb(0x55, 0x4C, 0x8D, 0xFF)),
+            CornerRadius = new CornerRadius(5),
+            Padding = new Thickness(8, 2, 8, 3),
+            Margin = new Thickness(6, 0, 0, 0),
+            Cursor = Cursors.Hand,
+            ToolTip = "停止录制并保存文件（Esc）",
+            Child = new TextBlock
+            {
+                Text = "停止并保存", FontSize = 11.5, Foreground = _text.Foreground,
+                VerticalAlignment = VerticalAlignment.Center, FontFamily = _text.FontFamily,
+            },
+        };
+        _stopButton.MouseLeftButtonUp += (_, e) => { e.Handled = true; Stop(); };
+
+        var gripVisual = new FrameworkElementFactory(typeof(TextBlock));
+        gripVisual.SetValue(TextBlock.TextProperty, "⠿");
+        gripVisual.SetValue(TextBlock.FontSizeProperty, 20d);
+        gripVisual.SetValue(TextBlock.ForegroundProperty, _text.Foreground);
+        gripVisual.SetValue(TextBlock.VerticalAlignmentProperty, VerticalAlignment.Center);
+        var grip = new Thumb
+        {
+            Name = "RecordDrag", Width = 22, Height = 28, Cursor = Cursors.SizeAll,
+            Focusable = false, ToolTip = "拖动调整工具栏位置",
+            Template = new ControlTemplate(typeof(Thumb)) { VisualTree = gripVisual },
+        };
+        grip.DragDelta += (_, e) =>
+        {
+            _manuallyPlaced = true;
+            MoveTo(new Point(Left + e.HorizontalChange, Top + e.VerticalChange));
         };
 
         _hint = new TextBlock
         {
-            Text = $"{PauseHotkey} 暂停 · {CancelHotkey} 取消 · Esc 停止并保存",
+            Text = "Esc 停止",
             FontSize = 11.5,
             Foreground = new SolidColorBrush(Color.FromRgb(0x9A, 0xA0, 0xAA)),
             VerticalAlignment = VerticalAlignment.Center,
@@ -208,11 +257,13 @@ public sealed class RecordHud : Window
             FontFamily = new FontFamily("Microsoft YaHei UI"),
         };
 
-        var row = new StackPanel { Orientation = Orientation.Horizontal };
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        row.Children.Add(grip);
         row.Children.Add(_dot);
         row.Children.Add(_text);
         row.Children.Add(_pauseButton);
         row.Children.Add(_muteButton);
+        row.Children.Add(_stopButton);
         row.Children.Add(cancel);
         row.Children.Add(_hint);
 
@@ -222,12 +273,9 @@ public sealed class RecordHud : Window
             BorderBrush = new SolidColorBrush(Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF)),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(8),
-            Padding = new Thickness(12, 8, 12, 9),
-            Cursor = Cursors.Hand,
+            Padding = new Thickness(10, 4, 10, 4),
             Child = row,
-            ToolTip = "点一下停止并保存",
         };
-        ((Border)Content).MouseLeftButtonUp += (_, _) => { if (!Cancelled) Stopped = true; };
 
         // 自己不接键盘（没焦点），只能盯着 Esc 的实时状态。顺便让红点闪起来。
         var poll = new System.Windows.Threading.DispatcherTimer
@@ -245,8 +293,13 @@ public sealed class RecordHud : Window
 
             // 每 8 拍（约 500ms）翻一次，让人一眼看出还在录。
             // 暂停时不闪：停着的红点 + 「已暂停」才是「真的停住了」的样子。
-            if (++_ticks % 8 == 0 && !Paused && !_encoding)
-                _dot.Opacity = _dot.Opacity > 0.5 ? 0.25 : 1.0;
+            if (++_ticks % 8 == 0)
+            {
+                if (!Paused && !_encoding && !Cancelled)
+                    _dot.Opacity = _dot.Opacity > 0.5 ? 0.25 : 1.0;
+                // 新出现的置顶窗口可能盖住浮条；恢复层级时不切走正在录制的窗口焦点。
+                KeepAbove();
+            }
         };
         poll.Start();
         Closed += (_, _) => poll.Stop();
@@ -254,6 +307,7 @@ public sealed class RecordHud : Window
         SourceInitialized += (_, _) =>
         {
             var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
+            _hwnd = hwnd;
             var ex = Win32.GetWindowLong(hwnd, Win32.GWL_EXSTYLE);
             // NOACTIVATE：点它也不抢焦点。TOOLWINDOW：不进任务栏，也不被当成可截的窗口。
             Win32.SetWindowLong(hwnd, Win32.GWL_EXSTYLE,
@@ -276,7 +330,7 @@ public sealed class RecordHud : Window
 
             // 提示条上只写真正拿到的那几个键：承诺了按不动的键，比不写还糟。
             // 两个都没拿到也还有 Esc 和浮条上的按钮，功能不缺。
-            _hint.Text = (_hotkeyOk, _cancelHotkeyOk) switch
+            _hint.ToolTip = (_hotkeyOk, _cancelHotkeyOk) switch
             {
                 (true, true) => $"{PauseHotkey} 暂停 · {CancelHotkey} 取消 · Esc 停止并保存",
                 (true, false) => $"{PauseHotkey} 暂停 · Esc 停止并保存",
@@ -296,10 +350,16 @@ public sealed class RecordHud : Window
         };
 
         Loaded += (_, _) => Place();
+        SizeChanged += (_, _) => { if (IsLoaded && !_placing) Place(); };
     }
 
     IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
+        if (msg == 0x0021) // WM_MOUSEACTIVATE：拖动和点击都保留录制目标的焦点。
+        {
+            handled = true;
+            return new IntPtr(3); // MA_NOACTIVATE
+        }
         if (msg != Win32.WM_HOTKEY) return IntPtr.Zero;
         switch (wParam.ToInt32())
         {
@@ -363,6 +423,7 @@ public sealed class RecordHud : Window
         _pauseLabel.Text = "暂停";
         _pauseButton.Visibility = Visibility.Collapsed;
         _muteButton.Visibility = Visibility.Collapsed;
+        _stopButton.Visibility = Visibility.Collapsed;
         _hint.Text = "";
 
         // 订阅方在这儿去掐编码。放在界面都改完之后：这个回调可能同步跑挺久
@@ -382,8 +443,7 @@ public sealed class RecordHud : Window
             : Color.FromRgb(0xFF, 0x3B, 0x30));
         _pauseLabel.Text = Paused ? "继续" : "暂停";
         Render();
-        // 「录制中…」和「已暂停」宽度不一样，SizeToContent 会把浮条往右撑，重新居中一下。
-        // Report 那边不这么做：秒数每帧都在变，每帧重摆会看着抖。
+        // 窄屏换行后仍约束可见范围；Place 会保留用户拖动后的位置。
         if (IsLoaded) Place();
     }
 
@@ -413,7 +473,20 @@ public sealed class RecordHud : Window
         // 正好跟用户刚按的相反。
         if (Cancelled) return;
         if (!escDown) _escArmed = true;
-        else if (_escArmed) Stopped = true;
+        else if (_escArmed) Stop();
+    }
+
+    internal void Stop()
+    {
+        if (Cancelled || _encoding || Stopped) return;
+        Stopped = true;
+        Paused = false;
+        _dot.Opacity = 1;
+        _text.Text = "正在停止…";
+        _pauseButton.Visibility = Visibility.Collapsed;
+        _muteButton.Visibility = Visibility.Collapsed;
+        _stopButton.Visibility = Visibility.Collapsed;
+        _hint.Text = "";
     }
 
     public void Report(int frames, TimeSpan elapsed)
@@ -432,7 +505,7 @@ public sealed class RecordHud : Window
     {
         // 取消之后那行字就定在「正在取消…」：这时候还可能有在途的 Report 进来，
         // 让它把字改回「录制中…」的话，屏幕上看着像没取消掉。
-        if (_encoding || Cancelled) return;
+        if (_encoding || Cancelled || Stopped) return;
         var head = Paused ? "已暂停" : "录制中…";
         _text.Text = $"{head} {_lastElapsed.TotalSeconds:0.0}s / {_maxSeconds}s（{_lastFrames} 帧）";
     }
@@ -448,26 +521,74 @@ public sealed class RecordHud : Window
         _pauseLabel.Text = "暂停";
         // 编码阶段暂停没意义，但取消有——这时候取消按钮要留着。
         _pauseButton.Visibility = Visibility.Collapsed;
+        _muteButton.Visibility = Visibility.Collapsed;
+        _stopButton.Visibility = Visibility.Collapsed;
         _hint.Text = _cancelHotkeyOk ? $"{CancelHotkey} 取消" : "";
     }
 
     /// <summary>
-    /// 摆在选区外面。选区把工作区占满时（照着最大化窗口选的，最常见的一种）
-    /// 就压到任务栏上去——那条缝是唯一躲得开的地方。
+    /// 优先紧贴选区上方；拖动后保留用户的位置，尺寸改变时仍保证按钮留在屏幕内。
     /// </summary>
     void Place()
     {
-        UpdateLayout();
-        var w = ActualWidth > 0 ? ActualWidth : 260;
-        var h = ActualHeight > 0 ? ActualHeight : 36;
+        _placing = true;
+        try
+        {
+            var monitor = ScreenHelper.MonitorAt(new POINT { X = _region.Left, Y = _region.Top }, this);
+            MaxWidth = Math.Max(1, monitor.Width - 16);
+            UpdateLayout();
+            MoveTo(_manuallyPlaced ? new Point(Left, Top) : null);
+            KeepAbove();
+        }
+        finally { _placing = false; }
+    }
 
-        // 选区是物理像素，Left/Top 是 DIP，得换一下
+    void KeepAbove()
+    {
+        if (_hwnd != IntPtr.Zero && IsVisible)
+            Win32.SetWindowPos(_hwnd, Win32.HWND_TOPMOST, 0, 0, 0, 0,
+                Win32.SWP_NOMOVE | Win32.SWP_NOSIZE | Win32.SWP_NOACTIVATE);
+    }
+
+    void MoveTo(Point? preferred)
+    {
         var tl = ScreenHelper.ToDip(new POINT { X = _region.Left, Y = _region.Top }, this);
         var br = ScreenHelper.ToDip(new POINT { X = _region.Right, Y = _region.Bottom }, this);
-        var sel = new Rect(tl, br);
-        // 要整块屏幕而不是工作区，任务栏那条缝就是靠这个让出来的
-        var mon = ScreenHelper.MonitorAt(new POINT { X = _region.Left, Y = _region.Bottom }, this);
+        var monitor = ScreenHelper.MonitorAt(new POINT { X = _region.Left, Y = _region.Top }, this);
+        var position = Position(new Rect(tl, br), monitor, ActualWidth, ActualHeight, preferred);
+        Left = position.X;
+        Top = position.Y;
+    }
 
-        (Left, Top) = ScreenHelper.PlaceOutside(sel, mon, w, h);
+    internal static Point Position(Rect selection, Rect monitor, double width, double height, Point? preferred = null)
+    {
+        var x = Math.Clamp(preferred?.X ?? selection.Left + (selection.Width - width) / 2,
+            monitor.Left, Math.Max(monitor.Left, monitor.Right - width));
+        var y = Math.Clamp(preferred?.Y ?? selection.Top - height - 8,
+            monitor.Top, Math.Max(monitor.Top, monitor.Bottom - height));
+        var candidates = new[]
+        {
+            new Point(x, y),
+            new Point(x, selection.Top - height - 8),
+            new Point(x, selection.Bottom + 8),
+            new Point(selection.Right + 8, y),
+            new Point(selection.Left - width - 8, y),
+            new Point(x, monitor.Top),
+            new Point(x, monitor.Bottom - height),
+            new Point(monitor.Left, y),
+            new Point(monitor.Right - width, y),
+        };
+        // 拖动到选区里时吸附到最近的外侧，避免把工具栏录进画面。
+        var ordered = preferred is null ? candidates.AsEnumerable()
+            : candidates.OrderBy(p => (p - new Point(x, y)).LengthSquared);
+        foreach (var candidate in ordered)
+        {
+            var box = new Rect(candidate.X, candidate.Y, width, height);
+            var overlap = Rect.Intersect(box, selection);
+            if (monitor.Contains(box) && (overlap.IsEmpty || overlap.Width * overlap.Height == 0))
+                return candidate;
+        }
+        // 满屏确实没有选区外空间时，保留可见且可操作的位置。
+        return new Point(x, y);
     }
 }

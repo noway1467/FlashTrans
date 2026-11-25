@@ -328,7 +328,8 @@ static class QuickLaunchProbe
             var old = s.HkQuickLaunch;
             PressKey(window, keyBox, Key.F1);
             Check(s.HkQuickLaunch == old && keyBox.Text == old, "重复快捷键覆盖了原设置");
-            var available = AvailableKey(modifiers: false);
+            // 系统暂未注册的 F2 仍可能是长截图的保留键，合法改键测试应避开它。
+            var available = AvailableKey(modifiers: false, exclude: s.LongShotToggleHotkey);
             PressKey(window, keyBox, HotkeySpec.Parse(available).Key);
             Check(s.HkQuickLaunch == available, "自定义快捷键未保存");
             window.SelectTab("hotkeys"); window.UpdateLayout();

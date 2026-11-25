@@ -351,7 +351,7 @@ public sealed class ScreenCaptureSession : IDisposable
         }
     }
 
-    public CapturedImage? Grab()
+    public unsafe CapturedImage? Grab(CapturedImage? previous = null)
     {
         if (_disposed) throw new ObjectDisposedException(nameof(ScreenCaptureSession));
         if (!Win32.BitBlt(_memory, 0, 0, _width, _height, _screen, _x, _y,
@@ -359,6 +359,16 @@ public sealed class ScreenCaptureSession : IDisposable
             return null;
 
         Win32.GdiFlush();
+        if (previous is not null && previous.Width == _width && previous.Height == _height)
+        {
+            // GDI 的 alpha 未定义，只比较 RGB；静止画面复用不可变快照，减少整屏数组分配。
+            var current = new ReadOnlySpan<uint>((void*)_bits, _width * _height);
+            var old = MemoryMarshal.Cast<byte, uint>(previous.Pixels);
+            var same = true;
+            for (var i = 0; i < current.Length; i++)
+                if ((current[i] & 0x00FFFFFF) != (old[i] & 0x00FFFFFF)) { same = false; break; }
+            if (same) return previous;
+        }
         var buf = GC.AllocateUninitializedArray<byte>(_width * 4 * _height);
         Marshal.Copy(_bits, buf, 0, buf.Length);
         for (var i = 3; i < buf.Length; i += 4) buf[i] = 0xFF;

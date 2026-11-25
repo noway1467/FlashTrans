@@ -18,6 +18,94 @@ static class CaptureHotkeyProbe
     {
         step("截图热键：真实输入不重复，修饰键精确匹配，改键和释放生效", Lifecycle);
         step("截图热键：原生二级菜单展开时呼出截图，菜单像素被保留", NativeSubmenu);
+        step("截图遮罩：目标窗口短暂抢焦点后仍可操作，稳定后切走正常关闭", ActivationBounce);
+        step("截图遮罩：首次聚焦时关闭能正常返回，下一次截图仍可使用", EarlyClose);
+    }
+
+    static void ActivationBounce()
+    {
+        var foreground = Win32.GetForegroundWindow();
+        var target = new Window { Width = 300, Height = 150, Left = 100, Top = 100,
+            ShowInTaskbar = false, Topmost = true, Content = new TextBox { Text = "模拟软件恢复焦点" } };
+        var pixels = new byte[640 * 360 * 4];
+        for (var i = 3; i < pixels.Length; i += 4) pixels[i] = 255;
+        var overlay = new CaptureOverlay(new CapturedImage(640, 360, pixels), default)
+        { Width = 640, Height = 360, Left = 80, Top = 80 };
+        var closed = false;
+        overlay.Closed += (_, _) => closed = true;
+        try
+        {
+            target.Show(); target.Activate(); Pump();
+            overlay.Show(); overlay.Activate(); overlay.UpdateLayout();
+            Check(overlay.IsActive, "测试遮罩未激活，无法复现焦点争抢");
+            target.Activate();
+            Check(!closed, "目标软件短暂恢复焦点就把截图遮罩关闭了");
+            Wait(() => overlay.IsActive || closed, "遮罩未恢复输入焦点");
+            Check(!closed && overlay.IsActive, "遮罩恢复前已关闭");
+            var until = Environment.TickCount64 + 500;
+            while (Environment.TickCount64 < until) { Pump(); Thread.Sleep(10); }
+            target.Activate();
+            Wait(() => closed, "稳定后切换窗口没有关闭遮罩");
+        }
+        finally
+        {
+            if (!closed) overlay.Close();
+            target.Close(); Pump();
+            if (foreground != IntPtr.Zero) Win32.SetForegroundWindow(foreground);
+        }
+    }
+
+    static void EarlyClose()
+    {
+        var intercept = true;
+        var closedDuringFocus = false;
+        var attached = new HashSet<CaptureOverlay>();
+        // 构造期间的布局调度可观察到新窗口；在 Show 首次激活前接上关闭事件。
+        // 空选区没有可聚焦的子控件，GotFocus 并不能作为这个场景的触发点。
+        DispatcherHookEventHandler attach = (_, _) =>
+        {
+            if (!intercept) return;
+            foreach (var overlay in Application.Current.Windows.OfType<CaptureOverlay>())
+                if (attached.Add(overlay)) overlay.Activated += CloseOnActivation;
+        };
+        void CloseOnActivation(object? sender, EventArgs args)
+        {
+            if (!intercept || sender is not CaptureOverlay overlay) return;
+            intercept = false;
+            closedDuringFocus = true;
+            overlay.Close();
+        }
+        Dispatcher.CurrentDispatcher.Hooks.OperationPosted += attach;
+        var timedOut = false;
+        var guard = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+        guard.Tick += (_, _) => { timedOut = true; guard.Stop(); Dispatcher.ExitAllFrames(); };
+        try
+        {
+            guard.Start();
+            var outcome = CaptureOverlay.Pick();
+            Check(closedDuringFocus && !timedOut && outcome.Action == CaptureAction.None,
+                $"提前关闭未返回取消：焦点回调={closedDuringFocus}，超时={timedOut}，动作={outcome.Action}");
+            guard.Stop();
+            var closeNext = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150) };
+            closeNext.Tick += (_, _) =>
+            {
+                foreach (var overlay in Application.Current.Windows.OfType<CaptureOverlay>().ToArray()) overlay.Close();
+                closeNext.Stop();
+            };
+            try
+            {
+                guard.Start(); closeNext.Start();
+                Check(CaptureOverlay.Pick().Action == CaptureAction.None && !timedOut, "第二次截图不能正常结束");
+            }
+            finally { closeNext.Stop(); }
+        }
+        finally
+        {
+            intercept = false; guard.Stop();
+            Dispatcher.CurrentDispatcher.Hooks.OperationPosted -= attach;
+            foreach (var overlay in attached) overlay.Activated -= CloseOnActivation;
+            foreach (var overlay in Application.Current.Windows.OfType<CaptureOverlay>().ToArray()) overlay.Close();
+        }
     }
 
     static void Lifecycle()

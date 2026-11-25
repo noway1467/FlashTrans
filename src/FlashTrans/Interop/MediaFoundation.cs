@@ -71,8 +71,9 @@ internal static unsafe class MediaFoundation
         return index;
     }
 
-    internal static void SetInput(NativeCom writer, uint index, NativeCom input) =>
-        NativeWinRt.Check(((delegate* unmanaged[Stdcall]<nint, uint, nint, nint, int>)NativeWinRt.Slot(writer.Pointer, 4))(writer.Pointer, index, input.Pointer, 0));
+    internal static void SetInput(NativeCom writer, uint index, NativeCom input, NativeCom? encodingParameters = null) =>
+        NativeWinRt.Check(((delegate* unmanaged[Stdcall]<nint, uint, nint, nint, int>)NativeWinRt.Slot(writer.Pointer, 4))
+            (writer.Pointer, index, input.Pointer, encodingParameters?.Pointer ?? 0));
     internal static void Begin(NativeCom writer) =>
         NativeWinRt.Check(((delegate* unmanaged[Stdcall]<nint, int>)NativeWinRt.Slot(writer.Pointer, 5))(writer.Pointer));
     internal static void Finish(NativeCom writer) =>

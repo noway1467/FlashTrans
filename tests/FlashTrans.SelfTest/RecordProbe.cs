@@ -23,11 +23,14 @@ static class RecordProbe
         step("录制：帧延时按帧率换算", DelayMathProbe);
         step("录制：60 fps 的 GIF 用交错延时保持平均帧率", GifHighFpsDelayProbe);
         step("录制：小区域 60 fps 能持续采样", HighFpsCaptureProbe);
+        step("录制：1080p 静止帧复用文件，保持采样和三格式时长", RepeatedCaptureProbe);
+        step("录制：真实抓屏复用静止快照，变化后旧帧不被改写", CaptureReuseProbe);
         step("录制：三种格式都能编码 60 fps", HighFpsEncodeProbe);
         step("录制：实测帧率按帧间隔算", EffectiveFpsProbe);
         step("录制：动图 GIF 能解回来，帧数和尺寸都对", GifRoundTripProbe);
         step("录制：每帧画面对得上，没有错位或重复", GifFrameOrderProbe);
-        step("录制：重复帧复用编码但仍保留逐帧画面和延时", RepeatedFramesProbe);
+        step("录制：GIF 合并连续静止帧并保持停留时长", RepeatedFramesProbe);
+        step("录制：GIF 局部帧还原后逐像素一致，移动与擦除无残影", GifDeltaProbe);
         step("录制：GIF 编码并行度有 CPU 和内存上限", GifParallelismProbe);
         step("录制：WebP 只合并完全相同的连续帧并累计时长", WebpRepeatedFramesProbe);
         step("录制：GIF/WebP 编码失败不破坏旧文件、不留半成品", AnimationFailureProbe);
@@ -37,9 +40,11 @@ static class RecordProbe
         step("录制：真抓一段屏幕，帧数和实测帧率合理", RealRecordProbe);
         step("录制：真编动图 WebP，容器里 VP8X/ANIM/ANMF 都对", WebpRealProbe);
         step("录制：没有 img2webp 时老实退回 GIF", WebpFallbackProbe);
-        step("录制：同样内容 WebP 比 GIF 小", SizeCompareProbe);
+        step("录制：同一真实画面的三种格式体积对照", SizeCompareProbe);
         step("录制：帧率和时长的夹取范围", ClampProbe);
         step("录制：浮条能构造，进度和编码提示都会更新", HudProbe);
+        step("录制：浮条优先上置、拖动避让选区、跨屏与缩放边界", HudPlacementProbe);
+        step("录制：浮条真实点击、拖动和置顶不抢焦点", HudInteractionProbe);
         step("录制：工具条多了「录制」还塞得进常见屏宽", ToolbarWidthProbe);
         step("录制：Esc 要松开过一次才算停，不会开录就被判停", EscArmProbe);
         step("录制：暂停期间不抓帧，恢复后接着录", PauseProbe);
@@ -106,9 +111,10 @@ static class RecordProbe
             try
             {
                 foreach (var version in versions)
-                    foreach (var format in new[] { RecordFormat.Gif, RecordFormat.Webp })
+                    foreach (var format in new[] { RecordFormat.Gif, RecordFormat.Webp, RecordFormat.Mp4 })
                     {
                         if (format == RecordFormat.Webp && !AnimEncoder.WebpAvailable) continue;
+                        if (format == RecordFormat.Mp4 && !Mp4Encoder.Available) continue;
                         Task.Run(() => version.Save(warmFrames, Path.Combine(warmDir, "warm-" + version.Name), 12, format))
                             .GetAwaiter().GetResult();
                     }
@@ -120,9 +126,10 @@ static class RecordProbe
                 var (dir, paths) = WriteDetailedFrames(24, 1024, 576, moving);
                 try
                 {
-                    foreach (var format in new[] { RecordFormat.Gif, RecordFormat.Webp })
+                    foreach (var format in new[] { RecordFormat.Gif, RecordFormat.Webp, RecordFormat.Mp4 })
                     {
                         if (format == RecordFormat.Webp && !AnimEncoder.WebpAvailable) continue;
+                        if (format == RecordFormat.Mp4 && !Mp4Encoder.Available) continue;
                         var milliseconds = versions.ToDictionary(v => v.Name, _ => new List<double>());
                         var outputs = new Dictionary<string, AnimResult>();
                         for (var trial = 0; trial < 3; trial++)
@@ -133,23 +140,36 @@ static class RecordProbe
                                     Path.Combine(dir, $"{version.Name}-{format}-{trial}"), 12, format)).GetAwaiter().GetResult();
                                 milliseconds[version.Name].Add(timer.Elapsed.TotalMilliseconds);
                                 outputs[version.Name] = result;
-                                Need(FlipCheck.Load(result.Path).PixelWidth == 1024, "基准编码改变了原始分辨率");
+                                Need(BenchmarkFrame(result).PixelWidth == 1024, "基准编码改变了原始分辨率");
                                 if (format == RecordFormat.Gif)
                                 {
                                     var (delays, images) = WalkGif(File.ReadAllBytes(result.Path));
-                                    Need(images == paths.Count && delays.Sum() == 200, "基准 GIF 丢帧或改变播放时长");
+                                    Need(images > 0 && images <= paths.Count && delays.Sum() == 200, "基准 GIF 改变播放时长");
                                 }
+                                if (format == RecordFormat.Mp4)
+                                    Need(Math.Abs(WalkMp4(File.ReadAllBytes(result.Path)).Seconds - 2) < 0.1, "MP4 基准播放时长改变");
                             }
                         if (format == RecordFormat.Gif && outputs.TryGetValue("baseline", out var original))
-                            Need(File.ReadAllBytes(original.Path).AsSpan().SequenceEqual(File.ReadAllBytes(outputs["optimized"].Path)),
-                                "优化 GIF 与原编码结果不是逐字节一致");
+                        {
+                            var before = GifCanvases(original.Path);
+                            var after = GifCanvases(outputs["optimized"].Path);
+                            var originalIndex = 0;
+                            var originalEnd = before[0].Delay;
+                            var time = 0;
+                            foreach (var frame in after)
+                            {
+                                while (time >= originalEnd) originalEnd += before[++originalIndex].Delay;
+                                Need(Psnr(before[originalIndex].Bitmap, frame.Bitmap) is null, "GIF 合成画面与原编码不一致");
+                                time += frame.Delay;
+                            }
+                        }
                         foreach (var version in versions)
                             Console.WriteLine("BENCH " + System.Text.Json.JsonSerializer.Serialize(new
                             {
                                 Version = version.Name, Scenario = moving ? "moving-ui" : "static-ui", Format = format.ToString(),
                                 Width = 1024, Height = 576, Frames = paths.Count, Fps = 12,
                                 MedianMs = Math.Round(milliseconds[version.Name].Order().ElementAt(1), 1), Bytes = outputs[version.Name].Bytes,
-                                FirstFramePsnrDb = Psnr(FlipCheck.Load(paths[0]), FlipCheck.Load(outputs[version.Name].Path)),
+                                FirstFramePsnrDb = Psnr(FlipCheck.Load(paths[0]), BenchmarkFrame(outputs[version.Name])),
                             }));
                     }
                 }
@@ -158,6 +178,10 @@ static class RecordProbe
         }
         finally { baseline?.Unload(); }
     }
+
+    static BitmapSource BenchmarkFrame(AnimResult result) => result.Format == RecordFormat.Mp4
+        ? Task.Run(() => FlipCheck.FirstMp4FrameAsync(result.Path)).GetAwaiter().GetResult()
+        : FlipCheck.Load(result.Path);
 
     static double? Psnr(BitmapSource source, BitmapSource decoded)
     {
@@ -277,6 +301,34 @@ static class RecordProbe
         return dec.Frames.ToArray();
     }
 
+    static List<(BitmapSource Bitmap, int Delay)> GifCanvases(string path)
+    {
+        var frames = DecodeGif(path);
+        var delays = WalkGif(File.ReadAllBytes(path)).Delays;
+        var width = frames[0].PixelWidth;
+        var height = frames[0].PixelHeight;
+        var canvas = new byte[width * height * 4];
+        var result = new List<(BitmapSource, int)>();
+        for (var i = 0; i < frames.Length; i++)
+        {
+            var frame = frames[i];
+            var metadata = (BitmapMetadata)frame.Metadata;
+            var left = Convert.ToInt32(metadata.GetQuery("/imgdesc/Left"));
+            var top = Convert.ToInt32(metadata.GetQuery("/imgdesc/Top"));
+            var disposal = Convert.ToInt32(metadata.GetQuery("/grctlext/Disposal"));
+            Need(disposal == 1, "变化区域未使用保留画布的处置方式");
+            var stride = frame.PixelWidth * 4;
+            var pixels = new byte[stride * frame.PixelHeight];
+            new FormatConvertedBitmap(frame, PixelFormats.Bgra32, null, 0).CopyPixels(pixels, stride, 0);
+            for (var row = 0; row < frame.PixelHeight; row++)
+                Buffer.BlockCopy(pixels, row * stride, canvas, ((top + row) * width + left) * 4, stride);
+            var bitmap = BitmapSource.Create(width, height, 96, 96, PixelFormats.Bgra32, null, canvas, width * 4);
+            bitmap.Freeze();
+            result.Add((bitmap, delays[i]));
+        }
+        return result;
+    }
+
     // ------------------------------------------------------------- 数学
 
     static void DelayMathProbe()
@@ -317,6 +369,104 @@ static class RecordProbe
             Need(result.Paths.All(File.Exists), "高帧率录制有临时帧缺失");
         }
         finally { result.Cleanup(); }
+    }
+
+    static void RepeatedCaptureProbe()
+    {
+        const int width = 1920, height = 1080;
+        var images = new CapturedImage[3];
+        for (var frame = 0; frame < images.Length; frame++)
+        {
+            var pixels = new byte[width * height * 4];
+            for (var p = 0; p < pixels.Length; p += 4)
+            {
+                pixels[p] = 40;
+                pixels[p + 1] = (byte)(80 + frame * 40);
+                pixels[p + 2] = 160;
+                pixels[p + 3] = 255;
+            }
+            images[frame] = new CapturedImage(width, height, pixels);
+        }
+        var calls = 0;
+        var result = Task.Run(() => RecordService.RunAsync(new RECT { Right = width, Bottom = height }, 60, 2,
+            capture: _ => images[Math.Min(2, calls++ / 40)])).GetAwaiter().GetResult();
+        try
+        {
+            Need(result.Stopped == RecordStop.Limit && result.Paths.Count == calls && calls > 40,
+                "复用帧文件丢失采样或提前结束");
+            var unique = result.Paths.Distinct().ToArray();
+            Need(unique.Length == (calls - 1) / 40 + 1 && Directory.GetFiles(result.Dir, "*.png").Length == unique.Length,
+                "连续相同画面仍重复写入 PNG，或不同画面被错误合并");
+            for (var i = 0; i < result.Paths.Count; i++)
+                Need(result.Paths[i] == unique[i / 40], "复用文件打乱采样顺序");
+            var fps = Math.Max(1, (int)Math.Round(result.EffectiveFps));
+            var seconds = result.Paths.Count / (double)fps;
+            foreach (var format in new[] { RecordFormat.Gif, RecordFormat.Webp, RecordFormat.Mp4 })
+            {
+                if (format == RecordFormat.Webp && !AnimEncoder.WebpAvailable) continue;
+                if (format == RecordFormat.Mp4 && !Mp4Encoder.Available) continue;
+                var encoded = Task.Run(() => AnimEncoder.SaveAsync(result.Paths, Path.Combine(result.Dir, "repeat"), fps, format))
+                    .GetAwaiter().GetResult();
+                var duration = format switch
+                {
+                    RecordFormat.Gif => WalkGif(File.ReadAllBytes(encoded.Path)).Delays.Sum() / 100d,
+                    RecordFormat.Webp => WalkWebp(File.ReadAllBytes(encoded.Path)).Durations.Sum() / 1000d,
+                    _ => WalkMp4(File.ReadAllBytes(encoded.Path)).Seconds,
+                };
+                Need(Math.Abs(duration - seconds) < 0.02, $"复用采集帧后 {format} 播放时长不正确：{duration:0.000}/{seconds:0.000}");
+            }
+            var actualBytes = unique.Sum(p => new FileInfo(p).Length);
+            var repeatedBytes = result.Paths.Sum(p => new FileInfo(p).Length);
+            Console.WriteLine($"       合成 1080p 采样：{calls} 帧，{result.EffectiveFps:0.0} fps，{unique.Length} 个 PNG，"
+                + $"临时帧 {actualBytes / 1024d:0} KB（逐帧保存需 {repeatedBytes / 1024d:0} KB）");
+        }
+        finally { result.Cleanup(); }
+    }
+
+    static void CaptureReuseProbe()
+    {
+        var surface = new System.Windows.Controls.Border { Background = Brushes.SteelBlue };
+        var window = new System.Windows.Window
+        {
+            Left = 100, Top = 100, Width = 640, Height = 400, WindowStyle = System.Windows.WindowStyle.None,
+            ResizeMode = System.Windows.ResizeMode.NoResize, ShowActivated = false, ShowInTaskbar = false,
+            Topmost = true, Content = surface,
+        };
+        try
+        {
+            window.Show(); window.UpdateLayout();
+            var until = Environment.TickCount64 + 100;
+            while (Environment.TickCount64 < until) { Pump(); Thread.Sleep(10); }
+            var firstPoint = surface.PointToScreen(new System.Windows.Point(8, 8));
+            var lastPoint = surface.PointToScreen(new System.Windows.Point(surface.ActualWidth - 8, surface.ActualHeight - 8));
+            using var session = ScreenCaptureSession.Open((int)firstPoint.X, (int)firstPoint.Y,
+                (int)(lastPoint.X - firstPoint.X), (int)(lastPoint.Y - firstPoint.Y))
+                ?? throw new InvalidOperationException("无法初始化真实抓屏");
+            var original = session.Grab() ?? throw new InvalidOperationException("首帧抓屏失败");
+            Need(ReferenceEquals(original, session.Grab(original)), "静止画面没有复用像素快照");
+            var saved = original.Pixels.ToArray();
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < 10; i++) Need(session.Grab() is not null, "普通抓屏失败");
+            var baselineBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+            before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < 10; i++) Need(ReferenceEquals(original, session.Grab(original)), "静止抓屏未保持复用");
+            var reusedBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+            Need(reusedBytes < baselineBytes / 10, "静止抓屏仍分配大量托管内存");
+            surface.Background = Brushes.OrangeRed;
+            CapturedImage? changed = original;
+            until = Environment.TickCount64 + 3000;
+            while (ReferenceEquals(changed, original) && Environment.TickCount64 < until)
+            {
+                window.UpdateLayout(); Pump(); Thread.Sleep(10);
+                changed = session.Grab(original);
+            }
+            Need(changed is not null && !ReferenceEquals(changed, original), "真实画面改变后仍返回旧快照");
+            Need(original.Pixels.AsSpan().SequenceEqual(saved), "新抓屏修改了仍在编码的旧帧");
+            Need(changed!.Pixels[2] > changed.Pixels[0] && original.Pixels[2] < original.Pixels[0], "颜色变化没有正确捕获");
+            Console.WriteLine($"       真实 {original.Width}×{original.Height} 静止抓屏 10 次，托管分配 "
+                + $"{baselineBytes / 1024d:0} KB → {reusedBytes / 1024d:0.0} KB");
+        }
+        finally { window.Close(); Pump(); }
     }
 
     static void HighFpsEncodeProbe()
@@ -478,14 +628,62 @@ static class RecordProbe
                 .GetAwaiter().GetResult();
             var frames = DecodeGif(result.Path);
             var (delays, count) = WalkGif(File.ReadAllBytes(result.Path));
-            Need(frames.Length == order.Length && count == order.Length && delays.Sum() == 100, "重复 GIF 帧被丢弃或播放变速");
-            for (var i = 0; i < order.Length; i++)
+            var grouped = new[] { 0, 1, 2, 0, 2, 1 };
+            Need(frames.Length == grouped.Length && count == grouped.Length
+                && delays.SequenceEqual(new[] { 25, 17, 8, 17, 25, 8 }), "重复 GIF 帧未合并或停留时间改变");
+            for (var i = 0; i < grouped.Length; i++)
             {
                 var color = Center(frames[i]);
-                var expected = Colors[order[i]];
+                var expected = Colors[grouped[i]];
                 Need(Math.Abs(color.R - expected.R) <= 8 && Math.Abs(color.G - expected.G) <= 8 && Math.Abs(color.B - expected.B) <= 8,
                     $"并行编码后第 {i} 帧画面顺序错误");
             }
+
+            AnimEncoder.BuildGif(Enumerable.Repeat(source[0], 1311).ToArray(), Path.Combine(dir, "long.gif"), 2);
+            var longDelays = WalkGif(File.ReadAllBytes(Path.Combine(dir, "long.gif"))).Delays;
+            Need(longDelays.SequenceEqual(new[] { 65535, 15 }), "超长静止画面延时溢出");
+        }
+        finally { Wipe(dir); }
+    }
+
+    static void GifDeltaProbe()
+    {
+        var (dir, _) = WriteFrames(0);
+        try
+        {
+            const int width = 320, height = 180;
+            var paths = new List<string>();
+            var references = new List<BitmapSource>();
+            for (var frame = 0; frame < 6; frame++)
+            {
+                var pixels = new byte[width * height * 4];
+                for (var y = 0; y < height; y++)
+                    for (var x = 0; x < width; x++)
+                    {
+                        var p = (y * width + x) * 4;
+                        var value = (byte)(40 + (x / 10 + y / 10) % 8 * 24);
+                        pixels[p] = pixels[p + 1] = pixels[p + 2] = value;
+                        pixels[p + 3] = 255;
+                        if (frame < 5 && x >= frame * 61 && x < frame * 61 + 20 && y >= 60 && y < 80)
+                        { pixels[p] = 20; pixels[p + 1] = 50; pixels[p + 2] = 230; }
+                    }
+                var path = Path.Combine(dir, $"move{frame}.png");
+                new CapturedImage(width, height, pixels).SavePng(path);
+                paths.Add(path);
+                var reference = Path.Combine(dir, $"single{frame}.gif");
+                AnimEncoder.BuildGif([path], reference, 10);
+                references.Add(FlipCheck.Load(reference));
+            }
+            var output = Path.Combine(dir, "delta.gif");
+            AnimEncoder.BuildGif(paths, output, 10);
+            var decoded = GifCanvases(output);
+            Need(decoded.Count == paths.Count, "变化帧被合并");
+            for (var i = 0; i < decoded.Count; i++)
+                Need(decoded[i].Delay == 10 && Psnr(references[i], decoded[i].Bitmap) is null,
+                    $"第 {i} 帧的局部画面、调色板或擦除位置不正确");
+            Need(DecodeGif(output).Skip(1).All(f => f.PixelHeight < height), "局部变化仍被编码为整幅图像");
+            Need(new FileInfo(output).Length < Directory.GetFiles(dir, "single*.gif").Sum(p => new FileInfo(p).Length) * 0.6,
+                "局部变化没有有效减少 GIF 体积");
         }
         finally { Wipe(dir); }
     }
@@ -509,6 +707,8 @@ static class RecordProbe
             var grouped = AnimEncoder.WebpFrames(paths, 10);
             Need(grouped.Count == 3 && grouped.Select(f => f.DurationMs).SequenceEqual(new[] { 300, 200, 100 }), "WebP 连续重复帧的停留时长错误");
             Need(grouped.Select(f => f.Path).SequenceEqual(new[] { source[0], source[1], source[0] }), "WebP 错误合并了不连续的相同画面");
+            Need(AnimEncoder.WebpFrames(Enumerable.Range(0, 60).Select(i => source[i % 2]).ToArray(), 60)
+                .Sum(f => f.DurationMs) == 1000, "60 fps WebP 的一秒累计延时不正确");
             if (!AnimEncoder.WebpAvailable) return;
             var result = Task.Run(() => AnimEncoder.SaveAsync(paths, Path.Combine(dir, "grouped"), 10, RecordFormat.Webp))
                 .GetAwaiter().GetResult();
@@ -715,31 +915,192 @@ static class RecordProbe
     /// </summary>
     static void HudProbe()
     {
-        var region = new RECT { Left = 100, Top = 100, Right = 400, Bottom = 300 };
-        var hud = new RecordHud(region, maxSeconds: 30, captureAudio: false);
         try
         {
-            hud.ShowInTaskbar = false;
-            hud.Show();
-            hud.UpdateLayout();
-            Pump();
+            foreach (var theme in new[] { AppTheme.Dark, AppTheme.Light })
+            {
+                ThemeService.ApplyTheme(theme);
+                var region = new RECT { Left = 100, Top = 180, Right = 800, Bottom = 600 };
+                var hud = new RecordHud(region, maxSeconds: 300, captureAudio: true);
+                try
+                {
+                    hud.Show(); hud.UpdateLayout(); Pump();
+                    Need(!hud.Stopped, "刚建出来不该是已停止");
+                    SaveHud(hud, $"record-{theme}-empty.png");
+                    hud.Report(5, TimeSpan.FromSeconds(1.5)); hud.UpdateLayout();
+                    var t = AllText(hud);
+                    Need(t.Contains("5 帧") && t.Contains("1.5"), $"进度内容不正确：{t}");
+                    SaveHud(hud, $"record-{theme}-recording.png");
+                    foreach (var width in new[] { 360d, 768d })
+                    {
+                        hud.SizeToContent = System.Windows.SizeToContent.Height;
+                        hud.Width = width;
+                        foreach (var state in new[] { "long", "paused", "english" })
+                        {
+                            hud.Report(18000, TimeSpan.FromSeconds(299.9));
+                            if (state == "paused") hud.TogglePause();
+                            if (state == "english")
+                                Descendants<System.Windows.Controls.TextBlock>(hud).Single(b => b.Name == "RecordStatus")
+                                    .Text = "Recording a long window title — ABC abc 0123456789 / 300 seconds";
+                            hud.UpdateLayout(); Pump();
+                            foreach (var control in Descendants<System.Windows.FrameworkElement>(hud)
+                                .Where(e => e.Name.StartsWith("Record", StringComparison.Ordinal) && e.IsVisible))
+                            {
+                                var bounds = control.TransformToAncestor(hud).TransformBounds(new System.Windows.Rect(control.RenderSize));
+                                Need(bounds.Left >= 0 && bounds.Right <= hud.ActualWidth + 0.5 && bounds.Bottom <= hud.ActualHeight + 0.5,
+                                    $"{theme} / {width} / {state} 下控件溢出：{control.Name}");
+                            }
+                            SaveHud(hud, $"record-{theme}-{width}-{state}.png");
+                        }
+                    }
+                    hud.ReportEncoding(18000); hud.UpdateLayout();
+                    Need(AllText(hud).Contains("编码"), "编码阶段没有改提示");
+                    Need(!Descendants<System.Windows.Controls.Border>(hud).Single(b => b.Name == "RecordMute").IsVisible,
+                        "编码阶段仍有无效静音按钮");
+                    SaveHud(hud, $"record-{theme}-encoding.png");
+                }
+                finally { hud.Close(); Pump(); }
+            }
+        }
+        finally { ThemeService.ApplyTheme(AppTheme.Dark); }
+    }
 
-            Need(!hud.Stopped, "刚建出来不该是已停止");
+    static void SaveHud(System.Windows.Window window, string name)
+    {
+        var args = Environment.GetCommandLineArgs();
+        var index = Array.IndexOf(args, "--preview-dir");
+        if (index < 0 || index + 1 >= args.Length) return;
+        Directory.CreateDirectory(args[index + 1]);
+        var dpi = VisualTreeHelper.GetDpi(window);
+        var bitmap = new RenderTargetBitmap((int)Math.Ceiling(window.ActualWidth * dpi.DpiScaleX),
+            (int)Math.Ceiling(window.ActualHeight * dpi.DpiScaleY), 96 * dpi.DpiScaleX, 96 * dpi.DpiScaleY, PixelFormats.Pbgra32);
+        bitmap.Render(window);
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        using var output = File.Create(Path.Combine(args[index + 1], name));
+        encoder.Save(output);
+    }
 
-            hud.Report(5, TimeSpan.FromSeconds(1.5));
-            hud.UpdateLayout();
-            var t = AllText(hud);
-            Need(t.Contains("5 帧"), $"进度里没有帧数：{t}");
-            Need(t.Contains("1.5"), $"进度里没有秒数：{t}");
+    static void HudPlacementProbe()
+    {
+        foreach (var scale in new[] { 1d, 1.25, 1.5, 2d })
+        {
+            var monitor = new System.Windows.Rect(-1920 / scale, 0, 1920 / scale, 1080 / scale);
+            var selection = new System.Windows.Rect(monitor.Left + 100 / scale, 180 / scale, 1200 / scale, 600 / scale);
+            var point = RecordHud.Position(selection, monitor, 500, 48);
+            Need(point.Y + 48 <= selection.Top, "有上方空间时工具栏仍放到底部");
+            foreach (var desired in new[] { new System.Windows.Point(-9999, -9999), selection.TopLeft,
+                selection.BottomRight, new System.Windows.Point(9999, 9999) })
+            {
+                var moved = RecordHud.Position(selection, monitor, 500, 48, desired);
+                var box = new System.Windows.Rect(moved.X, moved.Y, 500, 48);
+                var overlap = System.Windows.Rect.Intersect(box, selection);
+                Need(monitor.Contains(box) && (overlap.IsEmpty || overlap.Width * overlap.Height == 0),
+                    "拖动后超出显示器或侵入可避让的录制区域");
+            }
+            var full = RecordHud.Position(monitor, monitor, 500, 48);
+            Need(full.Y == monitor.Top && monitor.Contains(new System.Windows.Rect(full.X, full.Y, 500, 48)),
+                "满屏录制的工具栏未留在顶部可见位置");
+        }
+    }
 
-            hud.ReportEncoding(5);
-            hud.UpdateLayout();
-            Need(AllText(hud).Contains("编码"), "编码阶段没有改提示");
+    static void HudInteractionProbe()
+    {
+        var foreground = Win32.GetForegroundWindow();
+        Win32.GetCursorPos(out var cursor);
+        var target = new System.Windows.Window
+        {
+            Title = "录制工具栏交互自测", Left = 240, Top = 260, Width = 480, Height = 260,
+            ShowInTaskbar = false, Topmost = true, Content = new System.Windows.Controls.TextBox { Text = "录制目标 / Recording target" },
+        };
+        RecordHud? hud = null;
+        System.Windows.Window? cover = null;
+        try
+        {
+            target.Show(); target.UpdateLayout(); Pump();
+            var targetHandle = new System.Windows.Interop.WindowInteropHelper(target).Handle;
+            Click((System.Windows.FrameworkElement)target.Content, targetHandle);
+            WaitFor(() => Win32.GetForegroundWindow() == targetHandle, "测试目标未取得前台焦点");
+            Need(Win32.GetWindowRect(targetHandle, out var region), "无法读取录制测试区域");
+            hud = new RecordHud(region, 30, captureAudio: true);
+            hud.Show(); hud.UpdateLayout(); Pump();
+            var handle = new System.Windows.Interop.WindowInteropHelper(hud).Handle;
+            var pause = Descendants<System.Windows.Controls.Border>(hud).Single(b => b.Name == "RecordPause");
+            Click(pause, handle);
+            Need(hud.Paused && !hud.Stopped && Win32.GetForegroundWindow() == targetHandle,
+                "暂停按钮未生效、误停止或抢走目标焦点");
+            Click(pause, handle);
+            Need(!hud.Paused, "继续按钮未恢复录制");
+            var grip = Descendants<System.Windows.Controls.Primitives.Thumb>(hud).Single();
+            var from = grip.PointToScreen(new System.Windows.Point(grip.ActualWidth / 2, grip.ActualHeight / 2));
+            var originalLeft = hud.Left;
+            Win32.SetCursorPos((int)from.X, (int)from.Y);
+            SendMouse(0x0002);
+            WaitFor(() => grip.IsDragging, "拖动手柄未捕获鼠标");
+            Win32.SetCursorPos((int)from.X + 80, (int)from.Y - 20);
+            WaitFor(() => Math.Abs(hud.Left - originalLeft) > 20, "工具栏拖动未移动");
+            SendMouse(0x0004);
+            WaitFor(() => !grip.IsDragging, "拖动结束未释放鼠标");
+            var movedLeft = hud.Left;
+            hud.TogglePause(); hud.Report(18000, TimeSpan.FromSeconds(29.9)); hud.UpdateLayout(); Pump();
+            Need(Math.Abs(hud.Left - movedLeft) < 1 && !hud.Stopped && Win32.GetForegroundWindow() == targetHandle,
+                "更新进度后工具栏跳回原位、拖动误停止或抢焦点");
+
+            cover = new System.Windows.Window
+            {
+                WindowStyle = System.Windows.WindowStyle.None, ShowActivated = false, ShowInTaskbar = false,
+                Topmost = true, Left = hud.Left, Top = hud.Top, Width = hud.ActualWidth, Height = hud.ActualHeight,
+                Content = new System.Windows.Controls.Border { Background = Brushes.White },
+            };
+            cover.Show(); cover.UpdateLayout(); Pump();
+            var buttonPoint = pause.PointToScreen(new System.Windows.Point(pause.ActualWidth / 2, pause.ActualHeight / 2));
+            WaitFor(() => Win32.GetAncestor(Win32.WindowFromPoint(new POINT { X = (int)buttonPoint.X, Y = (int)buttonPoint.Y }),
+                Win32.GA_ROOT) == handle, "新置顶窗口出现后工具栏仍被遮住");
+            Need(Win32.GetForegroundWindow() == targetHandle, "恢复置顶抢走目标焦点");
+            SaveHud(hud, "record-dragged.png");
+            cover.Close(); cover = null;
+            var stop = Descendants<System.Windows.Controls.Border>(hud).Single(b => b.Name == "RecordStop");
+            Click(stop, handle);
+            Need(hud.Stopped && !hud.Cancelled && !hud.Paused, "停止并保存按钮状态不正确");
+            Need(AllText(hud).Contains("正在停止"), "停止之后没有及时更新反馈");
         }
         finally
         {
-            hud.Hide();
-            hud.Close();   // 顺带把轮询 Esc 的定时器停掉
+            SendMouse(0x0004);
+            cover?.Close(); hud?.Close(); target.Close(); Pump();
+            Win32.SetCursorPos(cursor.X, cursor.Y);
+            if (foreground != IntPtr.Zero) Win32.SetForegroundWindow(foreground);
+        }
+
+        static void WaitFor(Func<bool> done, string message)
+        {
+            var until = Environment.TickCount64 + 3000;
+            while (!done() && Environment.TickCount64 < until) { Pump(); Thread.Sleep(10); }
+            Need(done(), message);
+        }
+        static void SendMouse(uint flags)
+        {
+            INPUT[] inputs = [new INPUT { type = Win32.INPUT_MOUSE, u = new InputUnion { mi = new MOUSEINPUT { dwFlags = flags } } }];
+            Need(Win32.SendInput(1, inputs, System.Runtime.InteropServices.Marshal.SizeOf<INPUT>()) == 1, "无法发送测试鼠标输入");
+        }
+        static void Click(System.Windows.FrameworkElement element, IntPtr expectedWindow)
+        {
+            System.Windows.Window.GetWindow(element).UpdateLayout();
+            Pump();
+            var point = element.PointToScreen(new System.Windows.Point(element.ActualWidth / 2, element.ActualHeight / 2));
+            var position = new POINT { X = (int)point.X, Y = (int)point.Y };
+            WaitFor(() => Win32.GetAncestor(Win32.WindowFromPoint(position), Win32.GA_ROOT) == expectedWindow,
+                "测试控件被遮挡，停止发送点击");
+            var released = false;
+            System.Windows.Input.MouseButtonEventHandler handler = (_, _) => released = true;
+            element.PreviewMouseLeftButtonUp += handler;
+            try
+            {
+                Win32.SetCursorPos(position.X, position.Y); SendMouse(0x0002); SendMouse(0x0004);
+                WaitFor(() => released, $"测试点击未送达控件 {element.Name}，位置 {point}");
+                Pump();
+            }
+            finally { element.PreviewMouseLeftButtonUp -= handler; }
         }
     }
 
@@ -830,8 +1191,9 @@ static class RecordProbe
             var gif = Path.Combine(rec.Dir, "real.gif");
             AnimEncoder.BuildGif(rec.Paths, gif, (int)Math.Round(rec.EffectiveFps));
             var frames = DecodeGif(gif);
-            Need(frames.Length == rec.Paths.Count,
-                $"编进去 {rec.Paths.Count} 帧，解出来 {frames.Length} 帧");
+            Need(frames.Length >= 1 && frames.Length <= rec.Paths.Count, "真实录制未保留有效画面");
+            Need(WalkGif(File.ReadAllBytes(gif)).Delays.Sum() == Enumerable.Range(0, rec.Paths.Count)
+                .Sum(i => AnimEncoder.GifDelayCentis((int)Math.Round(rec.EffectiveFps), i)), "真实录制合并后时长改变");
             Need(frames[0].PixelWidth == 64 && frames[0].PixelHeight == 48,
                 $"尺寸不对：{frames[0].PixelWidth}×{frames[0].PixelHeight}");
         }
@@ -1006,14 +1368,13 @@ static class RecordProbe
                 {
                     line += $" → MP4 {mp4.Bytes / 1024.0:0} KB"
                         + $"（小 {gif.Bytes / (double)mp4.Bytes:0.#} 倍）";
-                    Need(mp4.Bytes < gif.Bytes,
-                        $"MP4 反而比 GIF 大：{mp4.Bytes} vs {gif.Bytes}");
+                    Need(mp4.Bytes > 0, "MP4 编码输出为空");
                 }
             }
             Console.WriteLine(line);
 
-            Need(webp.Bytes < gif.Bytes,
-                $"WebP 反而更大：{webp.Bytes} vs GIF {gif.Bytes}");
+            // 静止 GIF 已可缩成一帧，格式大小顺序由内容决定，不能再固定要求 MP4 最小。
+            Need(webp.Format == RecordFormat.Webp && webp.Bytes > 0 && gif.Bytes > 0, "动图编码失败或输出为空");
         }
         finally { rec.Cleanup(); }
     }
@@ -1089,7 +1450,8 @@ static class RecordProbe
             Need(r.Pauses == 1, $"该记录 1 次暂停，得到 {r.Pauses}");
             Need(r.PausedFor.TotalMilliseconds >= 400,
                 $"暂停时长记少了：{r.PausedFor.TotalMilliseconds:0} 毫秒");
-            Need(r.Paths.Count == r.Paths.Distinct().Count(), "帧文件名有重复");
+            Need(r.Paths.Count == frames && r.Paths.Distinct().Count() == 1,
+                "暂停前后的静止画面没有复用文件，或丢失采样记录");
             Need(r.Paths.All(File.Exists), "有帧文件不在");
         }
         finally { r.Cleanup(); }
@@ -1104,28 +1466,29 @@ static class RecordProbe
     static void PauseClockProbe()
     {
         var paused = false;
-        var r = Task.Run(async () =>
+        var (r, endedDuringPause) = Task.Run(async () =>
         {
-            var run = RecordService.RunAsync(SmallRegion(), fps: 10, maxSeconds: 3,
+            var run = RecordService.RunAsync(SmallRegion(), fps: 10, maxSeconds: 2,
                 paused: () => Volatile.Read(ref paused),
                 capture: FakeCapture);
             await Task.Delay(300);
             Volatile.Write(ref paused, true);
-            await Task.Delay(700);
+            await Task.Delay(2300);
+            var ended = run.IsCompleted;
             Volatile.Write(ref paused, false);
-            return await run;
+            return (await run, ended);
         }).GetAwaiter().GetResult();
 
         try
         {
-            // 墙上时间至少是 3 秒预算 + 0.7 秒暂停；Elapsed 该只有预算那部分。
-            Need(r.Elapsed.TotalSeconds <= 3.5,
-                $"暂停的时间被算进 Elapsed 了：{r.Elapsed.TotalSeconds:0.0}s（预算 3s）");
-            Need(r.PausedFor.TotalMilliseconds >= 600,
+            Need(!endedDuringPause, "暂停期间墙上时间超过录制预算，录制提前结束了");
+            // 暂停超过整个录制预算，恢复后仍须录够剩余的活动时间。
+            Need(r.Elapsed.TotalSeconds <= 2.5,
+                $"暂停的时间被算进 Elapsed 了：{r.Elapsed.TotalSeconds:0.0}s（预算 2s）");
+            Need(r.PausedFor.TotalMilliseconds >= 2200,
                 $"暂停时长记少了：{r.PausedFor.TotalMilliseconds:0} 毫秒");
-            // 预算没被暂停吃掉：3 秒 10 fps，就算慢也该比「只录了 0.3 秒」多得多
             Need(r.Paths.Count >= 8,
-                $"暂停吃掉了时长预算，只录到 {r.Paths.Count} 帧（3 秒 10 fps）");
+                $"暂停吃掉了时长预算，只录到 {r.Paths.Count} 帧（2 秒 10 fps）");
             Need(r.EffectiveFps >= 4,
                 $"实测帧率被暂停拖低了：{r.EffectiveFps:0.#}");
         }
